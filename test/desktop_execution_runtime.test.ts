@@ -22,6 +22,28 @@ function verifiedRecord(name: string, result: string): ToolExecutionRecord {
 }
 
 describe('desktop execution runtime', () => {
+  it('keeps client state actions outside the external player window lease', () => {
+    const tracker = new DesktopExecutionTracker(buildDesktopExecutionPlan({
+      text: '进入壁纸模式，继续当前优酷的视频播放',
+      lane: 'desktop_control',
+      taskId: 'wallpaper-with-player',
+    }));
+    const client = { lane: 'client', operation: 'mutate', sideEffects: [{ type: 'desktop_control' }] } as any;
+    expect(tracker.authorize('client_action', client).allowed).toBe(true);
+    tracker.record({
+      ...verifiedRecord('client_action', JSON.stringify({ ok: true, verification: { status: 'verified' } })),
+      arguments: { action: 'set_wallpaper_mode', enabled: true },
+      capability: client,
+    });
+    expect(tracker.toToolExecutionRecord()).toBeNull();
+    expect(tracker.authorize('computer_use').allowed).toBe(false);
+    tracker.record(verifiedRecord('desktop_active_window', JSON.stringify({ title: '优酷', process_name: 'Youku.exe', pid: 4567 })));
+    expect(tracker.authorize('computer_use').allowed).toBe(true);
+    tracker.record(verifiedRecord('desktop_active_window', JSON.stringify({ title: 'WPS', process_name: 'wps.exe', pid: 100 })));
+    expect(tracker.authorize('computer_use').allowed).toBe(false);
+    expect(tracker.authorize('client_action', client).allowed).toBe(true);
+  });
+
   it('binds default content snapshots to the identified window without renewing input authority', () => {
     const tracker = new DesktopExecutionTracker(buildDesktopExecutionPlan({ text: 'open Google Chrome', lane: 'desktop_control', taskId: 'browser-read' }));
     tracker.record(verifiedRecord('desktop_active_window', JSON.stringify({ title: 'DeepSeek - Google Chrome', process_name: 'chrome.exe', pid: 42, window_id: 123 })));
@@ -50,16 +72,7 @@ describe('desktop execution runtime', () => {
       text: '微信发送消息给 Alice',
       lane: 'messaging',
       taskId,
-      capabilityExecutionPlan: {
-        schemaVersion: 1,
-        planId: `cap-${taskId}`,
-        taskId,
-        intent: { kind: 'messaging_send', operation: 'mutate', subject: 'user', target: 'Alice', payload: 'hello', sideEffectClass: 'external_commit', relation: 'new', confidence: 1, rule: 'test' },
-        nodes: [], edges: [], expectedEvidence: [], contextRefs: [],
-        risk: { sideEffectClass: 'external_commit', requiresConfirmation: true, failClosed: true, reasons: [] },
-        fallbackPolicy: { retryClass: 'none', maxRetries: 0, jitter: false, reconcileUnknownOutcome: true, allowLegacyRoute: false, onTargetMismatch: 'stop', onUnknownOutcome: 'reconcile_then_stop' },
-        decisionAuthority: 'semantic_planner', scriptAuthority: 'adapter_only',
-      },
+      actionIntent: { kind: 'messaging_send', operation: 'mutate', subject: 'user', target: 'Alice', payload: 'hello', sideEffectClass: 'external_commit', relation: 'new', confidence: 1, rule: 'test' },
     });
   }
 

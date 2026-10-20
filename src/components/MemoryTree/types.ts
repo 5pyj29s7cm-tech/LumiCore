@@ -86,18 +86,3 @@ export interface RingDef {
   /** Number of orbiting particles */
   particleCount: number;
 }
-
-// ── Timeline ──
-
-export interface TimelineState {
-  /** ISO 8601 cutoff — show only memories created on or before this */
-  before: string | null;
-  /** Is the timeline auto-playing (growing) */
-  playing: boolean;
-  /** Playback speed multiplier */
-  speed: number;
-  /** Earliest memory date found */
-  earliest: string | null;
-  /** Latest memory date found */
-  latest: string | null;
-}

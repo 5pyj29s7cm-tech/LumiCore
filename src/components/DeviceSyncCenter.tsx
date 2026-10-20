@@ -6,8 +6,6 @@ import {
   Monitor,
   RefreshCcw,
   Zap,
-  MapPin,
-  Move3d,
   Search,
   CheckCircle2,
   Glasses,
@@ -15,7 +13,6 @@ import {
   HardDrive,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { usePlatform } from '@/hooks/usePlatform';
 import { useSocket } from '@/hooks/useSocket';
 import { GlassCard } from './SharedUI';
 import { RemoteMCPSettings } from './RemoteMCPSettings';
@@ -46,7 +43,6 @@ export function DeviceSyncCenter({ t }: { t: any }) {
 }
 
 function DeviceSyncView({ t }: { t: any }) {
-  const { sensors, setSensorSyncEnabled, isSyncing } = usePlatform();
   const socket = useSocket();
   const [isSearching, setIsSearching] = useState(true);
   const [snapshot, setSnapshot] = useState<DeviceSnapshot>({ devices: [], pairedDeviceIds: [], sensoryContext: null });
@@ -218,75 +214,6 @@ function DeviceSyncView({ t }: { t: any }) {
           )}
         </div>
       </GlassCard>
-
-      <div className="grid md:grid-cols-2 gap-8">
-        {/* Mobile Perception */}
-        <GlassCard className="p-8 space-y-6 border-t-2 border-t-celestial-nebula">
-          <div className="flex items-center gap-3">
-            <Smartphone className="text-celestial-nebula" />
-            <div>
-              <h3 className="text-lg font-bold">{t.mobileSensors || 'Mobile Sensors'}</h3>
-              <p className="text-xs text-white/40">{t.sensorPerceptionDesc || 'Real-time perception data from device sensors.'}</p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className={`p-4 rounded-2xl border transition-all ${isSyncing ? 'bg-celestial-nebula/10 border-celestial-nebula/30' : 'bg-white/5 border-white/10'}`}>
-              <div className="flex items-center gap-2 text-xs text-white/40 mb-2">
-                <MapPin size={12} />
-                <span>{t.location || 'Location'}</span>
-              </div>
-              <div className="space-y-1">
-                <div className="text-xs font-mono">{sensors.latitude?.toFixed(4) || '--'}° N</div>
-                <div className="text-xs font-mono">{sensors.longitude?.toFixed(4) || '--'}° E</div>
-              </div>
-            </div>
-
-            <div className={`p-4 rounded-2xl border transition-all ${isSyncing ? 'bg-celestial-nebula/10 border-celestial-nebula/30' : 'bg-white/5 border-white/10'}`}>
-              <div className="flex items-center gap-2 text-xs text-white/40 mb-2">
-                <Move3d size={12} />
-                <span>{t.motion || 'Motion'}</span>
-              </div>
-              <div className="space-y-1">
-                <div className="text-xs font-mono">X: {sensors.acceleration?.x.toFixed(2) || '0.00'}</div>
-                <div className="text-xs font-mono">Y: {sensors.acceleration?.y.toFixed(2) || '0.00'}</div>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-white/5 border border-white/5 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className={`w-2 h-2 rounded-full ${isSyncing ? 'bg-celestial-nebula animate-pulse' : 'bg-white/20'}`} />
-              <span className="text-xs font-bold uppercase tracking-widest text-white/60">
-                {isSyncing ? (t.liveStreamActive || 'Live Stream Active') : (t.sensorsStandby || 'Sensors Standby')}
-              </span>
-            </div>
-            <button
-              onClick={() => setSensorSyncEnabled(enabled => !enabled)}
-              className={`text-xs font-bold hover:underline ${isSyncing ? 'text-red-400' : 'text-celestial-nebula'}`}
-            >
-              {isSyncing ? (t.stopBtn || 'STOP') : (t.enableBtn || 'ENABLE')}
-            </button>
-          </div>
-        </GlassCard>
-
-        <GlassCard className="p-8 space-y-6 border-t-2 border-t-celestial-jupiter">
-          <div className="flex items-center gap-3">
-            <Monitor className="text-celestial-jupiter" />
-            <div>
-              <h3 className="text-lg font-bold">{t.kernelMonitor || 'Kernel Monitor'}</h3>
-              <p className="text-xs text-white/40">{t.kernelExploreMergedDesc || 'Runtime monitor and computer exploration are merged into this single kernel view.'}</p>
-            </div>
-          </div>
-          <button
-            onClick={() => window.dispatchEvent(new CustomEvent('lumi:client-action', { detail: { action: 'open_computer_adaptation' } }))}
-            className="w-full py-4 rounded-2xl bg-celestial-jupiter text-black font-bold text-sm hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-          >
-            <Monitor size={16} />
-            {t.kernelMonitor || 'Kernel Monitor'}
-          </button>
-        </GlassCard>
-      </div>
 
       {/* Remote MCP Endpoints */}
       <GlassCard className="p-8 space-y-6">

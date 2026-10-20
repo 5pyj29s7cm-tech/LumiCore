@@ -3,9 +3,8 @@ import type { ToolContext } from '../types';
 import { getClientState } from '../../client/self_model';
 import { getGateConfig } from '../../autonomy/safety_gate';
 import { listAutonomousWorkflows } from '../../autonomy/workflows';
-import { mcpManager } from '../../mcp';
 import { PERSONAL_CLIENT_SURFACE_ACTIONS } from '../../../shared/client_surfaces';
-import { safeRuntimeError } from '../../client/diagnostic_sanitizer';
+export { getSkillRuntimeFindings } from '../../client/self/health';
 
 export const ACTIONS = Array.from(new Set([
   'close_client_surface',
@@ -22,6 +21,7 @@ export const ACTIONS = Array.from(new Set([
   'open_organization_workspace',
   'refresh_client_state',
   'set_wallpaper_mode',
+  'set_desktop_execution_preference',
 ]));
 
 export const RECOVERY_SURFACE_ACTIONS: Record<string, { action: string; section?: string }> = {
@@ -66,39 +66,6 @@ export async function waitForClientStateAfter(userId: string, previousUpdatedAt:
     await delay(80);
   }
   return latest;
-}
-
-export function getSkillRuntimeFindings() {
-  const health = mcpManager.getServerHealth();
-  const connected = new Set(mcpManager.getConnectedServers());
-  const config = mcpManager.getConfig();
-  const local = mcpManager.listLocalSkills();
-  return Object.entries(config)
-    .map(([name, serverConfig]) => {
-      const localSkill = local.find(skill => skill.name === name);
-      const serverHealth = health[name];
-      const enabled = Boolean(serverConfig.enabled);
-      const isConnected = connected.has(name);
-      const broken = Boolean(localSkill?.broken);
-      const status = serverHealth?.status || (isConnected ? 'connected' : 'unknown');
-      const hasIssue = broken || ['crashed', 'failed', 'restarting'].includes(status) || (enabled && !isConnected);
-      if (!hasIssue) return null;
-      return {
-        name,
-        enabled,
-        connected: isConnected,
-        broken,
-        status,
-        consecutiveCrashes: Number(serverHealth?.consecutiveCrashes || 0),
-        lastError: safeRuntimeError(serverHealth?.lastError),
-        lastCrashTime: serverHealth?.lastCrashTime || undefined,
-        lastSuccessfulConnect: serverHealth?.lastSuccessfulConnect || undefined,
-        source: serverConfig.source || localSkill?.source || 'unknown',
-        description: serverConfig.description || localSkill?.description || name,
-        repairTool: `client_repair_skill(skillName="${name}")`,
-      };
-    })
-    .filter(Boolean);
 }
 
 export function getAutonomyDiagnosticPolicy(userId: string) {

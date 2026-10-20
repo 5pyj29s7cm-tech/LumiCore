@@ -53,6 +53,7 @@ export function normalizeChatHistoryRecord(
   const trustedRecord = {
     ...m,
     role,
+    cognitiveIntent: options.serverOwned ? m?.cognitiveIntent : undefined,
     message: isUiErrorText ? '' : primaryText,
     content: undefined,
     response,

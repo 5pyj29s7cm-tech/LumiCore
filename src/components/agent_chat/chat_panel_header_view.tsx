@@ -3,7 +3,7 @@ import { VoiceCallButton } from "../VoiceCallButton";
 import { uiMessage } from "../../i18n/uiMessages";
 import type { AgentChatViewInput } from './AgentChatView';
 
-export function renderChatPanelHeader({ isOfficeCommandCenter, chatHeaderStyle, agentName, operationModeMeta, agentCategory, activeDomainLabel, OperationModeIcon, knowledgeFiles, knowledgeLoading, knowledgeStatusText, callState, audioLevel, startVoiceSession, endVoiceSession, voices, activeDomain, setShowWeChatSettings, setCommandCenterPlannerOpen, commandCenterPlannerOpen, commandCenterPlannerText, searchQuery, setSearchQuery, setSearchResults, setSearchError }: Pick<AgentChatViewInput, "isOfficeCommandCenter" | "chatHeaderStyle" | "agentName" | "operationModeMeta" | "agentCategory" | "activeDomainLabel" | "OperationModeIcon" | "knowledgeFiles" | "knowledgeLoading" | "knowledgeStatusText" | "callState" | "audioLevel" | "startVoiceSession" | "endVoiceSession" | "voices" | "activeDomain" | "setShowWeChatSettings" | "setCommandCenterPlannerOpen" | "commandCenterPlannerOpen" | "commandCenterPlannerText" | "searchQuery" | "setSearchQuery" | "setSearchResults" | "setSearchError">) {
+export function renderChatPanelHeader({ desktopModeControl, isOfficeCommandCenter, chatHeaderStyle, agentName, operationModeMeta, agentCategory, activeDomainLabel, OperationModeIcon, knowledgeFiles, knowledgeLoading, knowledgeStatusText, callState, audioLevel, startVoiceSession, endVoiceSession, voices, activeDomain, setShowWeChatSettings, setCommandCenterPlannerOpen, commandCenterPlannerOpen, commandCenterPlannerText, searchQuery, setSearchQuery, setSearchResults, setSearchError }: Pick<AgentChatViewInput, "desktopModeControl" | "isOfficeCommandCenter" | "chatHeaderStyle" | "agentName" | "operationModeMeta" | "agentCategory" | "activeDomainLabel" | "OperationModeIcon" | "knowledgeFiles" | "knowledgeLoading" | "knowledgeStatusText" | "callState" | "audioLevel" | "startVoiceSession" | "endVoiceSession" | "voices" | "activeDomain" | "setShowWeChatSettings" | "setCommandCenterPlannerOpen" | "commandCenterPlannerOpen" | "commandCenterPlannerText" | "searchQuery" | "setSearchQuery" | "setSearchResults" | "setSearchError">) {
   return (
 <div
             className={`lumi-chat-panel-header flex items-center justify-between ${isOfficeCommandCenter ? 'border-0 bg-transparent px-5 py-3.5' : 'border-b p-4 md:p-6'}`}
@@ -57,7 +57,8 @@ export function renderChatPanelHeader({ isOfficeCommandCenter, chatHeaderStyle, 
                 </div>
               )}
             </div>
-            <div className="lumi-chat-history-search relative flex items-center gap-2">
+            <div className="lumi-chat-history-search relative flex flex-wrap items-center justify-end gap-2">
+              {desktopModeControl}
               {isOfficeCommandCenter && (
                 <VoiceCallButton
                   callState={callState}

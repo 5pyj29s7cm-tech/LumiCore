@@ -3,7 +3,7 @@ import { searchExternalAuthoritiesHandler, companyDatabaseLookupHandler } from "
 import { externalResearchPlanHandler, prepareExternalBrowserWorkspaceHandler } from "./external_workspace";
 import { withLegalReceipt, legalCapability, legalEvidence, legalInputBlocked } from "./tool_contracts";
 import { generateCitationVerificationReportHandler, finalizeDeliveryPackageHandler } from "./delivery";
-import { defineLegalTool, stringField, numberField, booleanField, stringListField, CASE_ARCHIVE_FIELDS } from "./tool_contracts";
+import { LEGAL_TEMPORAL_FIELDS, defineLegalTool, stringField, numberField, booleanField, stringListField, CASE_ARCHIVE_FIELDS } from "./tool_contracts";
 
 export function external_researchTools(): ToolDefinition[] {
   return [
@@ -56,6 +56,7 @@ export function external_researchTools(): ToolDefinition[] {
     name: 'legal_generate_citation_verification_report',
     description: '引用核验报告 — 对文书全文或文件中的法条、案号引用生成可落盘的核验报告，统计现行有效、已废止、未确认存在的风险项，并可导入组织知识库。',
     properties: {
+      ...LEGAL_TEMPORAL_FIELDS,
       text: stringField('需要核验的文书全文、代理词、法律意见或合同审查结果'),
       content: stringField('text 的别名'),
       filePath: stringField('需要核验的本地文件路径，支持 PDF/DOCX/TXT/MD 等法律材料格式'),
@@ -85,6 +86,7 @@ export function external_researchTools(): ToolDefinition[] {
     name: 'legal_finalize_delivery_package',
     description: '正式文书交付包 — 将代理词、起诉状、答辩状、法律意见书、证据目录等草稿整理为律所交付包，生成正式 Markdown、DOCX、引用核验报告、来源登记表和提交签署清单。不会自动签发、提交、缴费或送达。',
     properties: {
+      ...LEGAL_TEMPORAL_FIELDS,
       content: stringField('需要整理成正式交付包的文书草稿或工作底稿'),
       packetText: stringField('content 的别名，用于诉讼文书包结果'),
       documentText: stringField('content 的别名，用于单份文书结果'),

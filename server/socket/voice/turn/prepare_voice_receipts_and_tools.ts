@@ -1,5 +1,6 @@
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
-import { createToolLifecycleCallbacks } from "../../tool_lifecycle";
+import { createToolLifecycleCallbacks, type ToolLifecyclePayload } from "../../tool_lifecycle";
+import { inferPhase, projectCustomerVisibleExecutionEvent } from "../../public_agent_event_projection";
 import { logger } from "../../../../logger";
 import { setConversationActionExecutionStatus } from "../../../conversation/manager";
 import { formatPendingConfirmationRequest, type recordPendingConfirmationDurably } from "../../../tools/pending_confirmation";
@@ -120,25 +121,16 @@ export async function prepareVoiceReceiptsAndTools(context: NonNullable<Awaited<
     arguments: Record<string, any>;
     result?: string;
     error?: string;
+    phase?: ToolLifecyclePayload['phase'];
   }) => {
     if (context.session.isBackgroundWork) {
-      context.session.activeWorkStatus = 'executing';
-      context.session.activeWorkStep = payload.error !== undefined
-        ? `${payload.name} failed`
-        : payload.result !== undefined
-          ? `${payload.name} completed`
-          : `Running ${payload.name}`;
+      const phase = inferPhase(payload);
+      context.session.activeWorkStatus = phase === 'waiting_confirmation' ? 'waiting_confirmation' : 'executing';
+      context.session.activeWorkStep = projectCustomerVisibleExecutionEvent('agent:tool', payload, { taskText: context.session.activeTurnText }).publicText || '';
       if (payload.result !== undefined || payload.error !== undefined) context.session.activeWorkToolCalls++;
-      emitVoiceWorkProgress(
-        context.socket,
-        context.session,
-        context.requestId,
-        payload.error !== undefined
-          ? 'blocked'
-          : payload.result !== undefined
-            ? 'step_completed'
-            : 'executing',
-      );
+      emitVoiceWorkProgress(context.socket, context.session, context.requestId,
+        phase === 'completed' ? 'step_completed' : phase === 'working' ? 'executing'
+          : phase === 'waiting_confirmation' ? 'waiting_confirmation' : 'blocked');
     }
     const normalized = { ...payload, args: payload.arguments, source: 'voice' };
     context.emitAgent("agent:tool_call", normalized);
@@ -175,6 +167,7 @@ export async function prepareVoiceReceiptsAndTools(context: NonNullable<Awaited<
   const requestConfirmation = createTurnConfirmation({
     userId: context.session.userId, source: 'voice', requestId: context.requestId, actionIntent: context.actionIntentText,
     autoApprovalIntent: context.routedUserText,
+    allowLocalFileWrites: context.allowLocalFileWrites,
     pending: context.pendingConfirmation,
     consumeScope: () => context.confirmationScope,
     proposalScope: () => ({ ...context.confirmationChannelScope, taskId: context.actionTaskExecution.state?.taskId }),

@@ -185,16 +185,17 @@ export function archiveBoundConversationActionReceipts(
         state.taskCapsule,
         exactRequestOwnsActiveTask ? { requestId: receiptRequestId, taskId } : undefined,
       );
-      const waitingForConfirmation = records.some(isConfirmationBlockedToolRecord);
+      const waitingForConfirmation = records.some(record => isConfirmationBlockedToolRecord(record)
+        && (!receiptRequestId || String(record.requestId || record.turnId || '') === receiptRequestId));
       const hasFailure = records.some(record => !toolRecordSucceeded(record));
       const status: ConversationTaskStatus = authoritativeDisposition
         ? disposition!.outcome
         : isTerminalConversationTaskStatus(task.status)
         ? task.status
-        : completion.complete
-          ? 'completed'
-          : waitingForConfirmation
-            ? 'waiting_confirmation'
+        : waitingForConfirmation
+          ? 'waiting_confirmation'
+          : completion.complete
+            ? 'completed'
             : hasFailure
               ? 'blocked'
               : task.status;

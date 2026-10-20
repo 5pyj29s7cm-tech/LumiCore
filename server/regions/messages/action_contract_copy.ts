@@ -15,6 +15,7 @@ export const CN_ACTION_CONTRACT_COPY = {
       "文书文件路径或明确的审阅意见",
       "外部平台结果需要授权会话/API 证据、来源登记或入案归档"
     ],
+    "lawVerificationMissing": "请先完成文书核验，核对法律适用、证据依据和交付条件，再确认是否可正式使用。",
     "nextStep": "先拿到事实、证据、诉讼目标和管辖等信息，再起草或审阅。"
   },
   "artifactWork": {

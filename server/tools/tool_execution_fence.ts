@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { stableValue } from '../../shared/stable_json';
 import { getJwtSecret } from '../config/local_identity';
-import { isDefiniteOfficialImageRejection } from '../llm/official_api';
+import { isDefiniteOfficialImageRejection, isDefiniteOfficialVideoRejection } from '../llm/official_api';
 import type { ToolContext, ToolDefinition } from './types';
 import type { beginToolMetric } from '../runtime/tool_metrics';
 import { beforeAdapterExecution, cancelAdapterExecutionPermit, recordAdapterExecutionFailure, recordAdapterExecutionSuccess } from './adapter_resilience';
@@ -172,6 +172,7 @@ type ToolFenceInput = {
   hasSideEffect: boolean;
   adapterPermit: ReturnType<typeof beforeAdapterExecution>;
   finishMetric: ReturnType<typeof beginToolMetric>;
+  finishResultMetric: (result: string) => void;
   pinnedLocalIdempotencyReplay: NonNullable<ToolDefinition['localIdempotencyReplay']>;
   pinnedReconcileExternalCommit: ToolDefinition['reconcileExternalCommit'];
 };
@@ -228,14 +229,16 @@ export async function prepareToolExecutionFence(
     }
     if (existing?.state === 'verified') {
       cancelAdapterExecutionPermit(adapterPermit);
-      finishMetric('verified_success');
+      if (externalCommit) finishMetric('verified_success');
+      else input.finishResultMetric(existing.result || '');
       return { replay: existing.result || '' };
     }
     if (existing?.promise) {
       cancelAdapterExecutionPermit(adapterPermit);
       try {
         const result = await existing.promise;
-        finishMetric(!externalCommit || externalResultIsVerified(result) ? 'verified_success' : 'unknown_outcome');
+        if (externalCommit) finishMetric(externalResultIsVerified(result) ? 'verified_success' : 'unknown_outcome');
+        else input.finishResultMetric(result);
         return { replay: result };
       } catch (error) {
         finishMetric(externalCommit
@@ -414,12 +417,15 @@ async function finalizeToolExecution(state: ToolFinalizationState): Promise<stri
       }
     }
     if (!externalCommit) recordAdapterExecutionSuccess(adapterPermit);
-    finishMetric('verified_success');
+    if (externalCommit) finishMetric('verified_success');
+    else state.finishResultMetric(result);
     return result;
   } catch (error: any) {
     if (error?.externalCommitUnknown === true) throw error;
     if (externalCommit) {
-      if (!state.handlerEntered || (['generate_image', 'ai_edit_image'].includes(name) && isDefiniteOfficialImageRejection(error))) {
+      if (!state.handlerEntered
+        || (['generate_image', 'ai_edit_image'].includes(name) && isDefiniteOfficialImageRejection(error))
+        || (name === 'generate_video' && isDefiniteOfficialVideoRejection(error))) {
         await settleExternalCommitAttempt({
           idempotencyKey,
           claimToken,

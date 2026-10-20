@@ -144,3 +144,34 @@ it('opens a conversation output folder only with the matching owned receipt', as
   expect((await request(other)).status).toBe(403);
   expect(opener).not.toHaveBeenCalled();
 });
+
+
+it('stops the existing tool loop and returns a truthful final response after verified existing-video delivery', async () => {
+  const crypto = await import('node:crypto');
+  const { hasCompletedCoreAction } = await import('../server/llm/tool_loop/projection');
+  const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+  const projectId = 'a590fef2-1d8f-4cea-a2b6-6a3ed5567e6a';
+  const target = path.join(root, 'already-finished-video.mp4'); fs.writeFileSync(target, 'existing video fixture');
+  const bytes = fs.readFileSync(target);
+  const identity = { requestId: 'retrieve-completion-request', taskId: 'retrieve-completion-task' };
+  const payload = { ok: true, verified: true, status: 'retrieved', projectId, revision: 22, selectedStyle: 'chat', outputPath: target,
+    artifacts: [{ type: 'video', path: target, size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') }] };
+  const record: ToolExecutionRecord = { ...identity, name: 'owned_video_read', arguments: { projectId, revision: 22, includeOutput: true }, result: JSON.stringify(payload),
+    terminalVerification: { status: 'verified', strategy: 'state_diff', reason: 'Actual owned output SHA matched' },
+    capability: { capabilityId: 'files.owned_video_read', lane: 'files', operation: 'observe', risk: 'low', sideEffects: [{ type: 'local_read', scope: 'owned output', reversible: true }],
+      verification: { strategy: 'state_diff', required: true, requiredFields: ['ok', 'verified'], successStatuses: ['read', 'retrieved'], successSignals: [], limitations: [] } } };
+  const task = "请把聊天唱歌工程 a590fef2-1d8f-4cea-a2b6-6a3ed5567e6a 当前第 22 版选中的聊天记录＋表情包视频作为本轮附件返回。这个工程已经有完整120秒的成片，请通过 chat_song_render 复用已有文件，不要重新起草、生成歌曲、图片或视频模型画面，不要制作动画版，不要发送到任何外部聊天软件，不用再次确认歌词。歌曲人工核对状态保持原值。";
+  expect(hasCompletedCoreAction(task, [record], identity)).toBe(true);
+  for (const source of ['chat', 'voice', 'task', 'workflow']) {
+    const input = { ...identity, taskText: task, responseText: '', toolRecords: [record], source };
+    const result = finalizeLumiResponse(input);
+    expect(result).toMatchObject({ blocked: false, reason: 'artifact_retrieved' });
+    expect(result?.text).toContain('取回已有文件'); expect(result?.text).not.toContain('已生成');
+    expect(finalizeLumiResponse({ ...input, responseText: result!.text }).blocked).toBe(false);
+  }
+  for (const bad of [{ ...record, requestId: 'previous-request' }, { ...record, error: 'Read failed' },
+    { ...record, arguments: { projectId, revision: 21, includeOutput: true } }]) {
+    expect(hasCompletedCoreAction(task, [bad], identity)).toBe(false);
+  }
+  expect(hasCompletedCoreAction('创建一个新的120秒视频并作为附件返回', [record], identity)).toBe(false);
+});

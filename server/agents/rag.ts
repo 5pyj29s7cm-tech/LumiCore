@@ -246,7 +246,7 @@ export async function verifyIngestedDocument(
   agentId: string,
   manifest: KnowledgeIngestionManifest,
   cases: KnowledgeGoldenCaseDefinition[],
-  scope: { domain?: string; orgId?: string; signal?: AbortSignal } = {},
+  scope: { domain?: string; orgId?: string; signal?: AbortSignal; semanticTimeoutMs?: number } = {},
 ): Promise<KnowledgeIngestionManifest> {
   const retrieval = await runKnowledgeGoldenEvaluation({
     cases,
@@ -294,7 +294,7 @@ export async function retrieveChunks(
   agentId: string,
   query: string,
   limit = 5,
-  scope: { domain?: string; orgId?: string; signal?: AbortSignal } = {},
+  scope: { domain?: string; orgId?: string; signal?: AbortSignal; semanticTimeoutMs?: number } = {},
 ): Promise<Array<Memory & { citation: string }>> {
   const requestedLimit = Math.max(1, Math.min(50, Number(limit) || 5));
   const memories = await queryMemoriesVector({
@@ -310,6 +310,7 @@ export async function retrieveChunks(
     orgId: scope.orgId,
     useVector: true,
     signal: scope.signal,
+    semanticTimeoutMs: scope.semanticTimeoutMs,
   });
 
   return memories

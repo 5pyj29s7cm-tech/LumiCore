@@ -9,6 +9,7 @@ import {
 import * as LegalCases from '../server/org/legal_cases';
 import { addMember, createOrg } from '../server/org/db';
 import { readDB } from '../db_layer';
+import { processWithPersonality } from '../server/regions/packs/cn/messaging_routes';
 import type { IncomingMessage } from '../server/messaging/types';
 
 function message(partial: Partial<IncomingMessage>): IncomingMessage {
@@ -52,7 +53,7 @@ describe('remote messaging legal notice intake', () => {
     );
 
     try {
-      const reply = await handleRemoteLegalNoticeIntake(message({
+      const reply = await processWithPersonality(message({
         boundOrgId: orgId,
         boundUserId: userId,
         text: '请建案并归档以下通知：【人民法院】上海市黄浦区人民法院通知：（2026）沪0101民初123号将于2026年7月15日开庭，请查看 https://court.example.test/notice/123',
@@ -87,7 +88,7 @@ describe('remote messaging legal notice intake', () => {
     const orgId = createOrg('Remote Legal Message', `remote-legal-message-${suffix}`, userId).id;
     addMember(orgId, userId, 'owner');
 
-    const reply = await handleRemoteLegalNoticeIntake(message({
+    const reply = await processWithPersonality(message({
       platform: 'wechat',
       userName: '阿陆',
       boundOrgId: orgId,
@@ -147,13 +148,19 @@ describe('remote messaging legal notice intake', () => {
         boundUserId: userId,
         text: `请归档到已有案件：【人民法院】${caseNumber} 有新的开庭通知，请查看 https://court.example.test/notice/personal-321`,
       });
-      const reply = await handleRemoteLegalNoticeIntake(incoming);
+      const waiting = await processWithPersonality(incoming);
+      expect(waiting).toContain('目前不能唯一确定组织案件');
+      expect(LegalCases.getCase(orgId, caseFile.id)!.materials).toHaveLength(0);
+      const reply = await processWithPersonality({ ...incoming, text: '归档到 1', messageId: incoming.messageId + '-selection' });
 
       expect(reply).toContain('远程法律消息已入案');
-      expect(reply).toContain(`案件ID：${caseFile.id}`);
       expect(reply).toContain('案件提醒：已生成/更新');
-      expect(incoming.boundOrgId).toBe(orgId);
+      expect(incoming.boundOrgId).toBeUndefined();
       const refreshed = LegalCases.getCase(orgId, caseFile.id)!;
+      expect(reply).toContain(refreshed.title);
+      expect(reply).toContain(`案件现有材料：共 ${refreshed.materials.length} 份`);
+      expect(reply).not.toContain(caseFile.id);
+      for (const material of refreshed.materials) expect(reply).not.toContain(material.id);
       expect(refreshed.hearingDate).toBe('2027-08-15 09:30');
       expect(refreshed.materials.some(material => material.content.includes('court.example.test/notice/personal-321'))).toBe(true);
 
@@ -256,7 +263,7 @@ describe('remote messaging legal notice intake', () => {
     addMember(orgId, userId, 'owner');
     const missingCaseNumber = '（2026）沪0101民初901号';
 
-    const missingReply = await handleRemoteLegalNoticeIntake(message({
+    const missingReply = await processWithPersonality(message({
       platform: 'wechat',
       boundUserId: userId,
       boundOrgId: orgId,
@@ -279,7 +286,7 @@ describe('remote messaging legal notice intake', () => {
       stage: 'filing',
     });
     const beforeMaterials = existing.materials.length;
-    const archivedReply = await handleRemoteLegalNoticeIntake(message({
+    const archivedReply = await processWithPersonality(message({
       platform: 'wechat',
       boundUserId: userId,
       boundOrgId: orgId,
@@ -292,7 +299,11 @@ describe('remote messaging legal notice intake', () => {
       }],
     }));
 
-    expect(archivedReply).toContain(`案件ID：${existing.id}`);
+    const refreshed = LegalCases.getCase(orgId, existing.id, userId)!;
+    expect(archivedReply).toContain(refreshed.title);
+    expect(archivedReply).toContain(`案件现有材料：共 ${refreshed.materials.length} 份`);
+    expect(archivedReply).not.toContain(existing.id);
+    for (const material of refreshed.materials) expect(archivedReply).not.toContain(material.id);
     expect(LegalCases.getCase(orgId, existing.id, userId)!.materials.length).toBeGreaterThan(beforeMaterials);
     expect(LegalCases.listCases(orgId, '', 20, userId)).toHaveLength(1);
   });

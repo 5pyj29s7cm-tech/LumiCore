@@ -1,12 +1,18 @@
 /** Native Wan2.2 clips are five seconds; Lumi composes longer requested outputs. */
 export type VideoGenerationOptions = { sizes: readonly string[]; durations: readonly number[]; fixedDuration?: number };
-const OFFICIAL_WAN_OPTIONS: VideoGenerationOptions = {
+const OFFICIAL_WAN2_OPTIONS: VideoGenerationOptions = {
   sizes: ['1920x1080', '1080x1920', '1440x1440', '832x480', '480x832', '624x624', '1632x1248', '1248x1632'],
   durations: [5, 10, 15, 30, 60, 120], fixedDuration: 5,
 };
+// Gateway /docs: Wan3 uses native 2–30 second outputs and 480P/720P/1080P sizes.
+const OFFICIAL_WAN3_OPTIONS: VideoGenerationOptions = {
+  sizes: ['1920x1080', '1080x1920', '1280x720', '720x1280', '832x480', '480x832', '624x624'],
+  durations: Array.from({ length: 29 }, (_, index) => index + 2),
+};
 export function videoGenerationOptions(selection?: { provider?: string; model?: string }): VideoGenerationOptions | null {
-  return selection?.provider === 'relay' && /^aliyun\/Wan2\.2-(?:T2V|I2V)-A14B$/i.test(selection.model || '')
-    ? OFFICIAL_WAN_OPTIONS : null;
+  if (selection?.provider !== 'relay') return null;
+  if (/^aliyun\/Wan2\.2-(?:T2V|I2V)-A14B$/i.test(selection.model || '')) return OFFICIAL_WAN2_OPTIONS;
+  return /^aliyun\/wan3\.0-video(?:-prime)?$/i.test(selection.model || '') ? OFFICIAL_WAN3_OPTIONS : null;
 }
 
 /** Parse requested seconds once for both execution and result validation. */

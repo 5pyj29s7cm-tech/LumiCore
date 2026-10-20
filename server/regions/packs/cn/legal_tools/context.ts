@@ -1,3 +1,4 @@
+import type { CitationVerificationOptions } from '../../../../legal/kb';
 import { assertLegalExecutionActive, legalExecutionSignal, legalWrite } from "../../../../legal/execution";
 import { type NormalizedMessage, makeLLMCall } from "../../../../llm/providers";
 import { getUserPreferredLLMConfig } from "../../../../llm/user_preferences";
@@ -297,4 +298,10 @@ export function expandLocalPath(input: string): string {
     return path.join(home, 'Documents', raw.replace(/^(文档|documents?)[\\/]?/i, ''));
   }
   return raw;
+}
+
+
+export function legalTemporalOptions(args: Record<string, any>): CitationVerificationOptions {
+  return { factDate: textArg(args, 'factDate'), procedureDate: textArg(args, 'procedureDate'),
+    temporalReviews: Array.isArray(args.temporalReviews) ? args.temporalReviews : undefined };
 }

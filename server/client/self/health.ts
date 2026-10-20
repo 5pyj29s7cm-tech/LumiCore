@@ -1,19 +1,90 @@
+import { getToolRuntimeMetrics } from '../../runtime/tool_metrics';
+import { getAdapterResilienceSnapshot } from '../../tools/adapter_resilience';
+import { getDatabasePersistenceStatus } from '../../../db_layer';
+import { runtimeFaults } from '../../runtime/fault_state';
+import { scheduler } from '../../scheduler';
+import { getUnifiedRuntimeSupervisorStatus } from '../../runtime/unified_supervisor';
+import { getLumiModelConfiguration } from '../../llm/model_configuration';
+import { createProviderAvailabilityReader } from '../../llm/provider_health';
+import { getDurableTaskHealthSnapshot } from '../../cognition/durable_task_diagnostics';
+import { mcpManager } from '../../mcp';
 import { safeRuntimeError } from "../diagnostic_sanitizer";
 import { CLIENT_SETTINGS_SECTIONS, PERSONAL_CLIENT_LAUNCHER_IDS, PERSONAL_CLIENT_SURFACES, PERSONAL_CLIENT_SURFACE_ACTIONS } from "../../../shared/client_surfaces";
 import { LUMI_TECHNICAL_ARCHITECTURE } from "../../../shared/technical_architecture";
 import type { ClientHealthReport, ClientHealthFinding, ClientHealthLevel, ClientSelfAwarenessReport } from './contracts';
 import { getClientStateForScope, getClientStateDigest } from './state';
 
+export function getBackendHealthReport() {
+  const fault = runtimeFaults.snapshot();
+  const persistence = getDatabasePersistenceStatus();
+  const tasks = scheduler.listTasks();
+  const schedulerHealth = {
+    degraded: tasks.some(task => task.requiresReconciliation || (task.enabled && ['failed', 'timed_out', 'blocked'].includes(task.lastStatus))),
+    pausedTasks: tasks.filter(task => task.requiresReconciliation).length,
+    queuedTasks: tasks.filter(task => task.queued).length,
+    failedTasks: tasks.filter(task => task.enabled && ['failed', 'timed_out', 'blocked'].includes(task.lastStatus)).length,
+  };
+  return { fault, persistence, scheduler: schedulerHealth,
+    status: fault.degraded || persistence.degraded || schedulerHealth.degraded ? 'degraded' as const : 'ok' as const };
+}
+
 export function getClientHealthReport(
   userId: string,
   scope: { domain?: string; orgId?: string } = {},
+  models: Record<string, Record<string, unknown>> = (getLumiModelConfiguration(userId) as { roles?: Record<string, Record<string, unknown>> }).roles || {},
 ): ClientHealthReport {
   const state = getClientStateForScope(userId, scope);
   const now = Date.now();
-  const findings: ClientHealthFinding[] = [];
+  const checks: ClientHealthFinding[] = [];
   const stateAgeSeconds = state?.updatedAt ? Math.round((now - state.updatedAt) / 1000) : null;
 
-  const add = (finding: ClientHealthFinding) => findings.push(finding);
+  const observedAt = new Date(now).toISOString();
+  const add = (finding: ClientHealthFinding) => checks.push({ observedAt, ...finding, message: safeRuntimeError(finding.message) || finding.id, evidence: safeRuntimeError(finding.evidence) });
+  const backend = getBackendHealthReport();
+  add({ id: 'backend.process', area: 'backend', level: backend.fault.degraded ? 'degraded' : 'ok',
+    message: backend.fault.degraded ? 'Backend stopped accepting work after a fatal runtime fault.' : 'Backend process is accepting work.',
+    evidence: backend.fault.kind, observedAt: backend.fault.occurredAt || observedAt });
+  add({ id: 'database.persistence', area: 'database', level: backend.persistence.degraded ? 'degraded' : 'ok',
+    message: backend.persistence.degraded ? 'Database persistence has failed or fallen behind.' : 'Database persistence reports no current fault.',
+    evidence: safeRuntimeError(backend.persistence.lastError) || `pending=${backend.persistence.pending}; lagMs=${backend.persistence.lagMs}` });
+  add({ id: 'scheduler.runtime', area: 'scheduler', level: backend.scheduler.degraded ? 'degraded' : 'ok',
+    message: 'Scheduled task runtime snapshot.', evidence: JSON.stringify(backend.scheduler) });
+  const supervisor = getUnifiedRuntimeSupervisorStatus();
+  add({ id: 'supervisor.runtime', area: 'supervisor', level: supervisor.running ? 'ok' : 'unknown',
+    message: supervisor.running ? 'Runtime supervision is running.' : 'No running runtime supervisor is observed.' });
+  for (const job of supervisor.jobs.filter(job => ['failed', 'timeout'].includes(job.outcome))) {
+    add({ id: `supervisor.${job.id}`, area: 'supervisor', level: 'degraded',
+      message: `Runtime supervisor job ${job.id}: ${job.outcome}.`, evidence: safeRuntimeError(job.lastError), observedAt: job.lastCompletedAt });
+  }
+  const availability = createProviderAvailabilityReader();
+  for (const [role, model] of Object.entries(models)) {
+    if (model.enabled === false) continue;
+    const provider = String(model.effectiveProvider || model.provider || '');
+    const modelName = String(model.effectiveModel || model.model || '');
+    const result = availability({ provider, model: modelName, configured: model.configured === true });
+    add({ id: `model.${role}`, area: 'models',
+      level: result.readiness === 'healthy' ? 'ok' : result.readiness === 'unhealthy' ? 'degraded' : 'unknown',
+      message: `${role}: ${provider}/${modelName || 'provider-managed'}; ${result.readiness}.`,
+      evidence: result.reason, observedAt: result.lastObservation?.observedAt || result.lastProbe?.testedAt });
+  }
+  const tasks = getDurableTaskHealthSnapshot(userId, scope);
+  add({ id: 'tasks.runtime', area: 'tasks', level: !tasks.available ? 'unknown' : tasks.blocked || tasks.failed ? 'attention' : 'ok',
+    message: 'Scoped autonomous, chat and creation task ledger snapshot.',
+    evidence: `active=${tasks.active}; paused=${tasks.paused}; retryScheduled=${tasks.retryScheduled}; blocked=${tasks.blocked}; failed=${tasks.failed}; sources=${tasks.diagnostics.join(',') || 'available'}` });
+  const toolHistory = getToolRuntimeMetrics().totals;
+  add({ id: 'tools.execution_history', area: 'tools', level: 'ok', message: 'Process-lifetime tool outcome history; past failures do not prove a current fault.', evidence: JSON.stringify(toolHistory.outcomes) });
+  add({ id: 'memory.retrieval_verification', area: 'memory', level: 'unknown', message: 'Memory retrieval correctness requires source evidence; registration and database persistence do not verify recall accuracy.' });
+  const skills = getSkillRuntimeFindings();
+  add({ id: 'skills.runtime', area: 'skills', level: skills.some(skill => skill.enabled) ? 'attention' : 'ok',
+    message: 'Enabled skill and MCP runtime snapshot.', evidence: skills.filter(skill => skill.enabled).map(skill => `${skill.name}=${skill.status}${skill.lastError ? ':' + skill.lastError : ''}`).join('; ') });
+  const adapterFamilies = Object.values(getAdapterResilienceSnapshot().families);
+  add({ id: 'adapters.runtime', area: 'adapters', level: adapterFamilies.some(family => family.openCircuits || family.halfOpenCircuits) ? 'attention' : 'ok',
+    message: 'External adapter circuit state.', evidence: `open=${adapterFamilies.reduce((n, family) => n + family.openCircuits, 0)}; recovering=${adapterFamilies.reduce((n, family) => n + family.halfOpenCircuits, 0)}` });
+  const stateObservedAt = state?.updatedAt ? new Date(state.updatedAt).toISOString() : undefined;
+  for (const [area, value] of [['client_ui', state?.activeTab], ['native_runtime', state?.runtime], ['voice', state?.voice?.state], ['meeting', state?.meeting], ['knowledge', state?.knowledge]] as const) {
+    add({ id: `${area}.observation`, area, level: value == null || (stateAgeSeconds ?? Infinity) > 30 ? 'unknown' : value === 'error' || value === 'failed' ? 'degraded' : 'ok',
+      message: value != null ? `${area}: ${typeof value === 'string' ? value : 'state reported'}.` : `${area}: no state reported.`, observedAt: stateObservedAt });
+  }
 
   if (!state) {
     add({
@@ -111,13 +182,14 @@ export function getClientHealthReport(
   const unsupportedKnowledgeFiles = Number(state?.knowledge?.unsupportedFiles || 0);
   const partialKnowledgeFiles = Number(state?.knowledge?.partialFiles || 0);
   const pendingKnowledgeFiles = Number(state?.knowledge?.pendingFiles || 0);
-  if (failedKnowledgeFiles || unsupportedKnowledgeFiles || partialKnowledgeFiles || pendingKnowledgeFiles) {
+  const staleKnowledgeFiles = Number(state?.knowledge?.staleFiles || 0);
+  if (failedKnowledgeFiles || unsupportedKnowledgeFiles || partialKnowledgeFiles || pendingKnowledgeFiles || staleKnowledgeFiles) {
     add({
       id: 'knowledge.ingestion_attention',
       level: 'attention',
       area: 'knowledge',
       message: 'Some saved knowledge files are not fully indexed and should not be treated as completely retrievable.',
-      evidence: `partial=${partialKnowledgeFiles}, pending=${pendingKnowledgeFiles}, failed=${failedKnowledgeFiles}, unsupported=${unsupportedKnowledgeFiles}`,
+      evidence: `partial=${partialKnowledgeFiles}, pending=${pendingKnowledgeFiles}, failed=${failedKnowledgeFiles}, unsupported=${unsupportedKnowledgeFiles}, stale=${staleKnowledgeFiles}`,
       safeActions: ['client_action(show_knowledge_base)'],
     });
   }
@@ -132,17 +204,19 @@ export function getClientHealthReport(
     });
   }
 
-  for (const err of (state?.errors || []).slice(-5)) {
+  for (const err of (state?.errors || [])) {
     add({
       id: `recent_error.${err.source}.${err.code || 'runtime'}`,
       level: 'attention',
       area: err.source || 'client',
       message: safeRuntimeError(err.message) || 'Client reported an error.',
       evidence: safeRuntimeError(err.code),
+      observedAt: err.at ? new Date(err.at).toISOString() : stateObservedAt,
       safeActions: ['client_health_check'],
     });
   }
 
+  const findings = checks.filter(check => check.level !== 'ok');
   const level: ClientHealthLevel = findings.some(f => f.level === 'degraded')
     ? 'degraded'
     : findings.some(f => f.level === 'attention')
@@ -154,6 +228,8 @@ export function getClientHealthReport(
   return {
     level,
     stateAgeSeconds,
+    observedAt,
+    checks,
     findings,
     autonomyBoundary: {
       automatic: [
@@ -182,9 +258,9 @@ export function getClientHealthReport(
 export function getClientSelfAwarenessReport(
   userId: string,
   scope: { domain?: string; orgId?: string } = {},
+  health = getClientHealthReport(userId, scope),
 ): ClientSelfAwarenessReport {
   const state = getClientStateForScope(userId, scope);
-  const health = getClientHealthReport(userId, scope);
   const digest = getClientStateDigest(state);
   const stale = health.stateAgeSeconds != null && health.stateAgeSeconds > 30;
   const level: ClientSelfAwarenessReport['level'] = !state ? 'missing' : stale ? 'stale' : 'live';
@@ -195,7 +271,7 @@ export function getClientSelfAwarenessReport(
   if (Number(state?.knowledge?.failedFiles || 0) || Number(state?.knowledge?.unsupportedFiles || 0)) {
     gaps.push(`Knowledge ingestion needs attention: failed=${state?.knowledge?.failedFiles || 0}, unsupported=${state?.knowledge?.unsupportedFiles || 0}.`);
   }
-  if (health.findings.length) gaps.push(...health.findings.slice(0, 3).map(f => `${f.area}: ${f.message}`));
+  if (health.findings.length) gaps.push(...health.findings.map(f => `${f.area}: ${f.message}`));
 
   const bodySummary = digest
     ? `mode=${digest.mode}; domain=${digest.workDomain}; active=${digest.activeTab}; view=${digest.viewMode}; settings=${digest.settingsSection}; orgView=${digest.orgView}; focused=${digest.focusedWindow}; surfaces=${digest.openSurfaces.join(', ') || 'none'}; knowledge=${digest.knowledge}; health=${health.level}; age=${digest.stateAgeSeconds ?? 'unknown'}s`
@@ -222,7 +298,7 @@ export function getClientSelfAwarenessReport(
     gaps: gaps.length ? gaps : ['No current self-awareness gaps reported by client health.'],
     habits: [
       'Before changing a Lumi client surface or mode, read client_get_state unless the current tool result already contains fresh state.',
-      'Before diagnosing desktop readiness or permissions, refresh with desktop_capability_status; there is no separate Lumi external-app automation switch. Before saying what this machine has installed, where a file is, what is on the desktop, or what is running, refresh with desktop_system_info, desktop_list_apps, desktop_list_files, desktop_path_info, desktop_active_window, desktop_running_processes, or desktop_capture_screen as needed.',
+      'Before diagnosing desktop readiness or permissions, refresh with desktop_capability_status; Internal/External is a saved execution preference independent of wallpaper. External prefers visual and actual desktop operation for requested work; Internal asks once through the existing exact action confirmation before switching to External. Changing the preference does not start an action or grant desktop, background, or sensitive-operation permission. Wallpaper is only the temporary presentation used by an actual desktop workflow. Before saying what this machine has installed, where a file is, what is on the desktop, or what is running, refresh with desktop_system_info, desktop_list_apps, desktop_list_files, desktop_path_info, desktop_active_window, desktop_running_processes, or desktop_capture_screen as needed.',
       'Before saying Lumi can keep working in the background, read client_get_state or client_health_check and distinguish resident runtime from autonomous workflow execution.',
       'After client_action, trust verified state or explicit failure, not intention alone.',
       'After an upload or article save, inspect current-domain ingestion and index health before claiming that the source is fully retrievable.',
@@ -233,4 +309,37 @@ export function getClientSelfAwarenessReport(
       ? ['Use client_action for Lumi UI changes and verify the returned status.', 'Use desktop_system_info, desktop_running_processes, desktop_active_window, desktop_ui_snapshot, or desktop_capture_screen for machine/desktop claims.', 'Use client_health_check or open_computer_adaptation before background/runtime claims.']
       : ['Call client_self_repair(refresh_client_state).', 'Ask the user to open/reconnect the Lumi desktop client if no state arrives.'],
   };
+}
+
+export function getSkillRuntimeFindings() {
+  const health = mcpManager.getServerHealth();
+  const connected = new Set(mcpManager.getConnectedServers());
+  const config = mcpManager.getConfig();
+  const local = mcpManager.listLocalSkills();
+  return Object.entries(config)
+    .map(([name, serverConfig]) => {
+      const localSkill = local.find(skill => skill.name === name);
+      const serverHealth = health[name];
+      const enabled = Boolean(serverConfig.enabled);
+      const isConnected = connected.has(name);
+      const broken = Boolean(localSkill?.broken);
+      const status = serverHealth?.status || (isConnected ? 'connected' : 'unknown');
+      const hasIssue = broken || ['crashed', 'failed', 'restarting'].includes(status) || (enabled && !isConnected && status !== 'idle');
+      if (!hasIssue) return null;
+      return {
+        name,
+        enabled,
+        connected: isConnected,
+        broken,
+        status,
+        consecutiveCrashes: Number(serverHealth?.consecutiveCrashes || 0),
+        lastError: safeRuntimeError(serverHealth?.lastError),
+        lastCrashTime: serverHealth?.lastCrashTime || undefined,
+        lastSuccessfulConnect: serverHealth?.lastSuccessfulConnect || undefined,
+        source: serverConfig.source || localSkill?.source || 'unknown',
+        description: serverConfig.description || localSkill?.description || name,
+        repairTool: `client_repair_skill(skillName="${name}")`,
+      };
+    })
+    .filter(Boolean);
 }

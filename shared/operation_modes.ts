@@ -24,3 +24,9 @@ export function normalizeLumiClientMode(value: unknown): LumiClientMode {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
   return normalized === 'meeting' ? 'meeting' : 'assistant';
 }
+
+/** Desktop execution preference is independent of permissions and wallpaper presentation. */
+export type DesktopExecutionPreference = 'internal' | 'external';
+export function normalizeDesktopExecutionPreference(value: unknown): DesktopExecutionPreference {
+  return value === 'external' ? 'external' : 'internal';
+}

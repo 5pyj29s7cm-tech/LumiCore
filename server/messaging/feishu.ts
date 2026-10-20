@@ -178,6 +178,7 @@ export class FeishuAdapter implements MessageAdapter {
 
     const chatId = message.chat_id || '';
     const isGroup = message.chat_type === 'group';
+    const createdAt = new Date(Number(message.create_time));
 
     return {
       platform: 'feishu',
@@ -192,7 +193,7 @@ export class FeishuAdapter implements MessageAdapter {
       text: textContent,
       attachments: attachments.length > 0 ? attachments : undefined,
       raw: { event: eventData, message },
-      timestamp: new Date(Number(message.create_time) || Date.now()).toISOString(),
+      timestamp: Number.isFinite(createdAt.getTime()) && createdAt.getTime() > 0 ? createdAt.toISOString() : '',
     };
   }
 
@@ -297,9 +298,9 @@ export class FeishuAdapter implements MessageAdapter {
       payload: body,
       execute: async () => {
         const { data } = await this.deliveryRequest(
-          `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id&uuid=${uuid}`,
+          `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id`,
           token,
-          body,
+          { ...body, uuid },
           'send',
         );
         return data.data.message_id;
@@ -347,9 +348,9 @@ export class FeishuAdapter implements MessageAdapter {
       payload: body,
       execute: async () => {
         const { data } = await this.deliveryRequest(
-          `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id&uuid=${uuid}`,
+          `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id`,
           token,
-          body,
+          { ...body, uuid },
           'card send',
         );
         return data.data.message_id;
@@ -374,9 +375,9 @@ export class FeishuAdapter implements MessageAdapter {
       payload: body,
       execute: async () => {
         const { data } = await this.deliveryRequest(
-          `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply?uuid=${uuid}`,
+          `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`,
           token,
-          body,
+          { ...body, uuid },
           'reply',
         );
         return data.data.message_id;

@@ -239,7 +239,7 @@ describe('model-owned main chat architecture', () => {
     expect(misc).not.toContain('buildModelCapabilityPolicy');
   });
 
-  it('uses finalization as an evidence boundary without replacing compatible model-authored chat prose', () => {
+  it('reports the verified client target without replacing receipt truth with model narration', () => {
     const responseText = '好的，技能大厅已经打开。';
     const result = finalizeLumiResponse({
       taskText: '打开技能大厅',
@@ -258,7 +258,8 @@ describe('model-owned main chat architecture', () => {
       }],
     });
     expect(result.blocked).toBe(false);
-    expect(result.text).toBe(responseText);
+    expect(result.text).toContain('技能大厅');
+    expect(result.text).toMatch(/已打开|已启动/u);
     expect(result.reason).not.toContain('Model-authored wording preserved');
   });
 });

@@ -1,4 +1,5 @@
-import { readSetting, writeSetting } from '../persistence/settings_repository';
+import { normalizeDesktopExecutionPreference, type DesktopExecutionPreference } from '../../shared/operation_modes';
+import { readSetting, writeSetting, writeSettingDurably } from '../persistence/settings_repository';
 import {
   normalizeOperationMode,
   parseStoredOperationMode,
@@ -23,4 +24,17 @@ export function saveStoredOperationMode(userId: string, requestedMode: string): 
 
   // Compatibility state must never rewrite background-work authorization or budgets.
   return { mode };
+}
+
+export function getStoredDesktopExecutionPreference(userId: string): DesktopExecutionPreference {
+  try {
+    const raw = readSetting('desktop_execution_' + userId);
+    return normalizeDesktopExecutionPreference(raw ? JSON.parse(raw)?.preference : undefined);
+  } catch { return 'internal'; }
+}
+
+export async function saveStoredDesktopExecutionPreference(userId: string, preference: DesktopExecutionPreference): Promise<DesktopExecutionPreference> {
+  if (preference !== 'internal' && preference !== 'external') throw new Error('Invalid desktop execution preference');
+  await writeSettingDurably('desktop_execution_' + userId, JSON.stringify({ preference }));
+  return preference;
 }

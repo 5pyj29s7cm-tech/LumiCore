@@ -77,17 +77,10 @@ export function shouldSpeakAgentResponse(data: AgentResponseDelivery): boolean {
   return !isActionSuccessClaim(String(data.text || '')) || data.finalized === true;
 }
 
-/**
- * The backend normally sends customer-ready prose. This final client boundary
- * also protects restored legacy conversations and late events from an older
- * backend process, without truncating or rewriting ordinary Markdown replies.
- */
-export function sanitizeAgentResponseTextForDisplay(
-  value: unknown,
-  language?: PublicExecutionLanguage,
-): string {
-  return sanitizePublicExecutionText(value, language);
-}
+export {
+  sanitizePublicExecutionText as sanitizeAgentResponseTextForDisplay,
+  containsInternalExecutionLanguage as hasInternalAgentExecutionDetail,
+} from '../../shared/public_execution_language';
 
 /**
  * Buffers the very beginning of a streamed reply until there is enough text
@@ -100,16 +93,10 @@ export function sanitizeAgentStreamingTextForDisplay(
   value: unknown,
   language?: PublicExecutionLanguage,
 ): string {
-  const text = String(value || '');
-  if (!text) return '';
-  if (containsInternalExecutionLanguage(text)) {
-    return sanitizePublicExecutionText(text, language);
-  }
-  return Array.from(text).length < 24 ? '' : text;
-}
-
-export function hasInternalAgentExecutionDetail(value: unknown): boolean {
-  return containsInternalExecutionLanguage(value);
+  const raw = String(value || '');
+  const text = containsInternalExecutionLanguage(raw) ? raw : raw.replace(/(?:<|&lt;)[^>]*$/u, '');
+  if (!text || (!containsInternalExecutionLanguage(text) && Array.from(text).length < 24)) return '';
+  return sanitizePublicExecutionText(text, language);
 }
 
 export function isFinalizedSuccessfulResponse(data: AgentResponseDelivery): boolean {
@@ -146,7 +133,6 @@ export function describeAgentResponseDelivery(
     return copy.targetChanged;
   }
   const text = String(data.text || '').replace(/\s+/g, ' ').trim();
-  if (text && !containsInternalExecutionLanguage(text)) return text.slice(0, 160);
   if (text) return sanitizePublicExecutionText(text, isZh ? 'zh' : 'en').slice(0, 160);
   return copy.retainedBlocker;
 }

@@ -56,7 +56,7 @@ export function analyzeMediaToolRouting(text: string) {
   );
   const mediaCodeOrOfficeDeliverable = !structuredMediaCategory
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    && /(?:CSS|HTML|JavaScript|TypeScript|React|Vue|PPT|PowerPoint|组件|网页|页面|幻灯片|演示文稿|播放器|画廊|上传组件)/iu.test(text)
+    && /(?:\b(?:CSS|HTML|JavaScript|TypeScript|React|Vue|PPT|PowerPoint)\b|组件|网页|页面|幻灯片|演示文稿|播放器|画廊|上传组件)/iu.test(text)
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
     && /(?:图片|图像|视频|动画|image|video|animation|gallery|player)/iu.test(text);
   const forbidGeneration = mediaGenerationExplicitlyNegated

@@ -9,6 +9,7 @@ import {
   type MediaGenerationRequest,
   type MediaGenerationStudioProps,
 } from './MediaGenerationStudio';
+import { videoGenerationOptions } from '../../shared/video_generation_options';
 import type { MediaGenerationArtifact } from '@/lib/mediaGenerationArtifacts';
 
 const sourceArtifact: MediaGenerationArtifact = {
@@ -181,9 +182,10 @@ describe('MediaGenerationStudio operations', () => {
     });
   });
 
-  it('cancels active generation and retries the exact supplied request', () => {
+  it('cancels active generation, checks an uncertain task, and retries only after a definite rejection', () => {
     const onCancel = vi.fn();
     const onRetry = vi.fn();
+    const onCheckTaskStatus = vi.fn();
     const retryRequest: MediaGenerationRequest = {
       mode: 'video',
       operation: 'image_to_video',
@@ -215,6 +217,12 @@ describe('MediaGenerationStudio operations', () => {
       onCancel,
       onRetry,
     })} />);
+    expect(screen.queryByRole('button', { name: 'Retry same settings' })).toBeNull();
+    rerender(<StudioHarness {...studioProps({ mode: 'video', operation: 'image_to_video', status: 'cancelled', retryRequest, onCancel, onRetry, onCheckTaskStatus })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check task status' }));
+    expect(onCheckTaskStatus).toHaveBeenCalledTimes(1);
+    expect(onRetry).not.toHaveBeenCalled();
+    rerender(<StudioHarness {...studioProps({ mode: 'video', operation: 'image_to_video', status: 'error', statusDetail: 'The request was rejected before submission.', retryRequest, onCancel, onRetry })} />);
     fireEvent.click(screen.getByRole('button', { name: 'Retry same settings' }));
 
     expect(onRetry).toHaveBeenCalledTimes(1);
@@ -308,3 +316,23 @@ it.each([[true, '已检测到音轨'], [false, '无音轨'], [undefined, '音轨
   ] })} />);
   expect(screen.getByText(label)).toBeTruthy();
 });
+
+ it.each(['text_to_video', 'image_to_video'] as const)('offers Wan3 quality in %s and forwards the selected dimensions without composition', operation => {
+  const generate = vi.fn();
+  const { container } = render(<StudioHarness {...studioProps({ mode: 'video', operation, referenceImage: sourceArtifact.path!, onGenerate: generate,
+    videoOptions: { [operation]: videoGenerationOptions({ provider: 'relay', model: 'aliyun/wan3.0-video' }) } })} />);
+  const size = screen.getByRole('combobox', { name: 'Quality / frame ratio' });
+  const duration = screen.getByRole('combobox', { name: 'Duration' });
+  expect(screen.getByRole('option', { name: '1080p · 9:16 · 1080x1920' })).toBeTruthy();
+  expect(screen.getByRole('option', { name: '720p · 9:16 · 720x1280' })).toBeTruthy();
+  expect(screen.getByRole('option', { name: '480p · 9:16 · 480x832' })).toBeTruthy();
+  expect(container.querySelector('option[value="60"]')).toBeNull();
+  expect(screen.queryByText(/automatically combined/)).toBeNull();
+  fireEvent.change(screen.getByRole('textbox', { name: 'Describe what to generate' }), { target: { value: 'Holiday toy promotion' } });
+  fireEvent.change(duration, { target: { value: '15' } });
+  for (const value of ['1080x1920', '720x1280', '480x832']) {
+    fireEvent.change(size, { target: { value } });
+    fireEvent.submit(container.querySelector('form')!);
+    expect(generate).toHaveBeenLastCalledWith(expect.objectContaining({ operation, size: value, duration: 15 }));
+  }
+ });

@@ -21,7 +21,7 @@ import {
 } from "../tools/pending_confirmation";
 import { ensurePendingConfirmationPersistenceInitialized } from "../tools/pending_confirmation_repository";
 import { sanitizePublicExecutionText } from '../../shared/public_execution_language';
-import { collectChatArtifacts } from '../conversation/chat_artifacts';
+import { projectPublicArtifactPayload, capturePublicArtifactEvidenceSnapshot, type PublicArtifactEvidenceSnapshot } from '../conversation/chat_artifacts';
 
 type ConversationScope = { domain: 'personal' | 'work'; orgId: string };
 
@@ -44,22 +44,23 @@ function customerAssistantText(value: unknown): string {
   );
 }
 
-export function projectConversationMessageForCustomer(message: any): any {
-  const fileArtifacts = collectChatArtifacts(message?.toolCalls, message?.conversationId);
-  message = { ...message, fileArtifacts };
+export function projectConversationMessageForCustomer(message: any, evidenceSnapshot: PublicArtifactEvidenceSnapshot = capturePublicArtifactEvidenceSnapshot()): any {
+  const context = { userId: message?.userId, requestId: message?.requestId };
+  const projectText = (text: unknown) => projectPublicArtifactPayload({ text: customerAssistantText(text) }, message?.toolCalls, message?.conversationId, context, evidenceSnapshot);
+  message = { ...message, fileArtifacts: projectText('').fileArtifacts };
   const role = String(message?.role || '').toLowerCase();
   if (role === 'assistant' || role === 'agent') {
     return {
       ...message,
-      ...(message.message !== undefined ? { message: customerAssistantText(message.message) } : {}),
-      ...(message.content !== undefined ? { content: customerAssistantText(message.content) } : {}),
-      ...(message.response !== undefined ? { response: customerAssistantText(message.response) } : {}),
+      ...(message.message !== undefined ? { message: projectText(message.message).text } : {}),
+      ...(message.content !== undefined ? { content: projectText(message.content).text } : {}),
+      ...(message.response !== undefined ? { response: projectText(message.response).text } : {}),
     };
   }
   // Older combined rows store the assistant answer in `response` beside the
   // user message. Project that half without altering the user's own words.
   if (message?.response !== undefined) {
-    return { ...message, response: customerAssistantText(message.response) };
+    return { ...message, response: projectText(message.response).text };
   }
   return message;
 }
@@ -172,7 +173,9 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     if (access === 'missing') return res.status(404).json({ error: 'Conversation not found' });
     if (access !== 'allowed') return res.status(403).json({ error: 'Unauthorized' });
     const limit = parseInt(req.query.limit as string) || 50;
-    const messages = getMessages(req.params.id, limit).map(projectConversationMessageForCustomer);
+    const sourceMessages = getMessages(req.params.id, limit);
+    const evidenceSnapshot = capturePublicArtifactEvidenceSnapshot();
+    const messages = sourceMessages.map(message => projectConversationMessageForCustomer(message, evidenceSnapshot));
     res.json({ messages });
   });
 

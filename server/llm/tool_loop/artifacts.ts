@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import type { ToolExecutionRecord, ToolContext } from "../../tools/types";
 import { buildActionEvidenceContract } from "../../cognition/action_contract";
-import { artifactPathFromRecord, isArtifactProducerRecord, resolveArtifactDelivery, artifactRecordMatchesTurn, sameArtifactPath } from "../../tools/artifact_evidence";
+import { artifactPathFromRecord, isArtifactDeliveryRecord, resolveArtifactDelivery, artifactRecordMatchesTurn, sameArtifactPath } from "../../tools/artifact_evidence";
 import { requestedSingleArtifact } from "../../cognition/artifact_write_scope";
 import { getArtifactTaskProgress } from "../../cognition/action_contract";
 
@@ -63,7 +63,7 @@ export function artifactKind(filePath: string): ReadyArtifact['kind'] {
 export function collectExistingArtifacts(executionLog: ToolExecutionRecord[]): ReadyArtifact[] {
   const artifacts = new Map<string, ReadyArtifact>();
   for (const record of executionLog) {
-    if (record.error || record.terminalVerification?.status !== 'verified' || !isArtifactProducerRecord(record)) continue;
+    if (record.error || record.terminalVerification?.status !== 'verified' || !isArtifactDeliveryRecord(record)) continue;
     const output = artifactPathFromRecord(record);
     if (!output) continue;
     try {

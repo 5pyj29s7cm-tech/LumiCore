@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { artifactRecordMatchesTurn } from '../tools/artifact_evidence';
 import { ToolExecutionRecord, type ToolContext } from '../tools/types';
 import {
   buildActionEvidenceContract,
@@ -10,7 +11,6 @@ import {
   hasCurrentAppUiMutationEvidence,
   requiresCurrentAppUiMutation,
 } from '../cognition/action_contract';
-import { formatCnToolFailureDetail } from "../regions/messages/voice_fast_path_messages";
 import { CN_COMPLETION_GUARD_MESSAGES } from "../regions/messages/completion_guard_messages";
 import { normalizeActionIntent, isStoredMemoryRecallQuestion } from '../cognition/normalized_action_intent';
 import { formatGroundedKnowledgeObservation, isKnowledgeInventoryRequest } from '../cognition/knowledge_result';
@@ -30,37 +30,36 @@ function buildActionPromiseGuardedResponse(
   const isZh = /[\u3400-\u9fff]/.test(task);
   const clientSurfaceTask = isClientSurfaceTask(task);
   const desktopActionTask = isDesktopActionTask(task);
-  const lastFailure = summarizeFailedToolCalls(failed, isZh);
   const confirmationBlocked = failed.some(call =>
     /requires user confirmation|requires confirmation|user confirmation|\u7528\u6237\u786e\u8ba4|\u9700\u8981\u786e\u8ba4/i.test(toolFailureDetail(call))
   );
 
   if (!isZh) {
     if (clientSurfaceTask) {
-      return `I could not complete that client action${lastFailure ? `: ${lastFailure}` : ''}. The request is still available to retry from this step.`;
+      return `I could not complete that client action. The request is still available to retry from this step.`;
     }
     if (desktopActionTask) {
-      return `I could not complete that desktop action${lastFailure ? `: ${lastFailure}` : ''}. The target can be checked again before retrying.`;
+      return `I could not complete that desktop action. The target can be checked again before retrying.`;
     }
     if (confirmationBlocked) {
-      return `This action is waiting for your confirmation${lastFailure ? `: ${lastFailure}` : ''}. Confirm it in the client to continue.`;
+      return `This action is waiting for your confirmation. Confirm it in the client to continue.`;
     }
-    return `I could not start that action${lastFailure ? `: ${lastFailure}` : ''}. The request is still available to retry from this step.`;
+    return `I could not start that action. The request is still available to retry from this step.`;
   }
 
   if (clientSurfaceTask) {
-    return CN_COMPLETION_GUARD_MESSAGES.promiseClient(lastFailure);
+    return CN_COMPLETION_GUARD_MESSAGES.promiseClient();
   }
 
   if (desktopActionTask) {
-    return CN_COMPLETION_GUARD_MESSAGES.promiseDesktop(lastFailure);
+    return CN_COMPLETION_GUARD_MESSAGES.promiseDesktop();
   }
 
   if (confirmationBlocked) {
-    return CN_COMPLETION_GUARD_MESSAGES.confirmation(lastFailure);
+    return CN_COMPLETION_GUARD_MESSAGES.confirmation();
   }
 
-  return CN_COMPLETION_GUARD_MESSAGES.promiseGeneric(lastFailure);
+  return CN_COMPLETION_GUARD_MESSAGES.promiseGeneric();
 }
 
 interface CompletionGuardInput {
@@ -396,20 +395,10 @@ function toolFailureDetail(call: ToolExecutionRecord): string {
   return '';
 }
 
-function summarizeFailedToolCalls(failed: ToolExecutionRecord[], chinese = false): string {
-  const summaries = failed.slice(-2).map(call => {
-    const detail = toolFailureDetail(call);
-    const safeDetail = chinese && detail
-      ? formatCnToolFailureDetail(detail)
-      : detail;
-    return safeDetail || (chinese
-      ? '\u8fd9\u4e00\u6b65\u6ca1\u6709\u8fd4\u56de\u53ef\u7528\u7ed3\u679c' // i18n-allow: reviewed Chinese completion-guard response.
-      : 'This step did not return a usable result');
-  });
-  return [...new Set(summaries)].join(chinese ? '\uff1b' : '; ');
-}
+
 
 function isSuccessfulToolCall(call: ToolExecutionRecord): boolean {
+  if (call.capability && !Array.isArray(call.capability.sideEffects)) return false;
   if (call.terminalVerification?.status === 'failed') return false;
   if (call.error || !String(call.result || '').trim()) return false;
   const parsed = parseStructuredToolResult(call.result || '');
@@ -452,11 +441,10 @@ function buildExecutionStatusGuardedResponse(
   failed: ToolExecutionRecord[],
 ): string {
   const isZh = /[\u3400-\u9fff]/.test(task);
-  const lastFailure = summarizeFailedToolCalls(failed, isZh);
   if (!isZh) {
-    return `That action has not started${lastFailure ? `: ${lastFailure}` : ''}. It can be retried from here.`;
+    return `That action has not started. It can be retried from here.`;
   }
-  return CN_COMPLETION_GUARD_MESSAGES.statusNotStarted(lastFailure);
+  return CN_COMPLETION_GUARD_MESSAGES.statusNotStarted();
 }
 
 export function needsCompletionEvidence(task: string): boolean {
@@ -478,6 +466,10 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
   const failed = toolOutcomes
     .filter(outcome => !outcome.successful && Boolean(outcome.call.error || String(outcome.call.result || '').trim()))
     .map(outcome => outcome.call);
+  const actionContract = buildActionEvidenceContract(task, undefined, input.acceptedActionContract);
+  const hasDomainCompletionEvidence = actionContract.applies
+    && hasCoreActionEvidence(actionContract, successful.filter(call => artifactRecordMatchesTurn(call, input)), task, undefined,
+      { requestId: input.requestId, taskId: input.taskId }, input.acceptedTaskTarget);
   const completionClaimText = stripReflectiveSelfDevelopmentCompletionClauses(task, claimText);
   const claimsSelfCompletion = hasSelfCompletionClaim(completionClaimText);
   const executionStatusClaimText = stripReflectiveSelfImprovementStatusClauses(task, claimText);
@@ -501,11 +493,11 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
     (!INSPECTION_ONLY_TOOL_RE.test(call.name) && Boolean(call.result || call.name))
   );
   const hasReadReviewEvidence = successful.some(call => READ_REVIEW_EVIDENCE_TOOL_RE.test(call.name));
-  const missingPromisedEvidence = claimsExecutionStatus && desktopActionTask
+  const missingPromisedEvidence = !hasDomainCompletionEvidence && (claimsExecutionStatus && desktopActionTask
     ? !hasSuccessfulDesktopActionEvidence
     : desktopActionTask
     ? !hasDesktopActionAttempt
-    : (successful.length === 0 || (promisesReadReviewAction ? !hasReadReviewEvidence : !hasPromiseEvidence));
+    : (successful.length === 0 || (promisesReadReviewAction ? !hasReadReviewEvidence : !hasPromiseEvidence)));
   const promisesActionWithoutEvidence =
     (
       claimsExecutionStatus ||
@@ -520,6 +512,14 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
       )
     ) &&
     missingPromisedEvidence;
+
+  if ((COMPLETION_CLAIM_RE.test(completionClaimText) || claimsSelfCompletion || claimsExecutionStatus || promisesActionWithoutEvidence)
+    && toolCalls.some(call => call.envelope?.status === 'unknown_outcome' && artifactRecordMatchesTurn(call, input))) {
+    return { text: /[\u3400-\u9fff]/.test(task)
+      ? CN_COMPLETION_GUARD_MESSAGES.unknownOutcome()
+      : 'The result of this action is not confirmed. Check its receipt before deciding what to do next.',
+    blocked: true, reason: 'Current-turn canonical execution outcome is unknown.' };
+  }
 
   if (promisesActionWithoutEvidence) {
     const reason = claimsExecutionStatus
@@ -562,10 +562,6 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
     };
   }
 
-  const actionContract = buildActionEvidenceContract(task, undefined, input.acceptedActionContract);
-  const hasDomainCompletionEvidence = actionContract.applies
-    && hasCoreActionEvidence(actionContract, toolCalls, task, undefined,
-      { requestId: input.requestId, taskId: input.taskId }, input.acceptedTaskTarget);
   // Persistent-task creation has its own receipt contract. Once that exact
   // contract is satisfied, do not run the response through generic
   // file/desktop heuristics: wording such as "created and persisted" is about
@@ -664,35 +660,34 @@ function buildGuardedResponse(
   const clientSurfaceTask = isClientSurfaceTask(task);
   const desktopActionTask = isDesktopActionTask(task);
   const hasVerifiedProgress = successful.length > 0;
-  const lastFailure = summarizeFailedToolCalls(failed, isZh);
   const confirmationBlocked = failed.some(call =>
     /requires user confirmation|requires confirmation|user confirmation|\u7528\u6237\u786e\u8ba4|\u9700\u8981\u786e\u8ba4/i.test(toolFailureDetail(call))
   );
 
   if (isZh && desktopActionTask && !clientSurfaceTask) {
-    return CN_COMPLETION_GUARD_MESSAGES.blockedDesktop(lastFailure, hasVerifiedProgress);
+    return CN_COMPLETION_GUARD_MESSAGES.blockedDesktop(hasVerifiedProgress);
   }
 
   if (!isZh) {
     if (clientSurfaceTask) {
-      return `That client action is not complete${lastFailure ? `: ${lastFailure}` : ''}. ${hasVerifiedProgress ? 'Completed work is preserved, and the request ' : 'The request '}can be retried from this step.`;
+      return `That client action is not complete. ${hasVerifiedProgress ? 'Completed work is preserved, and the request ' : 'The request '}can be retried from this step.`;
     }
     if (desktopActionTask) {
-      return `That desktop action is not complete${lastFailure ? `: ${lastFailure}` : ''}. ${hasVerifiedProgress ? 'Completed work is preserved; ' : ''}the target can be checked again before retrying.`;
+      return `That desktop action is not complete. ${hasVerifiedProgress ? 'Completed work is preserved; ' : ''}the target can be checked again before retrying.`;
     }
     if (confirmationBlocked) {
-      return `This action still needs your confirmation${lastFailure ? `: ${lastFailure}` : ''}. Confirm it in the client to continue.`;
+      return `This action still needs your confirmation. Confirm it in the client to continue.`;
     }
-    return `That action is not complete${lastFailure ? `: ${lastFailure}` : ''}. ${hasVerifiedProgress ? 'Completed work is preserved, and it ' : 'It '}can be retried from this step.`;
+    return `That action is not complete. ${hasVerifiedProgress ? 'Completed work is preserved, and it ' : 'It '}can be retried from this step.`;
   }
 
   if (clientSurfaceTask) {
-    return CN_COMPLETION_GUARD_MESSAGES.blockedClient(lastFailure, hasVerifiedProgress);
+    return CN_COMPLETION_GUARD_MESSAGES.blockedClient(hasVerifiedProgress);
   }
 
   if (confirmationBlocked) {
-    return CN_COMPLETION_GUARD_MESSAGES.confirmation(lastFailure);
+    return CN_COMPLETION_GUARD_MESSAGES.confirmation();
   }
 
-  return CN_COMPLETION_GUARD_MESSAGES.blockedGeneric(lastFailure, hasVerifiedProgress);
+  return CN_COMPLETION_GUARD_MESSAGES.blockedGeneric(hasVerifiedProgress);
 }

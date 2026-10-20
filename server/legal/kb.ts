@@ -1,3 +1,4 @@
+import { checkStatuteProvision, extractStatuteReferences, statuteTextCopy, type ReviewedStatuteHtmlSource } from '../regions/packs/cn/statute_provisions';
 /**
  * Legal Knowledge Base Engine — extends org KB with legal-specific capabilities:
  * case similarity search, statute validation, citation tracking, legal-aware chunking.
@@ -6,9 +7,10 @@
  * All data stored in org_kb_articles + org_kb_embeddings with legal metadata.
  */
 import * as EDB from '../org/db';
+import { recordLegalArticleWrite } from './execution';
 import { generateEmbeddingWithIdentity, cosineSimilarity } from '../memory/store';
 import { indexArticle } from '../org/kb';
-import { getStatuteAuthorityCheck, type StatuteAuthorityCheck } from './statute_authority_store';
+import { getStatuteAuthorityCheck, loadStatuteAuthorityRefreshState, type StatuteAuthorityCheck } from './statute_authority_store';
 import { authorizeOrganizationResource, getOrganizationResourcePolicy } from '../org/resource_acl';
 
 function listAuthorizedLegalArticles(
@@ -73,12 +75,14 @@ export function createLegalArticle(
   if (data.metadata?.caseNumber) tags.push(`case:${data.metadata.caseNumber}`);
   if (data.metadata?.jurisdiction) tags.push(`jurisdiction:${data.metadata.jurisdiction}`);
 
-  return EDB.createKbArticle(orgId, authorId, {
+  const article = EDB.createKbArticle(orgId, authorId, {
     title: data.title,
     content: data.content,
     category: data.category || `legal_${data.articleType}`,
     tags,
   });
+  recordLegalArticleWrite(orgId, authorId, article.id);
+  return article;
 }
 
 export async function indexLegalArticle(orgId: string, articleId: string, actorUserId?: string, options: { signal?: AbortSignal } = {}): Promise<number> {
@@ -186,6 +190,7 @@ export interface StatuteVerificationSnapshot {
   effectiveDate: string;
   articleMin?: number;
   articleMax?: number;
+  originalHtml?: ReviewedStatuteHtmlSource;
 }
 
 export interface StatuteRegistryEntry {
@@ -194,6 +199,7 @@ export interface StatuteRegistryEntry {
   effective: boolean;
   repealedDate?: string;
   verification?: StatuteVerificationSnapshot;
+  temporalScope?: 'procedure';
 }
 
 const STATUTE_SNAPSHOT_VERIFIED_AT = '2026-07-12';
@@ -352,7 +358,7 @@ const CIVIL_PROCEDURE_INTERPRETATION_VERIFICATION = officialStatuteSnapshot(
   officialDatabaseUrl('ff80818181cdceb30181d801c31c4070', '最高人民法院关于适用《中华人民共和国民事诉讼法》的解释'),
   '2022-04-01',
   '2022-04-10',
-  552,
+  550,
 );
 
 const CIVIL_EVIDENCE_PROVISIONS_VERIFICATION = officialStatuteSnapshot(
@@ -376,20 +382,24 @@ const CIVIL_CODE_GUARANTEE_INTERPRETATION_VERIFICATION = officialStatuteSnapshot
   71,
 );
 
-const SALE_CONTRACT_INTERPRETATION_VERIFICATION = officialStatuteSnapshot(
+const SALE_CONTRACT_INTERPRETATION_VERIFICATION: StatuteVerificationSnapshot = { ...officialStatuteSnapshot(
   officialDatabaseUrl('ff808181799def980179b09685cf1802', '最高人民法院关于审理买卖合同纠纷案件适用法律问题的解释'),
   '2020-12-29',
   '2021-01-01',
   33,
-);
+), originalHtml: statuteTextCopy.saleContractHtml };
 
 /** Law-name registry. Formal article verification requires a sourced snapshot. */
 const STATUTE_REGISTRY: Record<string, StatuteRegistryEntry> = {
   '民法典': { title: '中华人民共和国民法典', effective: true, verification: CIVIL_CODE_VERIFICATION },
+  [statuteTextCopy.temporal.authorityKey]: {
+    title: statuteTextCopy.temporal.authorityTitle,
+    aliases: statuteTextCopy.temporal.authorityAliases, effective: true,
+  },
   '刑法': { title: '中华人民共和国刑法', effective: true },
-  '刑事诉讼法': { title: '中华人民共和国刑事诉讼法', effective: true, verification: CRIMINAL_PROCEDURE_LAW_VERIFICATION },
-  '民事诉讼法': { title: '中华人民共和国民事诉讼法', effective: true, verification: CIVIL_PROCEDURE_LAW_VERIFICATION },
-  '行政诉讼法': { title: '中华人民共和国行政诉讼法', effective: true, verification: ADMINISTRATIVE_PROCEDURE_LAW_VERIFICATION },
+  '刑事诉讼法': { title: '中华人民共和国刑事诉讼法', effective: true, verification: CRIMINAL_PROCEDURE_LAW_VERIFICATION, temporalScope: 'procedure' },
+  '民事诉讼法': { title: '中华人民共和国民事诉讼法', effective: true, verification: CIVIL_PROCEDURE_LAW_VERIFICATION, temporalScope: 'procedure' },
+  '行政诉讼法': { title: '中华人民共和国行政诉讼法', effective: true, verification: ADMINISTRATIVE_PROCEDURE_LAW_VERIFICATION, temporalScope: 'procedure' },
   '公司法': { title: '中华人民共和国公司法（2023修订）', effective: true, verification: COMPANY_LAW_VERIFICATION },
   '合同法': { title: '中华人民共和国合同法', effective: false, repealedDate: '2021-01-01', verification: CIVIL_CODE_VERIFICATION },
   '物权法': { title: '中华人民共和国物权法', effective: false, repealedDate: '2021-01-01', verification: CIVIL_CODE_VERIFICATION },
@@ -410,14 +420,16 @@ const STATUTE_REGISTRY: Record<string, StatuteRegistryEntry> = {
   '招标投标法': { title: '中华人民共和国招标投标法', effective: true, verification: TENDERING_AND_BIDDING_LAW_VERIFICATION },
   '政府采购法': { title: '中华人民共和国政府采购法', effective: true, verification: GOVERNMENT_PROCUREMENT_LAW_VERIFICATION },
   '个人信息保护法': { title: '中华人民共和国个人信息保护法', aliases: ['个保法'], effective: true, verification: PERSONAL_INFORMATION_PROTECTION_LAW_VERIFICATION },
-  '行政复议法': { title: '中华人民共和国行政复议法', effective: true, verification: ADMINISTRATIVE_RECONSIDERATION_LAW_VERIFICATION },
+  '行政复议法': { title: '中华人民共和国行政复议法', effective: true, verification: ADMINISTRATIVE_RECONSIDERATION_LAW_VERIFICATION, temporalScope: 'procedure' },
   '民事诉讼法解释': {
+    temporalScope: 'procedure',
     title: '最高人民法院关于适用《中华人民共和国民事诉讼法》的解释',
     aliases: ['民事诉讼法司法解释', '民诉法解释', '民诉解释'],
     effective: true,
     verification: CIVIL_PROCEDURE_INTERPRETATION_VERIFICATION,
   },
   '民事诉讼证据规定': {
+    temporalScope: 'procedure',
     title: '最高人民法院关于民事诉讼证据的若干规定',
     aliases: ['民事证据规定', '民诉证据规定', '证据规定'],
     effective: true,
@@ -721,7 +733,17 @@ export interface CitationCheck {
   isEffective: boolean | null;
   source: string;
   detail: string;
-  verificationStatus?: 'verified' | 'expired' | 'missing' | 'repealed' | 'not_found' | 'changed';
+  verificationStatus?: 'verified' | 'expired' | 'missing' | 'repealed' | 'not_found' | 'changed' | 'metadata_only' | 'text_mismatch';
+  provisionVerified?: boolean;
+  quotationVerified?: boolean | null;
+  sourceText?: string;
+  applicabilityStatus?: 'needs_case_review' | 'historical_review_required' | 'historical_version_verified' | 'procedural_review_required';
+  temporalScope?: 'fact' | 'procedure';
+  referenceDate?: string;
+  temporalBasisCitation?: string;
+  temporalBasisQuote?: string;
+  temporalBasisSource?: string;
+  temporalApplicabilityVerified?: boolean;
   authorityRefreshStatus?: StatuteAuthorityCheck['status'];
   sourceUrl?: string;
   verifiedAt?: string;
@@ -729,8 +751,117 @@ export interface CitationCheck {
 }
 
 export interface CitationVerificationOptions {
+  quotedText?: string;
+  factDate?: string;
+  procedureDate?: string;
+  temporalReviews?: LegalTemporalReview[];
   asOf?: string | Date;
   actorUserId?: string;
+}
+
+/** Supplied analysis remains reviewable input, not proof that its legal conclusion is correct. */
+export interface LegalTemporalReview {
+  citation: string;
+  referenceDate: string;
+  scope: 'fact' | 'procedure';
+  authorityCitation: string;
+  authorityQuote: string;
+  applicability: string;
+}
+
+export function isLegalReferenceDate(value?: string): value is string {
+  return !!value && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value))
+    && new Date(value).toISOString().slice(0, 10) === value;
+}
+
+/** Reuse trusted authority records; a local KB import or a matching year is never sufficient. */
+function storedAuthorityVersions(title: string, asOf?: string | Date): StatuteAuthorityCheck[] {
+  return Object.values(loadStatuteAuthorityRefreshState().checks).filter(check => {
+    const observed = check.observed, original = check.originalText;
+    const articleMax = observed?.articleMax ?? check.expectedArticleMax;
+    if (normalizeStatuteName(check.title) !== normalizeStatuteName(title)
+      || !['verified', 'unavailable'].includes(check.status) || !check.lastVerifiedAt || !check.reviewAfter
+      || verificationAsOfDate(asOf) > check.reviewAfter || check.originalTextError || !observed || !original
+      || normalizeStatuteName(observed.title) !== normalizeStatuteName(title)
+      || check.expectedVersionDate !== observed.versionDate || check.expectedEffectiveDate !== observed.effectiveDate
+      || check.expectedRecordId !== observed.recordId
+      || !isLegalReferenceDate(observed.versionDate) || !isLegalReferenceDate(observed.effectiveDate)
+      || original.recordId !== observed.recordId || original.versionDate !== observed.versionDate
+      || !/^[a-f0-9]{64}$/i.test(original.sha256) || typeof articleMax !== 'number' || !Number.isInteger(articleMax) || articleMax < 1
+      || (check.expectedArticleMax != null && check.expectedArticleMax !== articleMax)
+      || Object.keys(original.provisions).length < articleMax) return false;
+    try {
+      const npcSource = (value: string) => {
+        const url = new URL(value);
+        return url.protocol === 'https:' && url.hostname === 'flk.npc.gov.cn'
+          && url.searchParams.get('id') === observed.recordId;
+      };
+      const reviewedHtml = listStatuteVerificationCatalog().find(entry => normalizeStatuteName(entry.sourceTitle) === normalizeStatuteName(title))?.verification.originalHtml;
+      const reviewedHtmlMatches = reviewedHtml && original.sourceUrl === reviewedHtml.url
+        && reviewedHtml.recordId === observed.recordId && reviewedHtml.versionDate === observed.versionDate
+        && reviewedHtml.effectiveDate === observed.effectiveDate && reviewedHtml.articleMax === articleMax
+        && original.sha256 === reviewedHtml.bodySha256;
+      return npcSource(observed.sourceUrl) && (npcSource(original.sourceUrl) || reviewedHtmlMatches)
+        && Array.from({ length: articleMax }, (_, index) => String(index + 1))
+        .every(key => Boolean(original.provisions[key]?.text?.trim()))
+        && Object.keys(original.provisions).every(key => /^[1-9]\d*(?:-[1-9]\d*)?$/.test(key) && Number(key.split('-')[0]) <= articleMax);
+    } catch { return false; }
+  });
+}
+
+function temporalReviewFor(citation: string, date: string, scope: 'fact' | 'procedure', options: CitationVerificationOptions) {
+  const compact = (value: string) => value.replace(/\s/g, '');
+  const review = Array.isArray(options.temporalReviews) ? options.temporalReviews.find(item => item
+    && typeof item.citation === 'string' && compact(item.citation) === compact(citation)
+    && item.referenceDate === date && item.scope === scope) : undefined;
+  if (!review || typeof review.authorityCitation !== 'string' || typeof review.authorityQuote !== 'string'
+    || typeof review.applicability !== 'string' || compact(review.applicability).length < 8) return null;
+  const name = review.authorityCitation.match(/《([^》]+)》/)?.[1];
+  if (!name || !compact(review.authorityQuote)) return null;
+  // Article 1260 proves repeal, not the rule governing a particular historical dispute.
+  if (normalizeStatuteName(name) === statuteTextCopy.temporal.civilKey && extractArticleNumber(review.authorityCitation) === 1260) return null;
+  const matched = Object.entries(STATUTE_REGISTRY).map(([key, entry]) => ({ entry, score: statuteNameMatchScore(entry, name, key) }))
+    .filter(item => item.score > 0).sort((a, b) => b.score - a.score)[0]?.entry;
+  if (matched && normalizeStatuteName(sourceIdentity(matched).sourceTitle) === statuteTextCopy.temporal.civilKey
+    && extractArticleNumber(review.authorityCitation) === 1260) return null;
+  const exact = storedAuthorityVersions(name, options.asOf);
+  const authority = (exact.length ? exact : storedAuthorityVersions(matched ? sourceIdentity(matched).sourceTitle : name, options.asOf))
+    .sort((a, b) => b.observed!.versionDate.localeCompare(a.observed!.versionDate))[0];
+  if (!authority) return null;
+  const provision = checkStatuteProvision(review.authorityCitation, authority.originalText, review.authorityQuote);
+  if (!provision.provisionVerified || provision.quotationVerified !== true) return null;
+  return { review, source: authority.originalText!.sourceUrl };
+}
+
+function verifyHistoricalCitation(citation: string, entry: StatuteRegistryEntry, options: CitationVerificationOptions): CitationCheck {
+  const date = options.factDate;
+  const base: CitationCheck = { citation, type: 'statute', exists: true, isEffective: null,
+    source: '', verificationStatus: 'missing', applicabilityStatus: 'historical_review_required', temporalScope: 'fact',
+    referenceDate: date, detail: statuteTextCopy.temporal.historicalMissing };
+  if (!isLegalReferenceDate(date) || !entry.repealedDate || date >= entry.repealedDate) return {
+    ...base, isEffective: false, verificationStatus: 'repealed',
+    detail: isLegalReferenceDate(date) ? statuteTextCopy.temporal.outsideInterval(entry.repealedDate) : base.detail,
+  };
+  const authority = storedAuthorityVersions(entry.title, options.asOf)
+    .filter(check => check.observed!.effectiveDate <= date && check.observed!.versionDate <= date)
+    .sort((a, b) => b.observed!.effectiveDate.localeCompare(a.observed!.effectiveDate))[0];
+  if (!authority) return base;
+  const civil = resolveStatuteVerification(STATUTE_REGISTRY[statuteTextCopy.temporal.civilKey]);
+  const repealAuthority = storedAuthorityVersions(statuteTextCopy.temporal.civilTitle, options.asOf)
+    .find(check => check.observed!.versionDate === civil.snapshot?.versionDate);
+  const repeal = checkStatuteProvision(statuteTextCopy.temporal.repealCitation, repealAuthority?.originalText);
+  const endVerified = civil.snapshot && !civil.blockingReason && isVerificationSnapshotCurrent(civil.snapshot, options.asOf)
+    && civil.snapshot.effectiveDate === entry.repealedDate && repeal.provisionVerified
+    && repeal.sourceText?.includes(`《${entry.title}》`) && repeal.sourceText.includes(statuteTextCopy.temporal.repealKeyword);
+  const provision = checkStatuteProvision(citation, authority.originalText, options.quotedText ?? extractStatuteReferences(citation)[0]?.quotedText);
+  const temporal = temporalReviewFor(citation, date, 'fact', options);
+  const verified = endVerified && provision.provisionVerified && provision.quotationVerified !== false && !!temporal;
+  return { ...base, ...provision, isEffective: verified ? true : null,
+    source: statuteTextCopy.temporal.historicalSource(authority.observed!.versionDate, authority.observed!.effectiveDate, entry.repealedDate, authority.observed!.sourceUrl),
+    sourceUrl: authority.observed!.sourceUrl, verifiedAt: authority.lastVerifiedAt, reviewAfter: authority.reviewAfter,
+    applicabilityStatus: verified ? 'historical_version_verified' : 'historical_review_required',
+    ...(temporal ? { temporalBasisCitation: temporal.review.authorityCitation, temporalBasisQuote: temporal.review.authorityQuote, temporalBasisSource: temporal.source } : {}),
+    detail: `${provision.detail} ${endVerified ? statuteTextCopy.temporal.intervalVerified(civil.snapshot!.sourceUrl) : statuteTextCopy.temporal.intervalMissing} ${temporal ? statuteTextCopy.temporal.historicalReviewed(temporal.review.applicability) : statuteTextCopy.temporal.historicalReviewMissing}` };
 }
 
 function snapshotMetadata(snapshot?: StatuteVerificationSnapshot): Pick<CitationCheck, 'sourceUrl' | 'verifiedAt' | 'reviewAfter'> {
@@ -762,17 +893,7 @@ export function verifyCitation(
       const verification = resolved.snapshot;
 
       if (!found.effective) {
-        return {
-          citation,
-          type: 'statute',
-          exists: true,
-          isEffective: false,
-          source: verification ? verificationSource(verification) : '内置法名状态表（待权威来源复核）',
-          detail: `${found.title} 已于${found.repealedDate || '民法典施行日'}废止，请引用现行法律相关条款`,
-          verificationStatus: 'repealed',
-          authorityRefreshStatus: resolved.authorityCheck?.status,
-          ...snapshotMetadata(verification),
-        };
+        return verifyHistoricalCitation(citation, found, options);
       }
 
       if (resolved.blockingReason) {
@@ -837,18 +958,38 @@ export function verifyCitation(
         };
       }
 
+      const authority = storedAuthorityVersions(sourceIdentity(found).sourceTitle, options.asOf)
+        .find(check => check.observed?.recordId === resolved.authorityCheck?.observed?.recordId
+          && check.observed?.versionDate === verification?.versionDate);
+      const snapshot = authority?.originalText;
+      const directQuote = extractStatuteReferences(citation)[0]?.quotedText;
+      const provision = checkStatuteProvision(citation, snapshot, options.quotedText ?? directQuote);
+      const temporalScope = found.temporalScope || 'fact';
+      const referenceDate = temporalScope === 'procedure' ? options.procedureDate : options.factDate;
+      const historical = Boolean(isLegalReferenceDate(referenceDate) && verification?.effectiveDate && referenceDate < verification.effectiveDate);
+      const requiresReview = historical || temporalScope === 'procedure';
+      const temporal = requiresReview && isLegalReferenceDate(referenceDate)
+        ? temporalReviewFor(citation, referenceDate, temporalScope, options) : null;
       return {
-        citation,
-        type: 'statute',
-        exists: true,
-        isEffective: true,
+        citation, type: 'statute', exists: provision.verificationStatus !== 'not_found',
+        isEffective: historical && !temporal ? null : true,
+        ...(requiresReview ? { temporalApplicabilityVerified: !!temporal } : {}),
+        temporalScope, referenceDate,
         source: verification ? verificationSource(verification) : '内置法名状态表（非实时权威核验）',
-        detail: articleNumber === null
-          ? `${found.title} 已按所列权威来源核验。`
-          : `${found.title} 第${articleNumber}条位于已核验权威文本条文范围内。${resolved.authorityCheck?.status === 'unavailable' ? ' 本次自动巡检暂不可用，当前结论沿用最近一次仍在复核期限内的成功快照。' : ''}`,
-        verificationStatus: verification ? 'verified' : 'missing',
+        ...provision,
+        detail: provision.detail + (temporalScope === 'procedure'
+          ? statuteTextCopy.temporal.procedure
+          : historical ? statuteTextCopy.historical : statuteTextCopy.applicability)
+          + (requiresReview ? temporal
+            ? statuteTextCopy.temporal.reviewed(temporal.review.applicability)
+            : statuteTextCopy.temporal.reviewMissing : ''),
+        applicabilityStatus: temporalScope === 'procedure' && !temporal ? 'procedural_review_required'
+          : historical && !temporal ? 'historical_review_required' : 'needs_case_review',
+        ...(temporal ? { temporalBasisCitation: temporal.review.authorityCitation, temporalBasisQuote: temporal.review.authorityQuote, temporalBasisSource: temporal.source } : {}),
         authorityRefreshStatus: resolved.authorityCheck?.status,
         ...snapshotMetadata(verification),
+        ...(provision.provisionVerified && resolved.authorityCheck?.originalText
+          ? { sourceUrl: resolved.authorityCheck.originalText.sourceUrl } : {}),
       };
     }
     return {
@@ -911,11 +1052,8 @@ export function verifyMultipleCitations(
 ): CitationCheck[] {
   const checks: CitationCheck[] = [];
 
-  // Find all 《...》 statute citations
-  const statuteRe = /《[^》]+》(?:第[零〇一二两三四五六七八九十百千万\d]+条(?:之[零〇一二两三四五六七八九十百千万\d]+)?(?:第[零〇一二两三四五六七八九十百千万\d]+款)?(?:第[零〇一二两三四五六七八九十百千万\d]+项)?)?/g;
-  let m: RegExpExecArray | null;
-  while ((m = statuteRe.exec(text)) !== null) {
-    checks.push(verifyCitation(m[0], orgId, options));
+  for (const reference of extractStatuteReferences(text)) {
+    checks.push(verifyCitation(reference.citation, orgId, { ...options, quotedText: reference.quotedText ?? options.quotedText }));
   }
 
   // Find all case number patterns

@@ -11,10 +11,16 @@ import { changeChatSongProject, getChatSongProject, renderChatSongStrip, saveCha
 import { chatSongRenderTimeline, renderChatSongVideo } from '../server/creative/chat_song_render';
 import { mountChatSongRoutes } from '../server/routes/chat_song_routes';
 import { chatSongSongCurrent, visibleChatSongLines, type ChatSongProject } from '../shared/chat_song';
+import { CHAT_SONG_TEMPLATE, chatSongStripLayout } from '../shared/chat_song_layout';
 import { upsertUserPreferredLLM } from '../server/llm/user_preferences';
 import { upsertUserPreferredGenerationModels } from '../server/llm/generation_preferences';
 const mock = vi.hoisted(() => ({ llm: vi.fn(), media: vi.fn() }));
-vi.mock('../server/llm/providers', () => ({ makeLLMCall: (...args: any[]) => mock.llm(...args) }));
+vi.mock('../server/llm/providers', () => ({ makeLLMCall: (...args: any[]) => mock.llm(...args), makeLLMCallStreaming: (...args: any[]) => mock.llm(...args) }));
+// Asset lookup is an HTTP boundary, not paid generation; keep this suite fully offline.
+vi.mock('../server/tools/media_artifact', async importOriginal => ({
+  ...await importOriginal<typeof import('../server/tools/media_artifact')>(),
+  downloadPublicMedia: vi.fn(async () => { throw new Error('Synthetic offline asset lookup'); }),
+}));
 vi.mock('../server/media/process', () => ({ runMediaProcess: (...args: any[]) => mock.media(...args) }));
 
 let app: Awaited<ReturnType<typeof makeApp>>, dir: string;
@@ -47,7 +53,7 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(dir, 'avatar.png'), await (sharp as any)({ create: { width: 40, height: 40, channels: 3, background: '#987654' } }).png().toBuffer());
 });
 beforeEach(() => {
-  mock.llm.mockReset().mockResolvedValue({ text: JSON.stringify({ lines }) });
+  mock.llm.mockReset().mockResolvedValue({ text: JSON.stringify({ lines }), finishReason: 'stop' });
   mock.media.mockReset().mockResolvedValue(JSON.stringify({ streams: [{ codec_type: 'audio' }], format: { duration: '12.5' } }));
 });
 afterAll(() => { app.cleanup(); });
@@ -75,7 +81,7 @@ it('requires a valid two-speaker script and ordered groups', async () => {
   expect((await edit(p, { lines: [{ ...lines[0], text: '' }] })).status).toBe(400);
   expect((await action(p, 'select-song', { fileId: 'song.wav' })).status).toBe(409);
 });
-it('uses measured duration and requires all lyric checks before timing', async () => {
+it('uses measured audio for timing while leaving optional lyric review unconfirmed', async () => {
   let p = await locked();
   expect((await action(p, 'select-song', { fileId: '../song.wav' })).status).toBe(400);
   expect((await action(p, 'select-song', { fileId: 'song.wav', duration: 999 })).status).toBe(400);
@@ -83,7 +89,9 @@ it('uses measured duration and requires all lyric checks before timing', async (
   expect(p.song?.duration).toBe(12.5);
   expect(mock.media.mock.calls[0][1]).toContain('-protocol_whitelist');
   expect((await action(p, 'confirm-song', { noOmissions: true })).status).toBe(400);
-  expect((await action(p, 'set-timings', timeRows)).status).toBe(409);
+  const timed = await action(p, 'set-timings', timeRows);
+  expect(timed.status).toBe(200); expect(timed.body.song.confirmed).toBe(false);
+  p = timed.body;
   mock.media.mockResolvedValueOnce(JSON.stringify({ streams: [{ codec_type: 'video' }], format: { duration: 12 } }));
   expect((await action(p, 'select-song', { fileId: 'song.wav' })).status).toBe(400);
 });
@@ -95,7 +103,8 @@ it('rejects overlapping/partial/out-of-duration timing and reveals no later punc
   p = (await action(p, 'set-timings', timeRows)).body;
   expect(visibleChatSongLines(p, 0)).toEqual([]);
   expect(visibleChatSongLines(p, 3.99).map(line => line.id)).toEqual(['01']);
-  expect(visibleChatSongLines(p, 4).map(line => line.id)).toEqual(['01', '02']);
+  expect(visibleChatSongLines(p, 4).map(line => line.id)).toEqual(['02']);
+  expect(visibleChatSongLines({ ...p, brief: { ...p.brief, messageLayout: 'conversation' } }, 4).map(line => line.id)).toEqual(['01', '02']);
   expect(visibleChatSongLines(p, 8).map(line => line.id)).toEqual(['03']);
 });
 it('invalidates downstream song/timing only when their source changes', async () => {
@@ -124,7 +133,7 @@ it('exports exact lyrics and real PNG strips with no invented timing or native p
   expect(await zip.file('01_对白与唱词/纯唱词.txt')!.async('string')).toBe(lines.map(line => line.text).join('\n'));
   expect(await zip.file('04_剪辑/画面顺序表.csv')!.async('string')).toContain("'=原来如此");
   expect((await zip.file('project.json')!.async('string'))).toContain('chat-song-materials-v1');
-  expect(await sharp(await zip.file('02_画面素材/聊天_01.png')!.async('nodebuffer')).metadata()).toMatchObject({ format: 'png', width: 1080 });
+  expect(await sharp(await zip.file('02_画面素材/聊天_01.png')!.async('nodebuffer')).metadata()).toMatchObject({ format: 'png', width: chatSongStripLayout(p.lines[0], p.brief.displayNameA || p.brief.roleA).screenshot.width });
   expect(Object.keys(zip.files).some(name => name.endsWith('.wav'))).toBe(false);
   expect(fs.existsSync(path.join(dir, output.body.fileId.replace('.zip', '-01.png')))).toBe(true);
 });
@@ -142,7 +151,7 @@ it('keeps AI drafts separate from saved dialogue and pins calls to the official 
   const p = await locked();
   upsertUserPreferredLLM(owner, { provider: 'relay', selectionMode: 'ordered_fallback', fallbackCandidates: [{ provider: 'qwen', model: 'qwen-plus' }] });
   const result = await request(`/${p.id}/draft`, 'POST', { revision: p.revision });
-  expect(result.status).toBe(200); expect(mock.llm.mock.calls[0][2]).toMatchObject({ provider: 'relay', thinkingMode: 'disabled', responseFormat: 'json_object', selectionMode: 'pinned', fallbackCandidates: [], allowCloudFallback: false });
+  expect(result.status).toBe(200); expect(mock.llm.mock.calls[0][2]).toMatchObject({ provider: 'relay', reasoningEffort: 'low', responseFormat: 'json_object', selectionMode: 'pinned', noImplicitFailover: true });
   expect(getChatSongProject(owner, p.id)).toEqual(p);
   mock.llm.mockResolvedValueOnce({ text: '{"lines":[' });
   expect((await request(`/${p.id}/draft`, 'POST', { revision: p.revision })).status).toBe(502);
@@ -159,21 +168,24 @@ it('preflights official media selections without rewriting user settings', async
   upsertUserPreferredGenerationModels(owner, { image: { provider: 'relay' }, video: { provider: 'relay' } });
   expect((await request(`/${p.id}/media-preflight`, 'POST', { mode: 'image' })).status).toBe(200);
   expect((await request(`/${p.id}/media-preflight`, 'POST', { mode: 'video' })).status).toBe(409);
-  const confirmed = await withSong();
+  const chat = await withSong();
+  expect((await request(`/${chat.id}/media-preflight`, 'POST', { mode: 'video', revision: chat.revision })).status).toBe(409);
+  expect((await request(`/${chat.id}/handoff`)).body.prompts.some((prompt: any) => prompt.kind === 'clip')).toBe(false);
+  const confirmed = (await edit(chat, { brief: { ...chat.brief, outputStyle: 'animation' } })).body;
   expect((await request(`/${confirmed.id}/media-preflight`, 'POST', { mode: 'video', revision: confirmed.revision })).status).toBe(200);
   expect((await request(`/${confirmed.id}/media-preflight`, 'POST', { mode: 'video', revision: confirmed.revision - 1 })).status).toBe(409);
   const handoff = await request(`/${confirmed.id}/handoff`);
   expect(handoff.body.prompts.filter((p: any) => p.kind === 'clip')).toHaveLength(confirmed.lines.length);
 });
 
-it('repairs singleton model groups into cumulative pairs without changing lyrics or saved user groups', async () => {
+it('preserves model dramatic groups without pairing or changing lyrics and saved user groups', async () => {
   const p = await locked();
   upsertUserPreferredLLM(owner, { provider: 'relay' });
   const draft = Array.from({ length: 7 }, (_, index) => ({ ...lines[index % 3], group: index + 1 }));
   mock.llm.mockResolvedValueOnce({ text: JSON.stringify({ lines: draft }), finishReason: 'stop' });
   const result = await request(`/${p.id}/draft`, 'POST', { revision: p.revision });
   expect(result.status).toBe(200);
-  expect(result.body.lines.map((line: any) => line.group)).toEqual([1, 1, 2, 2, 3, 3, 4]);
+  expect(result.body.lines.map((line: any) => line.group)).toEqual(draft.map(line => line.group));
   expect(result.body.lines.map((line: any) => line.text)).toEqual(draft.map(line => line.text));
   expect(getChatSongProject(owner, p.id)).toEqual(p);
   mock.llm.mockResolvedValueOnce({ text: JSON.stringify({ lines }), finishReason: 'length' });
@@ -196,13 +208,13 @@ it('publishes only a verified render, reuses its receipt and rejects changed sou
   });
   const result = await request(`/${p.id}/render`, 'POST', { revision: p.revision });
   expect(result.status).toBe(200); expect(fs.existsSync(path.join(dir, result.body.render.fileId))).toBe(true);
-  expect((await request(`/${p.id}/render`)).body).toEqual(result.body);
+  expect((await request(`/${p.id}/render`)).body).toEqual({ ...result.body, animation: null });
   expect((await request(`/${p.id}/render`, 'POST', { revision: p.revision })).body).toEqual(result.body);
   expect(mock.media.mock.calls.filter(([binary]) => binary === 'ffmpeg')).toHaveLength(1);
   saveChatSongRender(owner, p.id, { ...result.body.render, templateVersion: undefined });
   const refreshed = await request(`/${p.id}/render`, 'POST', { revision: p.revision });
   expect(refreshed.body.render.fileId).not.toBe(result.body.render.fileId);
-  expect(refreshed.body.render.templateVersion).toBe(2);
+  expect(refreshed.body.render.templateVersion).toBe(CHAT_SONG_TEMPLATE.version);
   expect(mock.media.mock.calls.filter(([binary]) => binary === 'ffmpeg')).toHaveLength(2);
   const source = fs.readFileSync(path.join(dir, 'song.wav'));
   try { fs.writeFileSync(path.join(dir, 'song.wav'), 'replaced'); expect((await request(`/${p.id}/render`, 'POST', { revision: p.revision })).status).toBe(409); }

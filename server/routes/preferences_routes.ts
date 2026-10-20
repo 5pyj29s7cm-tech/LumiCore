@@ -4,7 +4,7 @@ import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
 import { broadcastPreferenceChange } from "../memory";
 import { broadcastToOrg } from '../org/ws_sync';
-import { getStoredOperationMode, saveStoredOperationMode } from "../cognition/operation_mode_store";
+import { getStoredOperationMode, saveStoredOperationMode, getStoredDesktopExecutionPreference, saveStoredDesktopExecutionPreference } from "../cognition/operation_mode_store";
 
 export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
   const petPreferenceKey = (user: NonNullable<Express.Request['user']>) => (
@@ -48,6 +48,19 @@ export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  router.get('/preferences/desktop_execution', requireAuth, (req, res) => {
+    res.json({ preference: getStoredDesktopExecutionPreference(req.user!.uid) });
+  });
+  router.put('/preferences/desktop_execution', requireAuth, async (req, res) => {
+    const preference = req.body?.preference;
+    if (preference !== 'internal' && preference !== 'external') return res.status(400).json({ error: 'Invalid desktop execution preference' });
+    try {
+      const saved = await saveStoredDesktopExecutionPreference(req.user!.uid, preference);
+      broadcastPreferenceChange(req.user!.uid, 'desktop_execution', { preference: saved }, { domain: req.user!.orgId ? 'work' : 'personal', orgId: req.user!.orgId });
+      res.json({ ok: true, preference: saved });
+    } catch { res.status(500).json({ error: 'Desktop execution preference could not be saved' }); }
   });
 
   router.get("/preferences/operation_mode", requireAuth, (req, res) => {

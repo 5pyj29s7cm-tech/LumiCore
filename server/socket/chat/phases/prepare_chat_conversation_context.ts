@@ -4,7 +4,6 @@ import { extendTurnBindings } from "../../../cognition/turn_bindings";
 import { answerPriorTaskStatus } from "../prior_task_status";
 import { prepareChatPromptContext } from "../prompt_context";
 import { retrieveChatContext } from "../context_retrieval";
-import { buildClientSurfaceContinuationBridge, isShortClientContinuation } from "../client_surface";
 import { TASK_TARGET_HISTORY_LIMIT } from "../../../conversation/task_target_anchor";
 import { readDatabaseTables } from "../../../../db_layer";
 import { normalizeOperationMode } from "../../../cognition/operation_modes";
@@ -33,10 +32,6 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
           '->',
           conversationId,
         );
-        // The client may still send its old local transcript after a server-side
-        // rollover. Re-evaluate direct client intent without letting that stale
-        // transcript reactivate a prior UI task.
-        context.chatContextBridge = buildClientSurfaceContinuationBridge(context.visibleUserText, []);
         await clearPendingConfirmationDurably(context.uid, context.confirmationScope);
         context.pendingConfirmation = null;
         context.pendingConfirmationPrompt = '';
@@ -127,11 +122,6 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
       context.structuredMediaRequest ||= resolveChatVideoRequest(context.visibleUserText, context.attachments,
         { userId: context.uid, domain: context.resolvedDomain, orgId: context.resolvedOrgId }, persistedConversationHistory);
       context.mediaRoutingEnvelope = context.structuredMediaRequest ? structuredMediaRoutingEnvelope(context.structuredMediaRequest) : '';
-      if (!context.chatContextBridge && conversationId && isShortClientContinuation(context.visibleUserText)) {
-        const dbHistoryItems = persistedConversationHistory.slice(-12)
-          .map(record => ({ role: record.role, message: record.message, response: record.response }));
-        context.chatContextBridge = buildClientSurfaceContinuationBridge(context.visibleUserText, dbHistoryItems);
-      }
       context.actionContinuationBridge = context.explicitRuntimeWorkStatusRequest
         ? ''
         : buildRecentActionContinuationBridge(
@@ -172,13 +162,14 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
     set kbContext(value: typeof kbContext) { kbContext = value; },
   }));
   return { terminal: false as const, context: undefined, planning: preparedPrompt.planning, resume: async (resolvedExecution: LumiExecutionPipeline) => {
-      let { turnFlow, executionPipeline, personality, effectiveSystemPrompt, executionTaskText, completionTaskText } = await preparedPrompt.assemble(resolvedExecution);
+      let { turnFlow, executionPipeline, personality, effectiveSystemPrompt, executionTaskText, completionTaskText, knowledgeContext } = await preparedPrompt.assemble(resolvedExecution);
   return { terminal: false as const, context: extendTurnBindings(context, {
     get turnFlow(): typeof turnFlow { return turnFlow; },
     set turnFlow(value: typeof turnFlow) { turnFlow = value; },
     get executionPipeline(): typeof executionPipeline { return executionPipeline; },
     set executionPipeline(value: typeof executionPipeline) { executionPipeline = value; },
     conversationId,
+    knowledgeContext,
     get personality(): typeof personality { return personality; },
     set personality(value: typeof personality) { personality = value; },
     persistedConversationHistory,

@@ -194,7 +194,7 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
       open_command_center: 'office',
       open_chat: 'office',
     },
-    useWhen: 'Converse with Lumi, inspect persistent tasks and receipts, and enter the LumiCore workspace.',
+    useWhen: "Converse with Lumi, inspect persistent tasks and receipts, and enter the LumiCore workspace. The right-side menu, top to bottom, is: Memory Territory / 记忆领地 (purple castle; private digital people and their conversations), Breath Realm / 灵息之境 / LumiCore (violet CPU; core and system view), Knowledge Base / 知识库 (cyan folder; import, read and search workspace materials), AI Creation / AI 创作 (amber sparkles; image, video and music creation). The calendar/planner is a separate button in the chat header; the right-side icons are named destinations, not generic calendar/processing/files/automation categories.",
     // The command center is a permanent top-level navigation destination,
     // not a duplicated desktop/app-launcher icon.
     launcherIds: [],
@@ -470,7 +470,7 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     label: 'Meeting mode and notes',
     target: 'meeting',
     actions: ['start_meeting_mode', 'end_meeting_mode', 'open_meeting_notes'],
-    useWhen: 'Capture meeting transcription, notes, and reports after explicit user intent.',
+    useWhen: 'Open the meeting workspace with existing notes preserved. Recording begins only after Start recording is clicked.',
     closeAfterUse: false,
     launcherIds: [],
   },

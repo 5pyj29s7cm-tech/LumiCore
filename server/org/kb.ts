@@ -8,6 +8,7 @@ import { generateEmbeddingWithIdentity, cosineSimilarity } from '../memory/store
 import { generateConfiguredEmbedding } from '../llm/embedding_provider';
 import { getRerankSelection, rerankConfiguredDocuments } from '../llm/rerank_provider';
 import { isProviderLocalOnly, isStrictPrivacy } from '../config/privacy';
+import { runRetrievalRequest } from '../llm/retrieval_request';
 import {
   assertOrganizationResourceAccess,
   authorizeOrganizationResource,
@@ -38,6 +39,7 @@ export interface KnowledgeSearchResult {
   tags: string[];
   updatedAt: string;
   chunkIndex?: number;
+  citationKey?: string;
 }
 
 export interface KnowledgeStats {
@@ -74,6 +76,8 @@ interface SearchOptions {
   status?: string;
   userId?: string;
   signal?: AbortSignal;
+  /** Bound optional semantic enrichment; local text remains available. */
+  semanticTimeoutMs?: number;
 }
 
 interface ArticleMutationOptions {
@@ -540,14 +544,35 @@ export async function searchKnowledgeBase(
     category: options.category,
     status: options.status,
   };
-  const articles = listArticles(orgId, articleFilters, options.userId);
+  const articles = listArticles(orgId, articleFilters, options.userId).map(article => ({ ...article }));
   if (articles.length === 0) return [];
 
   const articleById = new Map(articles.map(article => [article.id, article]));
   const retrievalUserId = options.userId || 'anonymous';
-  const semanticResults = await semanticSearch(orgId, normalizedQuery, limit * 4, articleById, retrievalUserId, options.signal);
+  let semanticResults: KnowledgeSearchResult[] = [];
+  try {
+    semanticResults = await runRetrievalRequest(
+      signal => semanticSearch(orgId, normalizedQuery, limit * 4, articleById, retrievalUserId, signal),
+      options.signal, options.semanticTimeoutMs ?? 3_000,
+    );
+  } catch {
+    options.signal?.throwIfAborted();
+  }
   options.signal?.throwIfAborted();
-  const keywordResults = keywordSearch(articles, normalizedQuery, limit * 2);
+  const keywordResults = searchKnowledgeText(articles, normalizedQuery, limit * 2);
+
+  // Model requests may overlap an edit, deletion or permission change. Only
+  // publish snippets from the same still-readable source revision.
+  const publishCurrent = (results: KnowledgeSearchResult[]): KnowledgeSearchResult[] => {
+    options.signal?.throwIfAborted();
+    const current = new Map(listArticles(orgId, articleFilters, options.userId).map(article => [article.id, article]));
+    return results.filter(result => {
+      const before = articleById.get(result.articleId);
+      const after = current.get(result.articleId);
+      return before && after && before.content === after.content && before.title === after.title
+        && before.tags === after.tags && before.status === after.status;
+    }).slice(0, limit);
+  };
 
   const merged = new Map<string, KnowledgeSearchResult>();
   for (const result of [...semanticResults, ...keywordResults]) {
@@ -565,13 +590,13 @@ export async function searchKnowledgeBase(
   const rerank = getRerankSelection(retrievalUserId);
   if (rerank.enabled && candidates.length > 1 && (!isStrictPrivacy() || isProviderLocalOnly(rerank.provider))) {
     try {
-      const ranked = await rerankConfiguredDocuments(
+      const ranked = await runRetrievalRequest(signal => rerankConfiguredDocuments(
         normalizedQuery,
         candidates.map(result => `${result.title}\n${result.chunk}`),
         retrievalUserId,
         Math.max(limit, rerank.topN),
-        { signal: options.signal },
-      );
+        { signal },
+      ), options.signal, options.semanticTimeoutMs ?? 3_000);
       options.signal?.throwIfAborted();
       const seen = new Set<number>();
       const reordered = ranked.items
@@ -582,14 +607,14 @@ export async function searchKnowledgeBase(
         })
         .filter((result): result is KnowledgeSearchResult => result !== null);
       reordered.push(...candidates.filter((_, index) => !seen.has(index)));
-      return reordered.slice(0, limit);
+      return publishCurrent(reordered);
     } catch (error: any) {
       options.signal?.throwIfAborted();
       console.warn(`[KB] Rerank unavailable; preserving hybrid search order: ${error?.message || String(error)}`);
     }
   }
 
-  return candidates.slice(0, limit);
+  return publishCurrent(candidates);
 }
 
 async function semanticSearch(
@@ -614,6 +639,7 @@ async function semanticSearch(
   }
   signal?.throwIfAborted();
   if (!queryEmbedding) return [];
+  const sourceChunks = new Map<string, ReturnType<typeof chunkKnowledgeText>>();
 
   return allEmbeddings
     .map(embedding => {
@@ -626,6 +652,12 @@ async function semanticSearch(
       }
       const article = articleById.get(embedding.articleId);
       if (!article) return null;
+      // An old index can outlive edits or a failed rebuild. Exact chunk content
+      // and ordinal must still belong to the authoritative source.
+      if (!sourceChunks.has(article.id)) sourceChunks.set(article.id,
+        chunkKnowledgeText(article.content, { maxChunkSize: CHUNK_SIZE, overlapSize: CHUNK_OVERLAP }));
+      const sourceChunk = sourceChunks.get(article.id)![embedding.chunkIndex];
+      if (!sourceChunk || sourceChunk.text !== embedding.content) return null;
       if (!Array.isArray(embeddingArr) || embeddingArr.length !== queryEmbedding!.vector.length || !embeddingArr.every(Number.isFinite)) return null;
       const score = cosineSimilarity(queryEmbedding!.vector, embeddingArr);
       if (score < 0.28) return null;
@@ -636,7 +668,7 @@ async function semanticSearch(
     .slice(0, limit);
 }
 
-function keywordSearch(articles: EDB.KbArticle[], query: string, limit: number): KnowledgeSearchResult[] {
+export function searchKnowledgeText(articles: EDB.KbArticle[], query: string, limit: number): KnowledgeSearchResult[] {
   const tokens = tokenize(query);
   if (tokens.length === 0) return [];
   return articles
@@ -658,7 +690,11 @@ function keywordSearch(articles: EDB.KbArticle[], query: string, limit: number):
       }
       if (score <= 0) return null;
       const normalizedScore = Math.min(0.92, 0.24 + score / Math.max(16, tokens.length * 7));
-      return toSearchResult(article, makeKeywordExcerpt(article.content, tokens), normalizedScore, 'keyword');
+      const chunks = chunkKnowledgeText(article.content, { maxChunkSize: CHUNK_SIZE, overlapSize: CHUNK_OVERLAP });
+      const best = chunks.map(chunk => ({
+        chunk, hits: tokens.reduce((sum, token) => sum + countOccurrences(normalizeText(chunk.text), token), 0),
+      })).sort((a, b) => b.hits - a.hits)[0]?.chunk;
+      return toSearchResult(article, best?.text || article.content, normalizedScore, 'keyword', best?.index);
     })
     .filter((item): item is KnowledgeSearchResult => item !== null)
     .sort((a, b) => b.score - a.score || b.updatedAt.localeCompare(a.updatedAt))
@@ -683,6 +719,7 @@ function toSearchResult(
     tags: parseTags(article.tags),
     updatedAt: article.updatedAt,
     chunkIndex,
+    citationKey: `article:${article.id}#chunk:${(chunkIndex ?? 0) + 1}#sha256:${hashKnowledgeContent(chunk)}`,
   };
 }
 
@@ -739,20 +776,6 @@ function countOccurrences(value: string, token: string): number {
     index = value.indexOf(token, index + token.length);
   }
   return count;
-}
-
-function makeKeywordExcerpt(content: string, tokens: string[]): string {
-  const normalizedContent = normalizeText(content);
-  let hit = -1;
-  for (const token of tokens) {
-    hit = normalizedContent.indexOf(token);
-    if (hit >= 0) break;
-  }
-  const start = Math.max(0, hit < 0 ? 0 : hit - 90);
-  const end = Math.min(content.length, start + 360);
-  const prefix = start > 0 ? '...' : '';
-  const suffix = end < content.length ? '...' : '';
-  return `${prefix}${content.slice(start, end).trim()}${suffix}`;
 }
 
 function clampLimit(limit: number): number {

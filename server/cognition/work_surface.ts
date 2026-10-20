@@ -1,4 +1,5 @@
 import { ToolPolicy } from '../personality/types';
+import type { DesktopExecutionPreference } from '../../shared/operation_modes';
 import { isVideoPlaybackRequest } from './media_intent';
 import {
   CURRENT_APP_FORBIDDEN_TOOLS,
@@ -63,10 +64,11 @@ export function wantsDirectDesktopControl(text: string): boolean {
   return true;
 }
 
-export function resolveWorkSurfaceRoute(text: string, recoveredAppTarget = ''): WorkSurfaceRoute {
-  const recoveredCurrentAppEdit = Boolean(recoveredAppTarget);
-  const artifactFirst = recoveredCurrentAppEdit ? false : isArtifactFirstTask(text);
-  const directDesktop = recoveredCurrentAppEdit || wantsDirectDesktopControl(text);
+export function resolveWorkSurfaceRoute(text: string, recoveredAppTarget = '', preference: DesktopExecutionPreference = 'internal'): WorkSurfaceRoute {
+  const externalExecution = preference === 'external';
+  const recoveredCurrentAppEdit = Boolean(recoveredAppTarget) && !externalExecution;
+  const artifactFirst = !externalExecution && !recoveredCurrentAppEdit && isArtifactFirstTask(text);
+  const directDesktop = recoveredCurrentAppEdit || externalExecution || wantsDirectDesktopControl(text);
   const forbidComputerUse = recoveredCurrentAppEdit || (artifactFirst && !directDesktop);
 
   const promptOverlay = recoveredCurrentAppEdit
@@ -78,6 +80,13 @@ export function resolveWorkSurfaceRoute(text: string, recoveredAppTarget = ''): 
         '- Do not repeat the same New/Blank selector. Re-observe after every UI invoke/click/shortcut and stop with the blocker if the state does not change.',
         '- Treat text after write/type/paste as payload for the current app. Do not reinterpret payload words as coding, capability learning, artifact generation, or a different application task.',
         '- computer_use, raw coordinate mouse tools, and untargeted keyboard typing are disabled because they can steal focus and hide state transitions.',
+      ].join('\n')
+    : externalExecution
+    ? [
+        '## External Desktop Execution Preference',
+        '- For the requested action, default to visible desktop execution using computer_use and its fresh screenshot/target evidence. Internal reasoning and calculations may prepare the action; do not replace the requested visible work with artifact/API-only completion.',
+        `- Preserve the exact application target${recoveredAppTarget ? ` (${recoveredAppTarget})` : ''} and verify the active editor before entering content.`,
+        '- This is a user execution preference, not desktop authorization. Respect tool availability, actor/scope, target proof, cancellation, and every sensitive-action confirmation. An explicit user request for an API or artifact still takes precedence.',
       ].join('\n')
     : artifactFirst
     ? [

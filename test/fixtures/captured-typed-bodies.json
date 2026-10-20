@@ -1,0 +1,12 @@
+{
+  "ocr": {
+    "arguments": {
+      "imagePath": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/legal-20-closure-20261018/knowledge-vision/ocr-required-projection-native-prepared/source.png",
+      "query": "Extract readable text exactly as visible, preserving names, numbers, dates, negation and uncertainty; mark unreadable text without guessing. Then describe only directly visible objects, layout, tables and diagrams.\nReturn only visible text and direct observations in the image language. Do not add interpretations, keyword suggestions, current-time judgments or facts absent from the pixels, or infer application features from icons or file names.",
+      "model": "aliyun/qwen3.5-ocr"
+    },
+    "result": "{\n  \"path\": \"C:\\\\Users\\\\Administrator\\\\Documents\\\\Codex\\\\2026-10-03\\\\new-chat\\\\work\\\\legal-20-closure-20261018\\\\knowledge-vision\\\\ocr-required-projection-native-prepared\\\\source.png\",\n  \"width\": 1800,\n  \"height\": 1000,\n  \"provider\": \"relay\",\n  \"model\": \"aliyun/qwen3.5-ocr\",\n  \"analysis\": \"```html\\n<html><body>\\n<p>模拟咨询材料（仅供程序验收）</p> \\n <p>我方：虚构乙公司，被告；对方：虚构甲公司，原告。</p> \\n <p>材料记录日期：2026年10月16日。</p> \\n <p>对方主张货款人民币90000元。</p> \\n <p>我方陈述曾付款人民币70000元，付款截图尚未核验。</p> \\n <p>20000元仅是算术差额，不是我方确认的欠款。</p> \\n <p>基础事件日期：2026年9月1日，不代表付款日期。</p> \\n <p>合同签署日期：未提供。付款日期：未提供。</p> \\n <p>目前只有材料清单，未提供交货照片。</p> \\n <p>所有陈述均待原件核实，不作真实性或法律结论。</p> \\n</body></html>\\n```\"\n}",
+    "analysis": "```html\n<html><body>\n<p>模拟咨询材料（仅供程序验收）</p> \n <p>我方：虚构乙公司，被告；对方：虚构甲公司，原告。</p> \n <p>材料记录日期：2026年10月16日。</p> \n <p>对方主张货款人民币90000元。</p> \n <p>我方陈述曾付款人民币70000元，付款截图尚未核验。</p> \n <p>20000元仅是算术差额，不是我方确认的欠款。</p> \n <p>基础事件日期：2026年9月1日，不代表付款日期。</p> \n <p>合同签署日期：未提供。付款日期：未提供。</p> \n <p>目前只有材料清单，未提供交货照片。</p> \n <p>所有陈述均待原件核实，不作真实性或法律结论。</p> \n</body></html>\n```",
+    "nativeFinalResponse": "OCR 已按你的要求只执行一次，使用指定的模型参数完成读取。以下为工具实际返回的可见原文，按图中原始顺序逐行呈现：\n\n**逐行可见原文（第1—10行）**\n\n1. 模拟咨询材料（仅供程序验收）\n2. 我方：虚构乙公司，被告；对方：虚构甲公司，原告。\n3. 材料记录日期：2026年10月16日。\n4. 对方主张货款人民币90000元。\n5. 我方陈述曾付款人民币70000元，付款截图尚未核验。\n6. 20000元仅是算术差额，不是我方确认的欠款。\n7. 基础事件日期：2026年9月1日，不代表付款日期。\n8. 合同签署日期：未提供。付款日期：未提供。\n9. 目前只有材料清单，未提供交货照片。\n10. 所有陈述均待原件核实，不作真实性或法律结论。\n\n**直接可见对象与版式**\n- 图片本身为纯白背景、黑色无衬线字体、左对齐排列的文字区块；\n- 共 10 行文字，行间以换行分隔；\n- 未发现表格、图表、图形、图标或其他可见对象。\n\n全程未修改模型配置、未测试其他模型、未另发 OCR 请求、未上传或入案。未发现无法识别的文字，无需猜测补全。以上仅为像素可见内容的转述，不附带法律分析或结论。"
+  }
+}

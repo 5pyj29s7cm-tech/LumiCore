@@ -89,27 +89,9 @@ export function formatClientSelfPrompt(
     domain: isWork ? 'work' : 'personal',
     orgId: isWork ? scope.orgId : '',
   }));
-  const health = state ? getClientHealthReport(userId, { domain: isWork ? 'work' : 'personal', orgId: scope.orgId }) : {
-    level: 'unknown' as const,
-    stateAgeSeconds: null,
-    findings: [],
-    autonomyBoundary: { automatic: [], confirmFirst: [], forbidden: [] },
-  };
-  const awareness = state ? getClientSelfAwarenessReport(userId, { domain: isWork ? 'work' : 'personal', orgId: scope.orgId }) : {
-    level: 'missing' as const,
-    bodySummary: isWork
-      ? 'No live desktop state has been verified for this member in the active organization.'
-      : 'No live desktop client state has been reported yet.',
-    architecture: LUMI_TECHNICAL_ARCHITECTURE,
-    knows: [],
-    gaps: [],
-    habits: [],
-    nextBestActions: [],
-  };
-  const selfSnapshot = getSelfModelSnapshot(userId, {
-    domain: isWork ? 'work' : 'personal',
-    orgId: scope.orgId,
-  });
+  const selfSnapshot = getSelfModelSnapshot(userId, { domain: isWork ? 'work' : 'personal', orgId: scope.orgId });
+  const health = selfSnapshot.health;
+  const awareness = getClientSelfAwarenessReport(userId, { domain: isWork ? 'work' : 'personal', orgId: scope.orgId }, health);
   const stateAge = state?.updatedAt ? Math.round((Date.now() - state.updatedAt) / 1000) : null;
   const gate = getGateConfig(userId);
   const workflows = isWork ? [] : listAutonomousWorkflows(userId);
@@ -181,7 +163,7 @@ export function formatClientSelfPrompt(
     `- Overall health: ${health.level}`,
     `- State age: ${health.stateAgeSeconds == null ? 'unknown' : `${health.stateAgeSeconds}s`}`,
     ...(health.findings.length
-      ? health.findings.slice(0, 8).map(f => `- [${f.level}/${f.area}] ${f.message}${f.evidence ? ` (${f.evidence})` : ''}`)
+      ? health.findings.map(f => `- [${f.level}/${f.area}] ${f.message}${f.evidence ? ` (${f.evidence})` : ''}`)
       : ['- No current health findings.']),
   ];
   const awarenessLines = [
@@ -206,7 +188,7 @@ export function formatClientSelfPrompt(
     '- A creator or owner has broader organization permissions, not an automatic data merge. Moving a source between personal and organization workspaces must be explicit and source-attributed.',
     '- Organization conversations are member-scoped unless a message, artifact, case record, or result is explicitly archived into a shared organization resource.',
     '- A saved upload is not automatically fully usable. Treat indexed as retrievable, partial as incomplete, pending as not ready, and failed/unsupported as unavailable. Missing or stale semantic indexes may still have keyword fallback, but must be reported accurately.',
-    '- Text chat, voice chat, organization-workspace chat, and bound Feishu/WeCom entry points must retrieve from the same authorized organization knowledge scope and cite organization article titles when used.',
+    '- Command-center text and voice chat under the active work domain, and bound Feishu/WeCom entry points must retrieve from the same authorized organization knowledge scope and cite organization article titles when used.',
   ] : [
     '- Identity: this is the same continuous Lumi that can enter organization workspaces; switching workspaces changes the authorized context, not Lumi\'s personality or relationship continuity.',
     '- Personal memories, private conversations, personality preferences, local-machine learning, files, and autonomous workflows belong only to this user.',

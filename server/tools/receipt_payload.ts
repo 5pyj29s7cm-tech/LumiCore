@@ -105,9 +105,8 @@ export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
   const compact = (value: unknown, limit: number) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
   if (!record?.name || compact(record.error, 600)) return false;
   if (record.terminalVerification?.status === 'failed') return false;
-  if (!toolRecordHasTerminalPayload(record)) return false;
-  const result = compact(toolRecordTerminalText(record), 4000);
   const raw = toolRecordTerminalPayload(record);
+  if (!hasMeaningfulReceiptValue(raw)) return false;
   const structuredPayload = raw && typeof raw === 'object' ? raw : null;
   if (structuredPayload && !Array.isArray(structuredPayload)) {
     const payload = structuredPayload as Record<string, any>;
@@ -132,7 +131,6 @@ export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
     const declaredProgress = record.terminalVerification?.status === 'verified'
       && record.capability?.verification.successStatuses?.includes(status)
       && ['started', 'queued', 'running', 'waiting_confirmation', 'paused'].includes(status);
-    if (declaredProgress) ignoredFalseFields.add('completed');
     const explicitlyFailedOutcome = SEMANTIC_FALSE_FIELDS.some(field => (
       !ignoredFalseFields.has(field) && payload[field] === false
     ));
@@ -161,7 +159,7 @@ export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
     return true;
   }
   if (Array.isArray(structuredPayload)) return true;
-  return !/(?:requires? (?:user )?confirmation|permission denied|not allowed|forbidden|timed out|(?:^|\b)(?:failed|error|blocked)(?:\b|:))/i.test(result);
+  return !/(?:requires? (?:user )?confirmation|permission denied|not allowed|forbidden|timed out|(?:^|\b)(?:failed|error|blocked)(?:\b|:))/i.test(compact(raw, 4000));
 }
 
 // Persisted rows contain one JSON layer; do not reinterpret strings as nested receipts.

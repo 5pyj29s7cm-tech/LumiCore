@@ -15,6 +15,7 @@ import type { NotificationItem as StoredNotificationItem } from '../types/models
 import {
   normalizeLumiClientMode,
   type LumiClientMode,
+  normalizeDesktopExecutionPreference, type DesktopExecutionPreference,
 } from '../../shared/operation_modes';
 
 interface UserProfile {
@@ -152,6 +153,8 @@ interface AppContextType {
   // Operation mode
   operationMode: OperationMode;
   setOperationMode: (mode: OperationMode) => void;
+  desktopExecutionPreference: DesktopExecutionPreference;
+  setDesktopExecutionPreference: (preference: DesktopExecutionPreference) => Promise<boolean>;
   // Appearance
   appearanceMode: AppearanceMode;
   resolvedAppearanceMode: 'light' | 'dark';
@@ -429,6 +432,49 @@ function useAppSessionAndPreferences({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, [user?.uid]);
 
+  const [desktopPreferenceState, setDesktopPreferenceState] = useState<{ userId: string; preference: DesktopExecutionPreference }>({ userId: '', preference: 'internal' });
+  const desktopPreferenceRequestRef = React.useRef(0);
+  const desktopPreferenceWriteTailRef = React.useRef<Promise<unknown>>(Promise.resolve());
+  const desktopExecutionPreference = desktopPreferenceState.userId === user?.uid ? desktopPreferenceState.preference : 'internal';
+  const setDesktopExecutionPreference = (preference: DesktopExecutionPreference): Promise<boolean> => {
+    const uid = user?.uid, generation = authGenerationRef.current;
+    const operation = desktopPreferenceWriteTailRef.current.catch(() => undefined).then(async () => {
+      if (!uid || generation !== authGenerationRef.current) return false;
+      const request = ++desktopPreferenceRequestRef.current;
+      try {
+        const data = await apiJson('/api/preferences/desktop_execution', { method: 'PUT', credentials: 'include', signal: AbortSignal.timeout(15_000), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ preference }) });
+        if (generation !== authGenerationRef.current || data?.ok !== true || data.preference !== preference) return false;
+        if (request === desktopPreferenceRequestRef.current) setDesktopPreferenceState({ userId: uid, preference });
+        return true;
+      } catch { return false; }
+    });
+    desktopPreferenceWriteTailRef.current = operation;
+    return operation;
+  };
+  useEffect(() => {
+    const uid = user?.uid, generation = authGenerationRef.current;
+    if (!uid) return;
+    let cancelled = false;
+    const refresh = async () => {
+      await desktopPreferenceWriteTailRef.current.catch(() => undefined);
+      if (cancelled || generation !== authGenerationRef.current) return;
+      const request = ++desktopPreferenceRequestRef.current;
+      try {
+        const data = await apiJson('/api/preferences/desktop_execution', { credentials: 'include' });
+        if (!cancelled && generation === authGenerationRef.current && request === desktopPreferenceRequestRef.current) setDesktopPreferenceState({ userId: uid, preference: normalizeDesktopExecutionPreference(data?.preference) });
+      } catch { /* An unavailable preference never authorizes desktop control. */ }
+    };
+    const changed = (payload: any) => {
+      if (payload?.key === 'desktop_execution' && payload.userId === uid) void refresh();
+    };
+    const connection = socketService.getSocket() || socketService.connect();
+    connection?.on('preferences:changed', changed);
+    connection?.on('connect', refresh);
+    window.addEventListener('focus', refresh);
+    void refresh();
+    return () => { cancelled = true; connection?.off('preferences:changed', changed); connection?.off('connect', refresh); window.removeEventListener('focus', refresh); };
+  }, [user?.uid, workDomain, orgConnection?.orgId]);
+
   const setAppearanceMode = (mode: AppearanceMode) => {
     const normalizedMode = normalizeAppearanceMode(mode);
     setAppearanceModeState(normalizedMode);
@@ -455,12 +501,12 @@ function useAppSessionAndPreferences({ children }: { children: ReactNode }) {
     orgConnection, switchDomain, setWorkDomain, workDomain, setUser, setSelectedVoiceIdState, voiceStorageKeys,
     setFavoriteVoices, notifications, setNotificationsBusy, toolWriteTailRef, loading, aiConfig, visionConfig,
     reloadModelPreferences, selectedVoiceId, favoriteVoices, notificationsBusy, unreadCount, toolOverrides,
-    operationMode, setOperationMode, appearanceMode, resolvedAppearanceMode, setAppearanceMode, children
+    operationMode, setOperationMode, desktopExecutionPreference, setDesktopExecutionPreference, appearanceMode, resolvedAppearanceMode, setAppearanceMode, children
   } as const;
 }
 
 function useAppAccountActionsAndProvider(previousBindings: ReturnType<typeof useAppSessionAndPreferences>) {
-  const { aiConfigRef, visionConfigRef, modelAccountRef, user, modelPreferenceRequestRef, visionPreferenceRequestRef, authGenerationRef, modelWriteTailsRef, applyModelPreference, toolRequestRef, setSessionUser, setOrgConnection, notificationRevisionRef, notificationWriteRef, setNotifications, toolOverridesRef, setToolOverrides, setLoading, orgConnection, switchDomain, setWorkDomain, workDomain, setUser, setSelectedVoiceIdState, voiceStorageKeys, setFavoriteVoices, notifications, setNotificationsBusy, toolWriteTailRef, loading, aiConfig, visionConfig, reloadModelPreferences, selectedVoiceId, favoriteVoices, notificationsBusy, unreadCount, toolOverrides, operationMode, setOperationMode, appearanceMode, resolvedAppearanceMode, setAppearanceMode, children } = previousBindings;
+  const { aiConfigRef, visionConfigRef, modelAccountRef, user, modelPreferenceRequestRef, visionPreferenceRequestRef, authGenerationRef, modelWriteTailsRef, applyModelPreference, toolRequestRef, setSessionUser, setOrgConnection, notificationRevisionRef, notificationWriteRef, setNotifications, toolOverridesRef, setToolOverrides, setLoading, orgConnection, switchDomain, setWorkDomain, workDomain, setUser, setSelectedVoiceIdState, voiceStorageKeys, setFavoriteVoices, notifications, setNotificationsBusy, toolWriteTailRef, loading, aiConfig, visionConfig, reloadModelPreferences, selectedVoiceId, favoriteVoices, notificationsBusy, unreadCount, toolOverrides, operationMode, setOperationMode, desktopExecutionPreference, setDesktopExecutionPreference, appearanceMode, resolvedAppearanceMode, setAppearanceMode, children } = previousBindings;
 
 
   const updateModelConfig = (role: 'llm' | 'vision', newConfig: Partial<AIConfig>, models: Record<string, string> = {}): Promise<boolean> => {
@@ -757,6 +803,7 @@ function useAppAccountActionsAndProvider(previousBindings: ReturnType<typeof use
       switchDomain,
       operationMode,
       setOperationMode,
+      desktopExecutionPreference, setDesktopExecutionPreference,
       appearanceMode,
       resolvedAppearanceMode,
       setAppearanceMode,

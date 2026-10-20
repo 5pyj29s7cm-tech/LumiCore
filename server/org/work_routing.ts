@@ -514,7 +514,7 @@ function ruleScore(rule: OrganizationWorkRoutingRule, text: string, platform: st
     + (rule.memberId ? 25 : 0) + (rule.positionId ? 5 : 0);
 }
 
-function selectRule(
+export function selectOrganizationWorkRoutingRule(
   rules: OrganizationWorkRoutingRule[],
   text: string,
   platform: string,
@@ -692,6 +692,11 @@ function bypassRedundantSelfApproval(input: {
   return decision || { workItem: input.workItem, approval: input.approval };
 }
 
+export function isStrongerOrganizationWorkSideEffect(next: string, previous: string): boolean {
+  const rank = (value: string) => value === 'external_commit' ? 2 : ['none', 'read_only'].includes(value) ? 0 : 1;
+  return rank(next) > rank(previous);
+}
+
 export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteOrganizationWorkResult {
   const requesterMembership = assertActiveMember(input.orgId, input.requesterUserId, true);
   const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
@@ -700,48 +705,46 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
   const source = normalizeText(input.source, 120);
   if (!requestId || !source) throw new Error('Organization work routing requires a source and request identity');
   const idempotencyKey = normalizeText(input.idempotencyKey, 240) || digest(`${input.orgId}\n${source}\n${requestId}`);
-  const existing = (db.orgWorkItems as OrganizationWorkItem[]).find(item => (
+  const taskId = normalizeText(input.taskId, 180);
+  const existingByKey = (db.orgWorkItems as OrganizationWorkItem[]).find(item => (
     item.orgId === input.orgId && item.idempotencyKey === idempotencyKey
   ));
+  const existing = existingByKey || (taskId ? (db.orgWorkItems as OrganizationWorkItem[]).find(item => (
+    item.orgId === input.orgId && item.taskId === taskId
+  )) : undefined);
   if (existing) {
-    if (applyWorkConstraints(db, existing)) commitDatabaseTables(db);
-    const existingApproval = existing.approvalId
-      ? (db.orgWorkApprovals as OrganizationWorkApproval[]).find(item => item.id === existing.approvalId && item.orgId === input.orgId) || null
-      : null;
+    if (existing.requesterUserId !== input.requesterUserId
+      || existingByKey && (existing.requestId !== requestId || existing.source !== source)
+      || existing.conversationId && input.conversationId && existing.conversationId !== input.conversationId
+      || existing.taskId && taskId && existing.taskId !== taskId) {
+      throw new Error('The existing organization work belongs to another accepted request or task.');
+    }
     const routingRule = existing.routingRuleId
-      ? (db.orgWorkRoutingRules as OrganizationWorkRoutingRule[]).find(item => item.id === existing.routingRuleId && item.orgId === input.orgId) || null
-      : null;
+      ? (db.orgWorkRoutingRules as OrganizationWorkRoutingRule[]).find(item => item.id === existing.routingRuleId && item.orgId === input.orgId) || null : null;
+    const stronger = !['completed', 'cancelled'].includes(existing.status)
+      && isStrongerOrganizationWorkSideEffect(input.sideEffectClass, existing.sideEffectClass);
+    if (stronger) {
+      const priorApproval = existing.approvalId
+        ? (db.orgWorkApprovals as OrganizationWorkApproval[]).find(item => item.id === existing.approvalId && item.orgId === input.orgId) : null;
+      if (priorApproval) { priorApproval.status = 'expired'; priorApproval.updatedAt = now(); }
+      existing.sideEffectClass = normalizeText(input.sideEffectClass, 40);
+      existing.operation = normalizeText(input.operation, 40);
+      existing.revision += 1;
+      existing.updatedAt = now();
+      existing.approvalId = null;
+      if (existing.status === 'waiting_approval') existing.status = 'assigned';
+      if (!['owner', 'admin'].includes(requesterMembership.role) && (priorApproval
+        || routingRule?.approvalMode === 'admin'
+        || existing.sideEffectClass === 'external_commit' && routingRule?.requireApprovalForExternalCommit)) createApproval(db, existing);
+      applyWorkConstraints(db, existing);
+      commitDatabaseTables(db);
+      notifyWorkExecutionChanged(existing);
+    } else if (applyWorkConstraints(db, existing)) commitDatabaseTables(db);
+    const existingApproval = existing.approvalId
+      ? (db.orgWorkApprovals as OrganizationWorkApproval[]).find(item => item.id === existing.approvalId && item.orgId === input.orgId) || null : null;
     const { workItem, approval } = bypassRedundantSelfApproval({
-      orgId: input.orgId,
-      requesterUserId: input.requesterUserId,
-      requesterRole: requesterMembership.role,
-      workItem: existing,
-      approval: existingApproval,
-    });
-    return { workItem, approval, routingRule, created: false };
-  }
-  const taskId = normalizeText(input.taskId, 180);
-  const existingTask = taskId
-    ? (db.orgWorkItems as OrganizationWorkItem[]).find(item => (
-        item.orgId === input.orgId
-        && item.taskId === taskId
-        && !['completed', 'cancelled'].includes(item.status)
-      ))
-    : null;
-  if (existingTask) {
-    if (applyWorkConstraints(db, existingTask)) commitDatabaseTables(db);
-    const existingApproval = existingTask.approvalId
-      ? (db.orgWorkApprovals as OrganizationWorkApproval[]).find(item => item.id === existingTask.approvalId && item.orgId === input.orgId) || null
-      : null;
-    const routingRule = existingTask.routingRuleId
-      ? (db.orgWorkRoutingRules as OrganizationWorkRoutingRule[]).find(item => item.id === existingTask.routingRuleId && item.orgId === input.orgId) || null
-      : null;
-    const { workItem, approval } = bypassRedundantSelfApproval({
-      orgId: input.orgId,
-      requesterUserId: input.requesterUserId,
-      requesterRole: requesterMembership.role,
-      workItem: existingTask,
-      approval: existingApproval,
+      orgId: input.orgId, requesterUserId: input.requesterUserId,
+      requesterRole: requesterMembership.role, workItem: existing, approval: existingApproval,
     });
     return { workItem, approval, routingRule, created: false };
   }
@@ -751,7 +754,7 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
   const explicitTarget = Boolean(
     input.targetDepartmentId || input.targetPositionId || input.targetMemberId || input.targetMemberIds?.length,
   );
-  const routingRule = explicitTarget ? null : selectRule(rules, input.text, input.platform || source, skillTags);
+  const routingRule = explicitTarget ? null : selectOrganizationWorkRoutingRule(rules, input.text, input.platform || source, skillTags);
   const position = validatePosition(db, input.orgId, input.targetPositionId || routingRule?.positionId);
   const departmentId = validateDepartment(input.orgId, input.targetDepartmentId || routingRule?.departmentId || position?.departmentId);
   if (position && departmentId && position.departmentId && position.departmentId !== departmentId) {

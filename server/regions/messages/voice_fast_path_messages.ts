@@ -5,8 +5,8 @@ export const CN_MODEL_FAILURE_BEFORE_EXECUTION = '这次模型调用失败，未
 export function formatCnMediaGenerationFailure(errors: string[]): string {
   const details = [...new Set(errors.map(formatCnToolFailureDetail))];
   const retry = errors.some(error => /timed?\s*out|timeout|outcome is unknown/i.test(error))
-    ? '可以重试，但超时请求的服务端结果需要先核对，避免重复生成。'
-    : '可以重试；如果服务继续拒绝，需要调整图片要求。';
+    ? '先核对本次请求的服务端状态，再决定是否重试，避免重复生成。'
+    : '可以按失败原因检查配置后重试。';
   return `本次生成没有完成。${details.join('\n')}\n${retry}`;
 }
 
@@ -21,12 +21,13 @@ export function formatCnToolFailureDetail(error: string): string {
     return '系统没有返回可核实的失败原因。';
   }
   if (/Lumi Official API request/i.test(raw)) {
+    if (/模型不存在|未启用|model.{0,30}(?:not found|not exist|disabled|unavailable)/iu.test(raw)) return '当前选择的生成模型不存在或未启用，官方接口拒绝了这次请求；请核对生成模型配置。';
     if (/IP infringement/i.test(raw)) return '图片服务拒绝了这次请求，返回的原因是疑似侵犯知识产权；没有返回图片。';
     const timeoutMs = raw.match(/timed out after (\d+)ms/i)?.[1];
     if (timeoutMs) return `官方接口等待 ${Number(timeoutMs) / 1000} 秒后超时，没有收到生成结果，不能确认服务端是否仍在处理。`;
   }
-  const httpStatus = raw.match(/(?:HTTP\s*)?(\d{3})(?:\s+status(?:\s+code)?)?/iu)?.[1]
-    || raw.match(/status(?:\s+code)?\s*[:=]?\s*(\d{3})/iu)?.[1];
+  const httpStatus = raw.match(/\bHTTP\s+([1-5]\d{2})\b/iu)?.[1]
+    || raw.match(/\bstatus(?:\s+code)?\s*[:=]?\s*([1-5]\d{2})\b|\b([1-5]\d{2})\s+status(?:\s+code)?\b/iu)?.slice(1).find(Boolean);
   if (httpStatus && /(?:no\s+body|empty\s+(?:body|response)|without\s+(?:a\s+)?(?:body|message))/iu.test(raw)) {
     return `服务返回 HTTP ${httpStatus}，但没有提供错误正文。`;
   }
@@ -70,11 +71,10 @@ export function formatCnToolFailureDetail(error: string): string {
     return '桌面视觉核验服务拒绝了请求；请检查当前视觉模型账号状态、余额和访问权限，恢复后再重试。';
   }
   if (/timed?\s*out|timeout/i.test(raw)) {
-    return '桌面操作在等待启动或窗口回执时超时，已停止本次执行，没有重复打开。';
+    return '等待结果超时，本次执行已停止；尚不能确认服务端是否仍在处理。';
   }
   if (/not found|cannot find|could not find|ENOENT/i.test(raw)) return '系统没有找到对应的应用、文件或网址入口。';
-  if (/[㐀-鿿]/u.test(raw) && !/(?:锟斤拷|鈥|Ã|â€|�)/u.test(raw)) return raw.slice(0, 180);
-  return '系统返回执行失败，但原始错误不是可直接展示的中文信息。';
+  return '这次操作没有完成，未取得可用结果。';
 }
 
 const CLIENT_ACTION_LABELS: Readonly<Record<string, string>> = {

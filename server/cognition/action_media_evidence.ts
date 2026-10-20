@@ -25,7 +25,7 @@ const PLAYING_OBSERVATION_RE = /正在播放|播放中|(?:已经|已)开始播�
 // i18n-allow: These labels describe candidate results, not the current media.
 const PLAYBACK_SEARCH_RE = /搜索|联想|推荐|search|suggestion/iu;
 
-function playbackObservationText(record: ToolExecutionRecord): string {
+export function playbackObservationText(record: ToolExecutionRecord): string {
   const payload = parseRecordJson(record);
   if (!payload) return terminalPayloadText(record).replace(/[*`]/g, '');
   if (record.name === 'computer_use') {

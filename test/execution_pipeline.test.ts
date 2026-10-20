@@ -1,5 +1,23 @@
 import './helpers';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { buildCapabilityExecutionPlan } from '../server/cognition/capability_execution_plan';
+import { executeToolCall } from '../server/tools/execution_engine';
+import { recordPendingConfirmationDurably, consumePendingConfirmationDurably } from '../server/tools/pending_confirmation';
+async function observeSelectedCall(pipeline: ReturnType<typeof buildLumiExecutionPipeline>, registry: ToolRegistry, name: string, args: Record<string,unknown>) {
+  const original = registry.get(name)!;
+  const handler = vi.fn(async () => JSON.stringify({ok:true,status:'completed',verified:true,messages:[]}));
+  registry.register({...original,handler});
+  const scope = {domain:'personal',orgId:'',taskId:pipeline.taskId||pipeline.resolution.requestId};
+  let pending: Awaited<ReturnType<typeof recordPendingConfirmationDurably>>|undefined;
+  const record = await executeToolCall({registry,name,arguments:args,context:{userId:'observed-pipeline-user',requestId:pipeline.resolution.requestId,taskId:scope.taskId,actionIntent:pipeline.resolution.userText,toolPolicy:pipeline.authorizationPolicy,requestConfirmation: async(tool,exact)=>{pending=await recordPendingConfirmationDurably('observed-pipeline-user',tool,exact,'chat',scope);return false;}}});
+  const plan=buildCapabilityExecutionPlan({record,capability:registry.getCapabilityManifestEntry(name)!,taskId:scope.taskId});
+  expect(plan.decisionAuthority).toBe('registry_bound_call');
+  expect(plan.nodes).toHaveLength(1);
+  expect(plan.nodes[0].toolName).toBe(name);
+  expect(plan.expectedEvidence).toHaveLength(1);
+  expect(plan.contextRefs).not.toContainEqual(expect.objectContaining({kind:'source'}));
+  return{plan,record,pending,scope,handler};
+}
 import { buildLumiExecutionPipeline } from '../server/cognition/execution_pipeline';
 import { registerAllTools } from '../server/tools/definitions';
 import { ToolRegistry } from '../server/tools/registry';
@@ -426,28 +444,9 @@ describe('unified execution pipeline', () => {
     expect(pipeline.capabilityPlan.schemaVersion).toBe(1);
     expect(pipeline.capabilityPlan.taskLedgerRequired).toBe(true);
     expect(pipeline.capabilityPlan.capabilityIds.length).toBeGreaterThan(0);
-    expect(pipeline.executionPlan.decisionAuthority).toBe('semantic_planner');
-    expect(pipeline.executionPlan.scriptAuthority).toBe('adapter_only');
-    expect(pipeline.executionPlan.nodes.length).toBeGreaterThan(0);
-    const adapterNodes = pipeline.executionPlan.nodes
-      .filter(node => node.executionRole === 'adapter');
-    expect(pipeline.executionPlan.expectedEvidence.length)
-      .toBe(adapterNodes.length);
-    expect(pipeline.executionPlan.edges.length).toBeGreaterThan(0);
-    expect(pipeline.executionPlan.nodes.some(node => node.executionRole === 'planner')).toBe(true);
-    expect(pipeline.executionPlan.nodes.some(node => node.executionRole === 'verifier')).toBe(true);
-    expect(pipeline.executionPlan.nodes.some(node => node.executionRole === 'join')).toBe(true);
-    for (const adapter of adapterNodes) {
-      expect(pipeline.executionPlan.edges).toContainEqual(expect.objectContaining({
-        to: adapter.nodeId,
-        condition: 'selected',
-      }));
-      expect(pipeline.executionPlan.edges).toContainEqual(expect.objectContaining({
-        from: adapter.nodeId,
-        condition: 'success',
-      }));
-    }
-    expect(pipeline.capabilityPlan.promptOverlay).toContain('Capability Execution Plan');
+    expect(pipeline.executionPlan).toBeUndefined();
+    expect(pipeline.modelToolProjection.toolNames).toContain('desktop_open');
+    expect(pipeline.modelToolProjection.toolNames.every(name => Boolean(registry.get(name)))).toBe(true);
     expect(pipeline.intentTrace.toolPolicy.allowedTools)
       .toEqual(pipeline.execution.toolPolicy.allowedTools);
   });
@@ -479,8 +478,9 @@ describe('unified execution pipeline', () => {
     expect(chat.turnIntent.channel).toBe('chat');
     expect(voice.turnIntent.channel).toBe('voice');
     expect(task.turnIntent.channel).toBe('task');
-    expect(chat.executionPlan.planId).toBe(voice.executionPlan.planId);
-    expect(voice.executionPlan.planId).toBe(task.executionPlan.planId);
+    expect(chat.modelToolProjection.toolNames).toEqual(voice.modelToolProjection.toolNames);
+    expect(voice.modelToolProjection.toolNames).toEqual(task.modelToolProjection.toolNames);
+    for (const entrance of [chat,voice,task]) expect(entrance.executionPlan).toBeUndefined();
   });
 
   it('does not turn product feedback into execution merely because chat can see the manifest', () => {
@@ -537,7 +537,7 @@ describe('unified execution pipeline', () => {
     expect(pipeline.modelToolProjection.toolNames).toContain('desktop_open');
   });
 
-  it('fails external commits closed and binds confirmation to immutable payload evidence', () => {
+  it('fails external commits closed and binds confirmation to immutable payload evidence', async () => {
     const registry = createRegistry();
     const pipeline = buildLumiExecutionPipeline({
       dispatch: {
@@ -552,15 +552,16 @@ describe('unified execution pipeline', () => {
     });
 
     expect(pipeline.normalizedIntent.sideEffectClass).toBe('external_commit');
-    expect(pipeline.executionPlan.risk.requiresConfirmation).toBe(true);
-    expect(pipeline.executionPlan.risk.failClosed).toBe(true);
-    expect(pipeline.executionPlan.risk.confirmationBinding).toMatchObject({
-      taskId: pipeline.executionPlan.taskId,
-      target: 'Alice',
-      tool: '',
-    });
-    expect(pipeline.executionPlan.risk.confirmationBinding?.payloadDigest).toHaveLength(64);
-    expect(pipeline.executionPlan.fallbackPolicy).toMatchObject({
+    const observed = await observeSelectedCall(pipeline,registry,'wechat_send_message',{contact:'Alice',message:'deployment is complete'});
+    expect(observed.record.envelope?.status).toBe('waiting_confirmation');
+    expect(observed.handler).not.toHaveBeenCalled();
+    expect(observed.plan.risk).toMatchObject({requiresConfirmation:true,failClosed:true});
+    expect(observed.pending).toMatchObject({taskId:observed.scope.taskId,target:'Alice',toolName:'wechat_send_message'});
+    expect(observed.pending!.payloadDigest).toHaveLength(64);
+    expect(await consumePendingConfirmationDurably('observed-pipeline-user',observed.pending!.id,'wechat_send_message',{contact:'Mallory',message:'deployment is complete'},observed.scope)).toBe(false);
+    expect(await consumePendingConfirmationDurably('observed-pipeline-user',observed.pending!.id,'wechat_send_message',{contact:'Alice',message:'deployment is complete'},observed.scope)).toBe(true);
+    expect(await consumePendingConfirmationDurably('observed-pipeline-user',observed.pending!.id,'wechat_send_message',{contact:'Alice',message:'deployment is complete'},observed.scope)).toBe(false);
+    expect(observed.plan.fallbackPolicy).toMatchObject({
       maxRetries: 0,
       reconcileUnknownOutcome: true,
       allowLegacyRoute: false,
@@ -568,7 +569,7 @@ describe('unified execution pipeline', () => {
     });
   });
 
-  it('keeps confirmation-only external commits executable only up to the confirmation gate', () => {
+  it('keeps confirmation-only external commits executable only up to the confirmation gate', async () => {
     const registry = createRegistry();
     const text = '请准备给测试联系人“验收占位联系人”发送消息“Lumi外发确认测试”，但在真正发送前必须向我确认；现在只到等待确认，不要发送。';
     const pipeline = buildLumiExecutionPipeline({
@@ -598,13 +599,13 @@ describe('unified execution pipeline', () => {
     expect(pipeline.execution.toolRoute?.toolNames).toEqual(['wechat_send_message']);
     expect(pipeline.execution.toolPolicy.allowedTools).toEqual(['wechat_send_message']);
     expect(pipeline.execution.toolPolicy.forbiddenTools).not.toContain('wechat_send_message');
-    expect(pipeline.executionPlan.risk).toMatchObject({
-      requiresConfirmation: true,
-      failClosed: true,
-    });
+    const observed = await observeSelectedCall(pipeline,registry,'wechat_send_message',{contact:'验收占位联系人',message:'Lumi外发确认测试'});
+    expect(observed.record.envelope?.status).toBe('waiting_confirmation');
+    expect(observed.handler).not.toHaveBeenCalled();
+    expect(observed.plan.risk).toMatchObject({requiresConfirmation:true,failClosed:true});
   });
 
-  it('permits bounded jittered retry only for read/status plans', () => {
+  it('permits bounded jittered retry only for read/status plans', async () => {
     const registry = createRegistry();
     const pipeline = buildLumiExecutionPipeline({
       dispatch: {
@@ -619,8 +620,11 @@ describe('unified execution pipeline', () => {
     });
 
     expect(pipeline.normalizedIntent.operation).toBe('read');
-    expect(pipeline.executionPlan.risk.sideEffectClass).toBe('none');
-    expect(pipeline.executionPlan.fallbackPolicy).toMatchObject({
+    const name = pipeline.modelToolProjection.toolNames.find(name=>registry.getCapabilityManifestEntry(name)?.operation==='observe')!;
+    expect(name).toBeTruthy();
+    const observed = await observeSelectedCall(pipeline,registry,name,{contact:'Alice'});
+    expect(observed.plan.risk.sideEffectClass).toBe('none');
+    expect(observed.plan.fallbackPolicy).toMatchObject({
       retryClass: 'idempotent_only',
       maxRetries: 2,
       jitter: true,
@@ -645,13 +649,9 @@ describe('unified execution pipeline', () => {
 
     expect(pipeline.turnIntent.boundary).not.toBe('skill_workflow');
     expect(pipeline.turnIntent.flow.workflowHint?.id).toBe('self_intro_demo');
-    expect(pipeline.executionPlan.nodes.some(node => node.type === 'skill' && !node.toolName)).toBe(false);
-    expect(pipeline.executionPlan.decisionAuthority).toBe('semantic_planner');
-    expect(pipeline.executionPlan.nodes.filter(node => node.toolName).length).toBeGreaterThan(0);
-    expect(pipeline.executionPlan.nodes).toContainEqual(expect.objectContaining({
-      toolName: 'client_action',
-      state: 'candidate',
-    }));
+    expect(pipeline.executionPlan).toBeUndefined();
+    expect(pipeline.modelToolProjection.toolNames).toContain('client_action');
+    expect(pipeline.modelToolProjection.toolNames.every(name=>Boolean(registry.get(name)))).toBe(true);
   });
 });
 
@@ -674,20 +674,21 @@ it.each(['chat', 'voice', 'task'] as const)('keeps new and stale %s plans separa
   ]) {
     const result = buildLumiExecutionPipeline({ ...input, ...extra });
     expect(result.trustedActionContinuation).toBe(false);
-    expect(result.executionPlan.taskId).not.toBe(state.taskId);
-    expect(result.executionPlan.contextRefs).not.toContainEqual({ kind: 'source', value: state.sourcePaths[0] });
+    expect(result.taskId).not.toBe(state.taskId);
+    expect(result.executionPlan).toBeUndefined();
+
     if (result.taskRelation.binding === 'stale') expect(result.executionRequested).toBe(false);
   }
   for (const text of ['继续', '现在做得怎么样了', '目前进度如何', '执行到哪一步了']) {
     const result = buildLumiExecutionPipeline({ ...input, dispatch: { ...input.dispatch, text } });
-    expect(result.executionPlan.taskId, JSON.stringify({ text, relation: result.taskRelation })).toBe(state.taskId);
-    expect(result.executionPlan.contextRefs).toContainEqual({ kind: 'source', value: state.sourcePaths[0] });
+    expect(result.taskRelation.taskId, JSON.stringify({ text, relation: result.taskRelation })).toBe(state.taskId);
+    expect(result.executionPlan).toBeUndefined();
     if (text === '继续') expect(result.trustedActionContinuation).toBe(true);
     else expect(result.executionRequested).toBe(false);
   }
   const owned = buildLumiExecutionPipeline({ ...input, taskId: 'new-owned-task', dispatch: { ...input.dispatch, text: '新建 D:/new-note.txt，写入新的独立内容。' } });
-  expect(owned.executionPlan.taskId).toBe('new-owned-task');
-  expect(owned.executionPlan.contextRefs).toEqual([]);
+  expect(owned.taskId).toBe('new-owned-task');
+  expect(owned.executionPlan).toBeUndefined();
 });
 
 it.each(['继续', 'continue'])('executes a validated media binding for %s while keeping unbound continuations read-only', text => {

@@ -1,7 +1,7 @@
 import type { ToolDefinition } from '../../../../tools/types';
 import { refreshAuthoritativeSourcesHandler, authoritySourceStatusHandler, verifyCitationHandler, importJudgmentHandler } from "./knowledge";
 import { legalCapability, legalEvidence, withLegalReceipt } from "./tool_contracts";
-import { defineLegalTool, stringField, numberField } from "./tool_contracts";
+import { LEGAL_TEMPORAL_FIELDS, defineLegalTool, stringField, numberField } from "./tool_contracts";
 
 export function authority_knowledgeTools(): ToolDefinition[] {
   return [
@@ -34,6 +34,8 @@ export function authority_knowledgeTools(): ToolDefinition[] {
     name: 'legal_verify_citation',
     description: '引用校验 — 验证法条引用和案例引用是否真实有效。可检查单个引用或全文中的所有引用，标注：存在/不存在、有效/已废止。禁止使用虚构法条和案例。',
     properties: {
+      ...LEGAL_TEMPORAL_FIELDS,
+      quotedText: stringField('声称为法条原文的引文，必须与所引条、款、项的权威正文相符。'),
       citation: stringField('单个引用文本，如"《民法典》第585条"或"(2024)京0105民初12345号"'),
       text: stringField('包含多个引用的完整文本（将自动识别所有《XX法》和案号引用）'),
       orgId: stringField('组织ID'),

@@ -71,8 +71,44 @@ describe('One-time pending tool confirmations', () => {
 
     const request = formatPendingConfirmationRequest(pending);
     expect(request).toContain('Confirmation is required');
-    expect(request).toContain('[redacted]');
+    expect(request).toContain('owner');
+    expect(request).not.toContain('password');
     expect(request).not.toContain('super-secret-password');
+  });
+
+  it.each(['chat', 'voice'])('keeps executor instructions out of the %s confirmation while binding the exact action', async source => {
+    const args = {
+      task: '把 WPS 窗口切到前台。读取会议安排.docx，先停留在文档页面等我下一步指令。',
+      max_steps: 20,
+      target_application: 'WPS Office',
+    };
+    const pending = recordPendingConfirmation('private-instructions', 'computer_use', args, source, {
+      actionIntent: '帮我把会议安排打印出来。',
+    });
+    const request = formatPendingConfirmationRequest(pending);
+    expect(request).toContain('会议安排');
+    expect(request).toContain('WPS Office');
+    expect(request).toContain('确认');
+    for (const internal of [args.task, 'computer_use', 'max_steps', 'target_application', pending.payloadDigest, pending.id]) {
+      expect(request).not.toContain(internal);
+    }
+    expect(pending.exactArgs).toEqual(args);
+    expect(formatPendingConfirmationPrompt(pending)).toContain(args.task);
+    expect(await consumePendingConfirmationDurably('private-instructions', pending.id, pending.toolName, { ...args, max_steps: 21 })).toBe(false);
+    expect(await consumePendingConfirmationDurably('private-instructions', pending.id, pending.toolName, args)).toBe(true);
+  });
+
+  it('keeps the recipient and message reviewable without dumping executor fields', () => {
+    const pending = recordPendingConfirmation('message-review', 'wechat_send_message', {
+      contact: '客户甲', message: '明天上午十点开会。',
+      task: '先调用工具再判断终态', max_steps: 20,
+    }, 'chat', { actionIntent: '把会议时间发给客户甲' });
+    const request = formatPendingConfirmationRequest(pending);
+    expect(request).toContain('客户甲');
+    expect(request).toContain('明天上午十点开会。');
+    expect(request).not.toContain('先调用工具');
+    expect(request).not.toContain('max_steps');
+    expect(request).not.toContain(pending.payloadDigest);
   });
 
   it('keeps a cancellation plus explicit no-write safety clause out of model routing', () => {

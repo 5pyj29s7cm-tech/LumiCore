@@ -1,3 +1,4 @@
+export { inspectPublicExecutionReferences } from '../../cognition/user_output_protection';
 import type { ToolExecutionRecord, ToolContext } from "../../tools/types";
 import { guardCompletionClaims, needsCompletionEvidence } from "../../work_product/completion_guard";
 import { buildActionEvidenceContract, hasCoreActionEvidence, resolveVerifiedCurrentAuthoringDocumentEvidence } from "../../cognition/action_contract";
@@ -81,3 +82,5 @@ export function compactCurrentDocumentTargetStateForModel(
     'Use this exact server-owned path when it is resolved. Do not guess another directory or repeat completed discovery.',
   ].join('\n');
 }
+
+

@@ -6,6 +6,12 @@ export type ToolPermission = 'public' | 'user' | 'admin' | 'system';
 
 /** Security classification per tool — inspired by Claude Code's tier system */
 export type SecurityLevel = 'safe' | 'confirm' | 'forbidden';
+/** A complete server-validated choice binds one registered call; it grants no permission. */
+export interface ServerBoundCapabilitySelection {
+  toolName: string; capabilityId: string; capabilityContractHash: string; argumentsDigest: string;
+  sourceId: string; selectionText: string; targetIdentity: string;
+  scope: { userId: string; domain: 'personal' | 'work'; orgId: string };
+}
 export type CapabilitySource = 'builtin' | 'mcp' | 'skill' | 'adapter';
 export type CapabilityOperation = 'observe' | 'test' | 'mutate' | 'create' | 'communicate' | 'unknown';
 export type CapabilityMode = LumiClientMode;
@@ -216,6 +222,7 @@ export interface ToolExecutionIdentity {
 }
 
 export interface ToolContext extends ToolExecutionIdentity {
+  dataRoutingPolicy?: 'policy_scoped' | 'local_only';
   getCurrentToolRecords?: () => ToolExecutionRecord[];
   industryWorkflowRequiredToolReceipts?: string[];
   industryWorkflowSourceInput?: string;
@@ -302,6 +309,8 @@ export interface ToolContext extends ToolExecutionIdentity {
   domain?: 'personal' | 'work' | string;
   /** Organization id when domain is work. */
   orgId?: string;
+  /** Explicit case fact date supplied to a legal operation; never the generation date. */
+  factDate?: string;
   socketId?: string;
   cwd?: string;
   /** Actual native desktop host platform when it differs from the server. */
@@ -317,7 +326,7 @@ export interface ToolContext extends ToolExecutionIdentity {
   /** Explicit personal-device relay used only for approved cross-workspace handoff, such as sending an organization file to the member's own WeChat. */
   personalDesktopRelay?: (toolName: string, args: Record<string, any>) => Promise<string>;
   /** Called when a tool requires confirmation. Returns true to proceed, false to abort. */
-  requestConfirmation?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
+  requestConfirmation?: (toolName: string, args: Record<string, any>, capability?: CapabilityManifestEntry) => Promise<boolean>;
   /** Original user/task intent used to classify semantic risk for low-level actions. */
   actionIntent?: string;
   /**
@@ -326,6 +335,8 @@ export interface ToolContext extends ToolExecutionIdentity {
    * manifest was visible to it.
    */
   currentTurnExecutionRequested?: boolean;
+  /** Server-only transient transcript scope for the primary model terminal report; never a grant or a second goal store. */
+  completionRequest?: { currentText: string; rootText?: string; history?: { id: string; argumentsVerified: boolean; record: ToolExecutionRecord }[] };
   /** Exact durable continuation proof produced by the shared execution pipeline. */
   trustedActionContinuation?: boolean;
   /**
@@ -342,6 +353,8 @@ export interface ToolContext extends ToolExecutionIdentity {
   currentAppTarget?: string;
   /** True only after the registry's confirmation callback approved this tool call. */
   userConfirmed?: boolean;
+  /** Server-owned confirmed-step presentation lease; tool arguments cannot set it. */
+  desktopPresentationManaged?: boolean;
   /**
    * True when the current user turn explicitly asked Lumi to create/export/save a
    * local deliverable. This only relaxes medium-risk local file generation tools;
@@ -392,13 +405,13 @@ export interface ToolContext extends ToolExecutionIdentity {
   /** Progress callback for long-running tools (computer_use) — reports each step */
   onProgress?: (step: string) => void;
   /** Lifecycle callback fired immediately before an LLM-selected tool begins. */
-  onToolStart?: (call: { id?: string; name: string; arguments: Record<string, any> }) => void;
+  onToolStart?: (call: { id?: string; idempotencyKey?: string; name: string; arguments: Record<string, any> }) => void;
   /** Observation only: the canonical receipt is available before execution returns. */
   onToolRecord?: (record: ToolExecutionRecord) => void;
   /** Observation only: releases a started-call observer, including durable lifecycle failures. */
   onToolFinished?: (call: { id?: string; name: string; recorded: boolean }) => void;
   /** Fired only after policy/confirmation checks, immediately before an adapter handler starts. */
-  onAdapterStart?: (call: { name: string; attempt: number; idempotencyKey?: string }) => void | Promise<void>;
+  onAdapterStart?: (call: { name: string; attempt: number; idempotencyKey?: string; arguments: Readonly<Record<string, unknown>>; capability: Pick<CapabilityManifestEntry, 'operation' | 'sideEffects'> }) => void | Promise<void>;
   /**
    * Fired only after the exact adapter handler promise has genuinely settled.
    * A timeout requests cooperative cancellation but does not synthesize this

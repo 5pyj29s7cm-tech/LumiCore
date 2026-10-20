@@ -1,7 +1,7 @@
 import { consumeFixtureBindingCode } from './messaging_binding_fixture';
 import './helpers';
-import { beforeAll, describe, expect, it } from 'vitest';
-import { initDatabase, readDB, writeDB } from '../db_layer';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { initDatabase, readDB, writeDB, querySQL, flushDBOrThrow } from '../db_layer';
 import type { IncomingMessage } from '../server/messaging/types';
 import { authorizeMessagingGroup, createBindingCode, resetMessagingBindingsForTest } from '../server/messaging/bindings';
 import { addMember, createDepartment, createOrg } from '../server/org/db';
@@ -12,6 +12,49 @@ import {
   listOrganizationWorkItems,
 } from '../server/org/work_routing';
 import { processWithPersonality } from '../server/regions/packs/cn/messaging_routes';
+import * as preparation from '../server/regions/packs/cn/messaging_turn/execution_preparation';
+import { toolRegistry } from '../server/tools/registry';
+import { executeToolCall } from '../server/tools/execution_engine';
+import type { ToolContext } from '../server/tools/types';
+import type { MessagingRouteOptions } from '../server/regions/packs/cn/messaging_finalization';
+import { getPendingConfirmation, buildTransportNeutralConfirmationScope, clearAllPendingConfirmationsForTests, formatPendingConfirmationRequest } from '../server/tools/pending_confirmation';
+import { conversationForMessagingTurn } from '../server/regions/packs/cn/messaging_persistence';
+import { ensurePendingConfirmationPersistenceInitialized, resetPendingConfirmationRepositoryForTests } from '../server/tools/pending_confirmation_repository';
+
+
+let selectedAdapterEntries = 0;
+afterEach(() => expect(selectedAdapterEntries).toBe(0));
+
+async function selectedAdapterTurn(input: IncomingMessage, options: MessagingRouteOptions, selected: 'read' | 'publish' = 'read'): Promise<string> {
+  const name = selected === 'publish' ? 'publish_synthetic_organization_notice' : 'read_synthetic_organization_review';
+  if (!toolRegistry.get(name)) toolRegistry.register({ name, description: selected === 'publish' ? 'Publish the selected synthetic organization notice.' : 'Read the selected synthetic organization review.',
+    parameters: { type: 'object', properties: { url: { type: 'string' }, content: { type: 'string' } } }, permission: 'user', securityLevel: 'safe',
+    capability: { lane: 'knowledge', operation: selected === 'publish' ? 'communicate' : 'observe', sideEffects: [{ type: selected === 'publish' ? 'external_communication' : 'local_read', scope: 'organization', reversible: selected !== 'publish' }] },
+    evidence: { capability: name, operation: selected === 'publish' ? 'communicate' : 'observe', assurance: 'observed' },
+    handler: async () => { selectedAdapterEntries++; throw new Error('An assigned human or approval boundary must prevent this synthetic adapter.'); },
+  });
+  let context: ToolContext | undefined;
+  const original = preparation.prepareMessagingExecution;
+  const spy = vi.spyOn(preparation, 'prepareMessagingExecution').mockImplementation(async accepted => {
+    const prepared = await original(accepted); context = prepared.context?.remoteToolContext; return prepared;
+  });
+  try {
+    return await processWithPersonality(input, { ...options, llmGetters: {
+      getDeepSeek: () => null, getGemini: () => null,
+      getRelay: () => ({ chat: { completions: { create: async () => {
+        if (!context) throw new Error('The canonical context was not prepared');
+        await executeToolCall({ registry: toolRegistry, id: input.messageId + ':selected', name, arguments: selected === 'publish' ? { url: 'https://synthetic.example.invalid/notice', content: 'Synthetic approval-required notice.' } : {}, context });
+        return { choices: [{ message: { content: 'The synthetic selected action has no completed result.' } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } };
+      } } } }),
+    } });
+  } finally { spy.mockRestore(); }
+}
+
+
+function exactPendingFor(input: IncomingMessage) {
+  const conversation = conversationForMessagingTurn(input)!;
+  return getPendingConfirmation(input.boundUserId!, buildTransportNeutralConfirmationScope({ domain: 'work', orgId: input.boundOrgId, conversationId: conversation.id, taskId: conversation.actionContinuationState?.taskId }));
+}
 
 describe('remote organization work routing integration', () => {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -104,16 +147,13 @@ describe('remote organization work routing integration', () => {
   it('creates one durable human-owned work item without letting a callback bypass organization routing', async () => {
     const messageId = `remote-route-${suffix}`;
     let callbackCalls = 0;
-    const reply = await processWithPersonality(
-      message('Please complete contract-review for the organization.', messageId),
-      {
+    const reply = await selectedAdapterTurn(message('Please complete contract-review for the organization.', messageId), {
         onMessage: async () => {
           callbackCalls += 1;
           return { platform: 'feishu', text: 'Contract review callback completed.' };
         },
-      },
-    );
-    expect(reply).toContain('LumiCore');
+      });
+    expect(reply).toContain('任务已交给组织成员');
     expect(reply).toContain(memberA);
     expect(callbackCalls).toBe(0);
     const items = listOrganizationWorkItems(orgId).filter(item => item.requestId === `feishu_bot:${messageId}`);
@@ -127,24 +167,39 @@ describe('remote organization work routing integration', () => {
     const db = readDB();
     const task = db.conversationActionTasks.find((item: any) => item.id === items[0].taskId);
     expect(task).toBeTruthy();
-    expect(JSON.parse(task.context).executionPlan).toBeTruthy();
+    expect(JSON.parse(task.context).executionPlan).toBeUndefined();
+    expect(db.conversationActionTurns).toEqual(expect.arrayContaining([expect.objectContaining({taskId:task.id,requestId:`feishu_bot:${messageId}`} )]));
   });
 
   it('never lets the legacy callback execute an external commit after administrator approval', async () => {
     const requestId = `remote-approval-${suffix}`;
     let callbackCalls = 0;
-    const blockedReply = await processWithPersonality(
-      message('Publish this approval-required notice to the public website.', requestId),
-      {
+    const proposedReply = await selectedAdapterTurn(message('Publish this approval-required notice to the public website.', requestId), {
         onMessage: async () => {
           callbackCalls += 1;
           return { platform: 'feishu', text: 'Published callback must not run before approval.' };
         },
-      },
-    );
+      }, 'publish');
+    expect(proposedReply).not.toContain('Published callback must not run before approval.');
+    const exactProposal = exactPendingFor(message('confirmation target', requestId))!;
+    expect(proposedReply).toBe(formatPendingConfirmationRequest(exactProposal));
+    expect(proposedReply).toContain('https://synthetic.example.invalid/notice');
+    expect(proposedReply).toContain('Synthetic approval-required notice.');
+    await flushDBOrThrow();
+    const stored = await querySQL<{ status: string; taskId: string; originRequestId: string; exactArgsCiphertext: string }>('SELECT status, taskId, originRequestId, exactArgsCiphertext FROM pending_tool_confirmations WHERE id = ?', [exactProposal.id]);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({ status: 'pending', taskId: exactProposal.taskId, originRequestId: 'feishu_bot:' + requestId });
+    expect(stored[0].exactArgsCiphertext).not.toContain('Synthetic approval-required notice.');
+    expect(readDB().conversationActionTasks.find((task: { id: string }) => task.id === exactProposal.taskId)?.status).toBe('waiting_confirmation');
+    clearAllPendingConfirmationsForTests(); resetPendingConfirmationRepositoryForTests();
+    await ensurePendingConfirmationPersistenceInitialized();
+    expect(exactPendingFor(message('confirmation target', requestId))).toEqual(exactProposal);
+    expect(exactPendingFor(message('confirmation target', requestId))).toMatchObject({ originRequestId: 'feishu_bot:' + requestId, target: 'https://synthetic.example.invalid/notice', exactArgs: { content: 'Synthetic approval-required notice.' } });
+    expect(listOrganizationWorkItems(orgId).filter(item => item.requestId === 'feishu_bot:' + requestId)).toEqual([]);
+    const blockedReply = await selectedAdapterTurn(message('确认', requestId + '-confirm'), { onMessage: async () => { callbackCalls++; return { platform: 'feishu', text: 'Must not bypass exact confirmation or organization approval.' }; } }, 'publish');
     expect(blockedReply).toContain('等待组织管理员审批');
     expect(callbackCalls).toBe(0);
-    const [workItem] = listOrganizationWorkItems(orgId).filter(item => item.requestId === `feishu_bot:${requestId}`);
+    const [workItem] = listOrganizationWorkItems(orgId).filter(item => item.requestId === `feishu_bot:${requestId}-confirm`);
     expect(workItem.status).toBe('waiting_approval');
     const approval = readDB().orgWorkApprovals.find((item: any) => item.id === workItem.approvalId);
     expect(approval.status).toBe('pending');
@@ -156,16 +211,17 @@ describe('remote organization work routing integration', () => {
       reason: 'Approved for this immutable work item revision.',
     });
 
-    const continuedReply = await processWithPersonality(
-      message('continue', `${requestId}-continue`),
-      {
+    const continuationProposal = await selectedAdapterTurn(message('continue', `${requestId}-continue`), {
         onMessage: async () => {
           callbackCalls += 1;
           return { platform: 'feishu', text: 'Approved work resumed.' };
         },
-      },
-    );
-    expect(continuedReply).toContain('LumiCore');
+      }, 'publish');
+    expect(continuationProposal).not.toContain('Approved work resumed.');
+    expect(continuationProposal).toBe(formatPendingConfirmationRequest(exactPendingFor(message('confirmation target', requestId + '-continue'))!));
+    expect(exactPendingFor(message('confirmation target', requestId + '-continue'))?.originRequestId).toBe('feishu_bot:' + requestId + '-continue');
+    const continuedReply = await selectedAdapterTurn(message('确认', requestId + '-continue-confirm'), { onMessage: async () => { callbackCalls++; return { platform: 'feishu', text: 'Must not bypass assigned human.' }; } }, 'publish');
+    expect(continuedReply).toContain('任务已交给组织成员');
     expect(continuedReply).toContain(memberA);
     expect(callbackCalls).toBe(0);
     const sameTaskItems = listOrganizationWorkItems(orgId, { taskId: workItem.taskId });
@@ -180,20 +236,21 @@ describe('remote organization work routing integration', () => {
   it('skips redundant organization self-approval without allowing the legacy callback to commit', async () => {
     const requestId = `remote-owner-no-approval-${suffix}`;
     let callbackCalls = 0;
-    const reply = await processWithPersonality(
-      message('Publish this approval-required owner notice to the public website.', requestId, [], ownerId),
-      {
+    const ownerProposal = await selectedAdapterTurn(message('Publish this approval-required owner notice to the public website.', requestId, [], ownerId), {
         onMessage: async () => {
           callbackCalls += 1;
           return { platform: 'feishu', text: 'Owner-authorized callback ran.' };
         },
-      },
-    );
+      }, 'publish');
 
+    expect(ownerProposal).not.toContain('Owner-authorized callback ran.');
+    expect(ownerProposal).toBe(formatPendingConfirmationRequest(exactPendingFor(message('confirmation target', requestId, [], ownerId))!));
+    expect(exactPendingFor(message('confirmation target', requestId, [], ownerId))?.target).toBe('https://synthetic.example.invalid/notice');
+    const reply = await selectedAdapterTurn(message('确认', requestId + '-confirm', [], ownerId), { onMessage: async () => { callbackCalls++; return { platform: 'feishu', text: 'Must not bypass assigned human.' }; } }, 'publish');
     expect(reply).not.toContain('等待组织管理员审批');
-    expect(reply).toContain('LumiCore');
+    expect(reply).toContain('任务已交给组织成员');
     expect(callbackCalls).toBe(0);
-    const [workItem] = listOrganizationWorkItems(orgId).filter(item => item.requestId === `feishu_bot:${requestId}`);
+    const [workItem] = listOrganizationWorkItems(orgId).filter(item => item.requestId === `feishu_bot:${requestId}-confirm`);
     expect(workItem.approvalId).toBeNull();
     expect(workItem.status).toBe('waiting_human');
   });
@@ -227,17 +284,14 @@ describe('remote organization work routing integration', () => {
 
   it('maps multiple Feishu mentions to exact bound organization members without cross-identity guessing', async () => {
     const messageId = `remote-mentions-${suffix}`;
-    const reply = await processWithPersonality(
-      message(
+    const reply = await selectedAdapterTurn(message(
         'Please complete contract-review with the mentioned organization members.',
         messageId,
         [`ou-${memberB}`, `ou-${ownerId}`, 'ou-unbound-outsider'],
-      ),
-      {
+      ), {
         onMessage: async () => ({ platform: 'feishu', text: 'Mentioned-member route completed.' }),
-      },
-    );
-    expect(reply).toContain('LumiCore');
+      });
+    expect(reply).toContain('任务已交给组织成员');
     expect(reply).toContain(memberB);
     const [item] = listOrganizationWorkItems(orgId).filter(candidate => candidate.requestId === `feishu_bot:${messageId}`);
     expect(item.assignedMemberId).toBe(memberB);

@@ -6,6 +6,8 @@ import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 const declarations = [
+  'client_get_state',
+  'client_action',
   'desktop_active_window',
   'desktop_capture_screen',
   'desktop_ui_snapshot',
@@ -71,6 +73,20 @@ describe('desktop execution stability policy', () => {
   beforeEach(async () => {
     const { initDatabase } = await import('../db_layer');
     await initDatabase();
+  });
+
+  it('does not override the selected client lane with a second desktop decision', async () => {
+    const { buildDesktopExecutionStabilityPolicy } = await import('../server/cognition/desktop_execution_stability');
+    const { dispatch, capabilitySelection } = await buildPolicy('进入壁纸模式，继续当前优酷的视频播放');
+    expect(capabilitySelection.lane).toBe('client_surface');
+    const policy = buildDesktopExecutionStabilityPolicy({
+      channel: 'chat', text: '进入壁纸模式，继续当前优酷的视频播放',
+      flow: { ...dispatch.flow, workSurfaceRoute: { ...dispatch.flow.workSurfaceRoute, directDesktop: true } },
+      capabilitySelection,
+    });
+    expect(policy.applies).toBe(false);
+    expect(policy.executionPlan).toBeNull();
+    expect(policy.promptOverlay).toBe('');
   });
 
   it('requires screen evidence for visible desktop/software control', async () => {

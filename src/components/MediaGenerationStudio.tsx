@@ -1,4 +1,5 @@
-import type { VideoGenerationOptions } from '../../shared/video_generation_options';
+import { mediaGenerationNeedsStatusCheck } from '../../shared/media_generation';
+import { videoGenerationOptions, type VideoGenerationOptions } from '../../shared/video_generation_options';
 import React, { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { FileResourceImage, FileResourceVideo } from './FileResourceMedia';
@@ -40,6 +41,8 @@ export type MediaGenerationStudioStatus =
 
 export type MediaGenerationRequest = {
   officialOnly?: true;
+  model?: string;
+  requestId?: string;
   mode: MediaGenerationKind;
   operation: MediaGenerationOperation;
   prompt: string;
@@ -86,7 +89,7 @@ export type MediaGenerationStudioProps = MediaGenerationSources & {
   onRefreshLibrary?: () => void;
   onReferenceArtifact?: (artifact: MediaGenerationArtifact) => void;
   sourceArtifacts?: MediaGenerationArtifact[];
-  videoOptions?: Partial<Record<'text_to_video' | 'image_to_video', VideoGenerationOptions | null>>;
+  videoOptions?: Partial<Record<'text_to_video' | 'image_to_video', (VideoGenerationOptions & { provider?: string; model?: string; models?: readonly string[] }) | null>>;
   retryRequest?: MediaGenerationRequest | null;
   onModeChange: (mode: MediaGenerationKind) => void;
   onOperationChange?: (operation: MediaGenerationOperation) => void;
@@ -104,6 +107,7 @@ export type MediaGenerationStudioProps = MediaGenerationSources & {
   onSelectMedia?: (mode: MediaGenerationKind) => void;
   onGenerate: (request: MediaGenerationRequest) => void;
   onCancel?: () => void;
+  onCheckTaskStatus?: () => void;
   onRetry?: (request: MediaGenerationRequest) => void;
   onOpenArtifact: (artifact: MediaGenerationArtifact) => void;
   onSaveArtifact?: (artifact: MediaGenerationArtifact) => void;
@@ -256,6 +260,7 @@ function useMediaGenerationStudioState({
   onSelectMedia,
   onGenerate,
   onCancel,
+  onCheckTaskStatus,
   onRetry,
   onOpenArtifact,
   onSaveArtifact,
@@ -275,7 +280,14 @@ function useMediaGenerationStudioState({
   ));
   const activeOperation = operation || localOperation;
   const activeKind = mediaGenerationKindForOperation(activeOperation);
-  const selectedVideoOptions = activeOperation === 'text_to_video' || activeOperation === 'image_to_video' ? videoOptions?.[activeOperation] : null;
+  const [videoModels, setVideoModels] = useState<Partial<Record<'text_to_video' | 'image_to_video', string>>>({});
+  const videoOperation = activeOperation === 'text_to_video' || activeOperation === 'image_to_video' ? activeOperation : null;
+  const videoSelection = videoOperation ? videoOptions?.[videoOperation] : null;
+  const selectedVideoModel = videoOperation ? videoModels[videoOperation] || videoSelection?.model || '' : '';
+  const availableVideoModels = videoSelection?.models;
+  const videoModelReady = !videoOperation || !availableVideoModels || availableVideoModels.includes(selectedVideoModel);
+  const selectedVideoOptions = availableVideoModels ? videoGenerationOptions({ provider: videoSelection?.provider, model: selectedVideoModel }) : videoSelection;
+  const chooseVideoModel = (value: string) => { if (videoOperation) setVideoModels(current => ({ ...current, [videoOperation]: value })); };
   const videoSizeValues = selectedVideoOptions?.sizes || VIDEO_SIZE_VALUES;
   const videoDurations = selectedVideoOptions?.durations || [5, 6, 10];
   const library = libraryArtifacts.filter(artifact => artifact.kind === activeKind);
@@ -298,6 +310,7 @@ function useMediaGenerationStudioState({
       ? Boolean(referenceImage.trim())
       : true;
   const requestToRetry = retryRequest || lastRequest;
+  const needsStatusCheck = mediaGenerationNeedsStatusCheck(status, statusDetail);
 
   useEffect(() => {
     if (operation) {
@@ -360,7 +373,9 @@ function useMediaGenerationStudioState({
     : videoSizeValues.map(value => {
         const [width, height] = value.split('x').map(Number);
         const ratio = width === height ? '1:1' : width / height > 1.6 ? '16:9' : height / width > 1.6 ? '9:16' : width > height ? '4:3' : '3:4';
-        return { value, label: `${ratio} · ${value}` };
+        const resolution = value === '624x624' ? 480 : Math.min(width, height);
+        const quality = [480, 720, 1080].includes(resolution) ? `${resolution}p · ` : '';
+        return { value, label: `${quality}${ratio} · ${value}` };
       });
 
   const operationOptions: Array<{
@@ -390,6 +405,7 @@ function useMediaGenerationStudioState({
       operation: activeOperation,
       prompt: prompt.trim(),
       size,
+      ...(videoOperation && selectedVideoModel ? { model: selectedVideoModel } : {}),
     } as const;
     if (activeOperation === 'text_to_image') return { ...base, count };
     if (activeOperation === 'image_edit') {
@@ -420,7 +436,7 @@ function useMediaGenerationStudioState({
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     const normalizedPrompt = prompt.trim();
-    if (!normalizedPrompt || isWorking || (sourceRequired && !hasRequiredSource)) return;
+    if (!normalizedPrompt || isWorking || needsStatusCheck || !videoModelReady || (sourceRequired && !hasRequiredSource)) return;
     const request = buildRequest();
     setGallery('current');
     setLastRequest(request);
@@ -428,7 +444,8 @@ function useMediaGenerationStudioState({
   };
 
   const retry = () => {
-    if (!requestToRetry || isWorking) return;
+    if (!requestToRetry || isWorking || needsStatusCheck || !videoModelReady
+      || (availableVideoModels && !availableVideoModels.includes(requestToRetry.model || videoSelection?.model || ''))) return;
     setGallery('current');
     setLastRequest(requestToRetry);
     if (onRetry) onRetry(requestToRetry);
@@ -478,7 +495,7 @@ function useMediaGenerationStudioState({
     : activeKind === 'image'
       ? copy.generateImage
       : copy.generateVideo;
-  return { isZh: locale === 'zh', activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, taskActivity, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference };
+  return { isZh: locale === 'zh', activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, taskActivity, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, selectedVideoModel, availableVideoModels, videoModelReady, chooseVideoModel, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, onCheckTaskStatus, needsStatusCheck, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference };
 }
 
 export function MediaGenerationStudio(props: Parameters<typeof useMediaGenerationStudioState>[0]) {
@@ -486,7 +503,7 @@ export function MediaGenerationStudio(props: Parameters<typeof useMediaGeneratio
 }
 
 function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGenerationStudioState>) {
-  const { isZh, activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, taskActivity, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference } = input;
+  const { isZh, activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, taskActivity, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, selectedVideoModel, availableVideoModels, videoModelReady, chooseVideoModel, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, onCheckTaskStatus, needsStatusCheck, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference } = input;
 
 
   return (
@@ -631,7 +648,7 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <label className="space-y-2 text-[11px] font-bold text-white/48">
-              <span>{copy.frameRatio}</span>
+              <span>{activeKind === 'video' ? copy.videoFrame : copy.frameRatio}</span>
               <select
                 value={size}
                 onChange={event => setSize(event.target.value)}
@@ -668,11 +685,19 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
             ) : <div aria-hidden="true" />}
           </div>
 
+          {activeKind === 'video' && availableVideoModels && <label className="mt-4 block space-y-2 text-[11px] font-bold text-white/48">
+            <span>{copy.videoModel}</span>
+            <select aria-label={copy.videoModel} value={selectedVideoModel} disabled={isWorking || availableVideoModels.length === 0} onChange={event => chooseVideoModel(event.target.value)} className="h-11 w-full rounded-xl border border-white/10 bg-[#080d15] px-3 text-xs text-white/75 outline-none focus:border-cyan-200/35 disabled:opacity-45">
+              {!availableVideoModels.includes(selectedVideoModel) && <option value={selectedVideoModel} disabled>{selectedVideoModel || copy.chooseAvailableModel}</option>}
+              {availableVideoModels.map(model => <option key={model} value={model}>{model}</option>)}
+            </select>
+            {!videoModelReady && <p role="alert" className="font-normal text-amber-100/65">{availableVideoModels.length ? copy.modelUnavailable : copy.modelCatalogUnavailable}</p>}
+          </label>}
           {selectedVideoOptions?.fixedDuration && <p className="mt-3 text-[11px] leading-5 text-amber-100/65">{copy.fixedVideoDuration}</p>}
           <div className="mt-6 flex flex-col gap-2 sm:flex-row">
             <button
               type="submit"
-              disabled={!prompt.trim() || isWorking || !hasRequiredSource}
+              disabled={!prompt.trim() || isWorking || needsStatusCheck || !hasRequiredSource || !videoModelReady}
               className="flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl border border-cyan-100/20 bg-cyan-200 text-sm font-black text-[#031015] shadow-[0_12px_36px_rgba(34,211,238,0.18)] transition-all hover:-translate-y-0.5 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0"
             >
               {isWorking ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
@@ -693,7 +718,11 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
             )}
           </div>
 
-          {(status === 'error' || status === 'cancelled') && requestToRetry && (
+          {needsStatusCheck && <div className="mt-3 space-y-2 text-xs text-amber-100/70" role="alert">
+            <p>{copy.taskStatusCheckRequired}</p>
+            {onCheckTaskStatus && <button type="button" onClick={onCheckTaskStatus} disabled={isWorking} className="h-10 rounded-xl border border-amber-200/20 bg-amber-200/5 px-4 font-bold">{copy.checkTaskStatus}</button>}
+          </div>}
+          {!needsStatusCheck && (status === 'error' || status === 'cancelled') && requestToRetry && (
             <button
               type="button"
               onClick={retry}

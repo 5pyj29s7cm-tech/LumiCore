@@ -22,6 +22,10 @@ beforeAll(async () => {
 const images = () => [{ kind: 'image' as const, fileName: 'uploaded-photo.png', path: sourcePath }];
 
 describe('natural chat video execution', () => {
+  it.each(['修改这个视频，把背景换成雪景', '修改刚才生成的视频，把背景换成雪景', 'Edit this video and make the lighting warmer.'])('does not turn %s into a deterministic new generation', text => {
+    expect(resolveChatVideoRequest(text, images(), scope)).toBeNull();
+    expect(resolveChatVideoRequest(text, [], scope)).toBeNull();
+  });
   it.each(['这个帮我做个tiktok的推广视频，30秒的', '帮我做个推广视频', '用这张照片做成视频', '请帮我生成一段视频：镜头缓慢移动。'])('binds %s to the uploaded first frame and video tool', text => {
     const request = resolveChatVideoRequest(text, images(), scope)!;
     expect(request).toMatchObject({ operation: 'image_to_video', referenceImage: fs.realpathSync(sourcePath), prompt: text });
@@ -155,4 +159,14 @@ it('does not revive a video for a complaint, an unrelated document confirmation,
 it('keeps the original video brief when incidental tool events fill the raw history window', () => {
   const history = [...confirmedVideoHistory.slice(0, -1), ...Array.from({ length: 40 }, () => ({ role: 'tool', message: '[Tool: client_capability_manifest] Done' })), confirmedVideoHistory.at(-1)!];
   expect(resolveChatVideoRequest('确认', images(), scope, history)).toMatchObject({ duration: 30, size: '1920x1080' });
+});
+
+it.each([['480p', '480x832'], ['720P', '720x1280'], ['1080p', '1080x1920']])('preserves chat quality %s with TikTok portrait framing', (quality, size) => {
+  const request = resolveChatVideoRequest('用这张图生成15秒的tiktok宣传视频，'+quality, images(), scope)!;
+  expect(request).toMatchObject({ size, duration: 15 });
+  expect(structuredMediaToolCall(request)).toMatchObject({ arguments: { size, duration: 15 } });
+});
+it('honors landscape quality and explicit dimensions in chat', () => {
+  expect(resolveChatVideoRequest('生成15秒横屏视频，720p', [], scope)).toMatchObject({ size: '1280x720' });
+  expect(resolveChatVideoRequest('生成15秒视频，720p，1080×1920', [], scope)).toMatchObject({ size: '1080x1920' });
 });

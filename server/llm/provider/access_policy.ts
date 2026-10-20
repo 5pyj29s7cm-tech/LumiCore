@@ -38,7 +38,7 @@ export function assertProviderAllowedByPrivacy(config: LLMCallConfig): void {
   }
   requireLocalProvider(config.provider);
   if (isProviderLocalOnly(config.provider)) {
-    requireLocalEndpoint(getLocalModelConfig(config.provider as LocalModelProvider).baseUrl, 'Local language model');
+    requireLocalEndpoint(getLocalModelConfig(config.provider as LocalModelProvider).baseUrl, 'Local language model', true);
   }
 }
 

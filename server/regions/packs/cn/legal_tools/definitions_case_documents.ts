@@ -5,7 +5,7 @@ import { reasoningMatrixHandler } from "./case_workspace";
 import { generateLitigationPacketHandler, prepareFilingHandoffHandler } from "./litigation_packet";
 import { extractDisputeFocusHandler, generateArgumentOrOpinionHandler } from "./argument_drafting";
 import { analyzeFolderAndDraftArgumentHandler } from "./folder_analysis";
-import { defineLegalTool, stringField, numberField, booleanField, stringListField, CASE_ARCHIVE_FIELDS } from "./tool_contracts";
+import { LEGAL_TEMPORAL_FIELDS, defineLegalTool, stringField, numberField, booleanField, stringListField, CASE_ARCHIVE_FIELDS } from "./tool_contracts";
 
 export function case_documentsTools(): ToolDefinition[] {
   return [
@@ -41,6 +41,7 @@ export function case_documentsTools(): ToolDefinition[] {
     name: 'legal_case_reasoning_matrix',
     description: '法律分析三段论底稿 — 围绕争议焦点生成“大前提/小前提/涵摄结论”办案分析矩阵，覆盖检索法律、解释法律、类案补强、待证事实、证据材料、举证质证和可转化文书成果，并可归档到案件空间。',
     properties: {
+      ...LEGAL_TEMPORAL_FIELDS,
       ...CASE_ARCHIVE_FIELDS,
       role: stringField('我方身份：原告/被告/申请人/被申请人等'),
       cause: stringField('caseType 的别名'),

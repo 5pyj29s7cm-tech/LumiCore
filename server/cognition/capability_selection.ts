@@ -399,7 +399,7 @@ function selectLane(input: LumiCapabilitySelectionInput, analysis: TurnAnalysis)
     };
   }
 
-  if (input.execution.allowToolUse && input.dispatch.flow.currentAppEditTarget) {
+  if (input.execution.allowToolUse && input.dispatch.flow.currentAppEditTarget && input.dispatch.flow.desktopExecutionPreference !== 'external') {
     const appTarget = input.dispatch.flow.currentAppEditTarget;
     return {
       lane: 'desktop_control',
@@ -650,7 +650,7 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
   const routeText = input.text || input.dispatch.flow.routeText || '';
   const actionContract = analysis.contract(routeText);
   const visibleAutoCad = selected.lane === 'design_cad' && requiresVisibleAutoCadExecution(routeText);
-  const recoveredCurrentAppEdit = Boolean(input.dispatch.flow.currentAppEditTarget);
+  const recoveredCurrentAppEdit = Boolean(input.dispatch.flow.currentAppEditTarget) && input.dispatch.flow.desktopExecutionPreference !== 'external';
   const modelPolicy = buildModelCapabilityPolicy(input.execution);
   const hardAllowed = new Set((modelPolicy.allowedTools || []).filter(Boolean));
   const hardWildcard = hardAllowed.has('*');
@@ -661,7 +661,11 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
   const desktopObservationTools = buildDesktopObservationPlan(routeText)
     .map(call => call.name)
     .filter(isHardAuthorized);
+  const externalDesktopExecution = input.dispatch.flow.desktopExecutionPreference === 'external'
+    && input.execution.allowToolUse && input.dispatch.flow.workSurfaceRoute.directDesktop
+    && !recoveredCurrentAppEdit;
   const basePreferredTools = unique([
+    ...(externalDesktopExecution ? ['computer_use', ...desktopObservationTools].filter(isHardAuthorized) : []),
     ...(executionBeforeWorkflowSave(routeText) ? contractPreferredTools : []),
     ...skillAuthoringTools(analysis.authoring(routeText)).filter(isHardAuthorized),
     ...essentialToolsForLane(selected.lane).filter(isHardAuthorized),
@@ -718,7 +722,8 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     readOnlyPattern
       ? `Verified read-only history hint: ${readOnlyPattern.toolNames.join(' -> ')} (confidence=${readOnlyPattern.confidence.toFixed(2)}, action=${readOnlyPattern.action}). This hint may only reorder the current authorized read tools; it does not authorize or execute anything.`
       : '',
-    laneRule(selected, routeText, preferredTools, input.dispatch.flow.currentAppEditTarget, analysis),
+    externalDesktopExecution ? 'The user selected external execution: prefer vision-guided visible desktop work over artifact/API substitution, subject to the current tool authorization. Explicit user requests for an API or artifact override this preference.' : '',
+    laneRule(selected, routeText, preferredTools, externalDesktopExecution ? '' : input.dispatch.flow.currentAppEditTarget, analysis),
     executionBeforeWorkflowSave(routeText)
       ? 'The user requested a current task AND saving its workflow. First execute and verify the current task. Pass the complete reader result as code_execution input; parsing and calculation must both be executable JavaScript, never model-retyped rows or model arithmetic. Pass the calculation output to the writer unchanged. Then capture_recent_workflow can reuse those exact verified steps and bind fresh inputs without rewriting code. If a dataflow gap remains, use save_workflow to author that missing step. Do not replace the file task with generating a new Skill. Publishing remains a separate reviewed action.'
       : analysis.authoring(routeText) !== 'none'

@@ -46,6 +46,7 @@ import {
   type RouteDefinition,
 } from "../regions/routing/tool_route_definitions";
 import {
+  hasNegatedMessagingSendIntent,
   isExplicitArtifactCreationText,
   isExternalCommitConfirmationOnlyRequest,
 } from './normalized_action_intent';
@@ -293,12 +294,6 @@ function isDirectMessagingSend(text: string): boolean {
   return /(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u5e2e\u6211\u53d1|\u53d1\u9001|\u53d1\u7ed9|\u53d1\u4e00\u4e0b|\u53d1\u4e00\u6761|\b(?:send|message)\b|(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u95ee\u4e00\u4e0b|\u95ee\u95ee|\u8be2\u95ee|\u95ee)\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u5728\u5e72\u561b|\u5728\u505a\u4ec0\u4e48|\u5e72\u561b|\u505a\u4ec0\u4e48|\u5fd9\u4ec0\u4e48|\u73b0\u5728\u600e\u4e48\u6837|\u6709\u6ca1\u6709\u7a7a)))/iu.test(text)
     && !hasNegatedMessagingSendIntent(text)
     && !/(?:\u8349\u7a3f|\u7f16\u8f91\u4e00\u4e0b|\u5148\u5199|\u4e0d\u8981\u53d1|\bdraft\b)/iu.test(text);
-}
-
-function hasNegatedMessagingSendIntent(text: string): boolean {
-  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  if (/^(?:\u6211)?(?:\u6ca1\u6709|\u6ca1|\u5e76\u672a|\u4ece\u672a|\u4e0d\u662f|\u5e76\u4e0d\u662f).{0,100}(?:\u53d1\u7ed9|\u53d1\u9001\u7ed9|\u7ed9.{0,24}\u53d1|\u8ba9\u4f60.{0,24}(?:\u53d1|\u56de\u590d|\u544a\u8bc9))/u.test(text)) return true;
-  return /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u7981\u6b62).{0,32}(?:\u53d1\u9001|\u53d1\u6d88\u606f|\u56de\u590d|\u53d1\u51fa)|\b(?:do\s+not|don't|dont|never)\b.{0,64}\b(?:send|message|reply)\b|\bwithout\b.{0,40}\b(?:sending|messaging|replying)\b/iu.test(text);
 }
 
 function hasNamedMessagingSurface(text: string): boolean {
@@ -1126,6 +1121,7 @@ export function routeToolsForTurn(
       .sort((a, b) => b.score - a.score)
       .slice(0, 16);
     for (const item of ranked) selected.add(item.name);
+    manifestPriorities.push(...ranked.map(item => item.name));
     if (ranked.length > 0) {
       categories.push('lexical_match');
       reasons.push('tool names/descriptions matched the user wording');
@@ -1244,6 +1240,7 @@ export function routeToolsForTurn(
   const orderedBeforeHealthGate = applyRoutePriority(
     resolvedSelection.toolNames,
     unique([
+      ...(categories.includes('lexical_match') ? manifestPriorities : []),
       ...externalLookupTools,
       ...visualObservationTools,
       ...artifactHandoffTools,

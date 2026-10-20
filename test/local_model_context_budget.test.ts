@@ -262,9 +262,9 @@ describe('local model context budget', () => {
     })).toThrow(/complete assistant tool_call\/tool receipt boundary/i);
   });
 
-  it('retains the annotated source and a trailing synthetic user through local-model compaction', () => {
+  it('rejects rather than clipping an oversized annotated source and trailing synthetic user', () => {
     const sourceMessageId = 'local-durable-source-1';
-    const prepared = prepareLocalModelRequest({
+    const request = () => prepareLocalModelRequest({
       messages: [
         { role: 'system', content: `Safety boundary. ${'large policy '.repeat(1_500)}` },
         ...Array.from({ length: 12 }, (_, index) => ({
@@ -287,9 +287,30 @@ describe('local model context budget', () => {
       contextTokens: 4_096,
     });
 
-    const source = prepared.messages.find(message => message.sourceMessageId === sourceMessageId);
-    expect(String(source?.content)).toContain('LOCAL_ANNOTATED_SOURCE_SENTINEL');
-    expect(String(prepared.messages.at(-1)?.content)).toContain('LOCAL_SYNTHETIC_RECOVERY_SENTINEL');
+    let failure: Error | undefined;
+    try { request(); } catch (error) { failure = error as Error; }
+    expect(failure).toBeInstanceOf(LocalModelContextBudgetError);
+    expect(failure!.message).toMatch(/complete original user input/);
+    expect(failure!.message).not.toMatch(/LOCAL_ANNOTATED_SOURCE_SENTINEL|LOCAL_SYNTHETIC_RECOVERY_SENTINEL/);
+  });
+
+  it('retains the entire annotated source and trailing synthetic turn when both fit after history compaction', () => {
+    const sourceMessageId = 'local-fitting-source';
+    const sourceText = `LOCAL_ANNOTATED_SOURCE_SENTINEL ${'accepted instruction '.repeat(20)}`;
+    const syntheticText = `LOCAL_SYNTHETIC_RECOVERY_SENTINEL ${'synthetic guidance '.repeat(20)}`;
+    const prepared = prepareLocalModelRequest({
+      messages: [
+        { role: 'system', content: `Safety boundary. ${'large policy '.repeat(1500)}` },
+        ...Array.from({ length: 12 }, (_, index) => ({ role: index % 2 === 0 ? 'user' : 'assistant', content: `old turn ${index} ${'large history '.repeat(300)}` })),
+        { role: 'user', content: sourceText, sourceMessageId },
+        { role: 'assistant', content: 'Recover the interrupted execution.' },
+        { role: 'user', content: syntheticText },
+      ] as any[],
+      toolDeclarations: tools, maxTokens: 768, contextTokens: 4096,
+    });
+    expect(prepared.compacted).toBe(true);
+    expect(prepared.messages.find(message => message.sourceMessageId === sourceMessageId)?.content).toBe(sourceText);
+    expect(prepared.messages.at(-1)?.content).toBe(syntheticText);
     expect(prepared.estimatedInputTokens).toBeLessThanOrEqual(prepared.inputBudgetTokens);
   });
 

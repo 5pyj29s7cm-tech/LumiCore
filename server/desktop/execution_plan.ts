@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
+import type { NormalizedActionIntent } from '../cognition/normalized_action_intent';
 import type { LumiCapabilityLane } from '../cognition/capability_selection';
 import { isVideoPlaybackRequest } from '../cognition/media_intent';
 import { parsePlaybackGoal } from '../cognition/playback_verification';
@@ -905,7 +905,7 @@ function toolsForLayer(layer: DesktopControlLayer, family: DesktopApplicationFam
 export function buildDesktopExecutionPlan(input: {
   text: string;
   lane: LumiCapabilityLane;
-  capabilityExecutionPlan?: CapabilityExecutionPlan;
+  actionIntent?: NormalizedActionIntent;
   taskId?: string;
   recoveredCurrentAppEdit?: boolean;
 }): DesktopExecutionPlan {
@@ -914,20 +914,20 @@ export function buildDesktopExecutionPlan(input: {
   // the existing unknown-application boundary while observing the actual
   // explicitly selected player, rather than looking for the whole sentence.
   const playbackPlayer = isVideoPlaybackRequest(input.text) ? parsePlaybackGoal(input.text).player : '';
-  const requestedTarget = String(playbackPlayer || input.capabilityExecutionPlan?.intent.target || input.text || '').trim();
-  const sideEffectClass = input.capabilityExecutionPlan?.risk.sideEffectClass || 'none';
-  const operation = input.capabilityExecutionPlan?.intent.operation || 'mutate';
+  const requestedTarget = String(playbackPlayer || input.actionIntent?.target || input.text || '').trim();
+  const sideEffectClass = input.actionIntent?.sideEffectClass || 'none';
+  const operation = input.actionIntent?.operation || 'mutate';
   const verificationProfile = desktopVerificationProfile({
     text: input.text,
     operation,
-    intentKind: input.capabilityExecutionPlan?.intent.kind,
+    intentKind: input.actionIntent?.kind,
     sideEffectClass,
   });
   const layers = input.recoveredCurrentAppEdit
     ? application.controlLayers.filter(layer => layer === 'windows_uia')
     : application.controlLayers;
   const effectiveLayers = layers.length ? layers : ['windows_uia' as const];
-  const taskId = input.taskId || input.capabilityExecutionPlan?.taskId || '';
+  const taskId = input.taskId || '';
   const steps: DesktopActionStep[] = [{
     stepId: 'observe-target',
     operation: 'observe',

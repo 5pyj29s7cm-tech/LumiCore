@@ -31,8 +31,8 @@ function zonedParts(userId: string, instant: Date): number[] {
 }
 
 /** Wall-clock calendar fields for display. Use Date.now() for elapsed time. */
-export function getUserNow(userId: string): Date {
-  const [year, month, day, hour, minute, second] = zonedParts(userId, new Date());
+export function getUserNow(userId: string, instant = new Date()): Date {
+  const [year, month, day, hour, minute, second] = zonedParts(userId, instant);
   return new Date(year, month - 1, day, hour, minute, second);
 }
 
@@ -54,8 +54,8 @@ export function getUserDayRange(userId: string, instant = new Date()): { after: 
 
 // ── Date queries ──
 
-export function getDateString(userId: string): string {
-  const now = getUserNow(userId);
+export function getDateString(userId: string, instant = new Date()): string {
+  const now = getUserNow(userId, instant);
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 

@@ -35,7 +35,6 @@ interface NodeDetailPanelProps {
     isCore?: boolean;
     isBranch?: boolean;
   } | null;
-  position?: { x: number; y: number } | null;
   onClose: () => void;
   onDelete: (id: string) => void;
   onIngest?: (id: string) => void;
@@ -54,7 +53,6 @@ const TIER_LABELS: Record<string, string> = {
 
 export function NodeDetailPanel({
   node,
-  position,
   onClose,
   onDelete,
   onIngest,
@@ -125,22 +123,14 @@ export function NodeDetailPanel({
             onClick={onClose}
           />
 
-          {/* Floating card — positioned near node or centered */}
+          <div className="fixed inset-0 z-40 flex items-center justify-center p-4 pointer-events-none">
           <motion.div
             initial={{ opacity: 0, scale: 0.85, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.85, y: 20 }}
             transition={{ type: 'spring', stiffness: 350, damping: 25 }}
-            className="fixed z-40 w-[380px] max-h-[80vh] overflow-hidden rounded-[2rem] border shadow-2xl"
+            className="pointer-events-auto flex w-[380px] max-w-full max-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-[2rem] border shadow-2xl"
             style={{
-              ...(position ? {
-                left: `${Math.min(position.x, window.innerWidth - 400)}px`,
-                top: `${Math.max(10, position.y - 200)}px`,
-              } : {
-                left: '50%',
-                top: '50%',
-                transform: 'translate(-50%, -50%)',
-              }),
               background: `radial-gradient(ellipse at 50% 0%, hsla(${node.hue}, 50%, 25%, 0.35), hsla(240, 30%, 5%, 0.95) 60%)`,
               borderColor: `hsla(${node.hue}, 40%, 40%, 0.25)`,
               boxShadow: `0 0 80px hsla(${node.hue}, 50%, 30%, 0.15), 0 30px 60px rgba(0,0,0,0.6)`,
@@ -153,7 +143,7 @@ export function NodeDetailPanel({
             />
 
             {/* Header */}
-            <div className="p-5 flex items-center gap-3">
+            <div className="p-5 flex shrink-0 items-center gap-3">
               <div
                 className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
                 style={{ background: `hsla(${node.hue}, 50%, 40%, 0.2)`, border: `1px solid hsla(${node.hue}, 40%, 40%, 0.3)` }}
@@ -183,7 +173,7 @@ export function NodeDetailPanel({
             </div>
 
             {/* Content */}
-            <div className="px-5 pb-5 space-y-4 max-h-[50vh] overflow-y-auto custom-scrollbar">
+            <div className="min-h-0 flex-1 px-5 pb-5 space-y-4 overflow-y-auto custom-scrollbar">
               {/* File content */}
               {node.type === 'file' && node.fileData && (
                 <>
@@ -397,7 +387,7 @@ export function NodeDetailPanel({
             </div>
 
             {/* Actions */}
-            <div className="px-5 pb-5 flex items-center gap-2 flex-wrap">
+            <div className="px-5 pb-5 flex shrink-0 items-center gap-2 flex-wrap">
               {node.type === 'file' && (
                 <>
                   {onReferenceInChat && (
@@ -464,6 +454,7 @@ export function NodeDetailPanel({
               </button>
             </div>
           </motion.div>
+          </div>
         </>
       )}
     </AnimatePresence>

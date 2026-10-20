@@ -79,8 +79,8 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       break;
     case 'start_meeting_mode':
       expectedState = ['mode:meeting', 'surface:meeting:open'];
-      verification = 'Client mode should be meeting and meeting capture/notes should be active.';
-      naturalCompletion = 'Meeting mode is active.';
+      verification = 'Client mode should be meeting and the meeting workspace should be open; this does not verify microphone capture.';
+      naturalCompletion = 'The meeting workspace is open. Click Start recording to begin capture.';
       naturalPending = 'I asked to start meeting mode, but the latest state has not confirmed it yet.';
       break;
     case 'end_meeting_mode':

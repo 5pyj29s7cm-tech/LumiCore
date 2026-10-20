@@ -24,7 +24,26 @@ describe('legal registration public contract', () => {
     const definitions: ToolDefinition[] = [];
     registerLegalTools({ register: (definition: ToolDefinition) => { definitions.push(definition); return true; } } as unknown as ToolRegistry);
     const expected = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'test/fixtures/legal_registration_contract.json'), 'utf8'));
-    expect(publicContract(definitions)).toEqual(publicContract(expected));
+
+    // Reviewed optional time inputs extend the original schema without changing its rights or required fields.
+    const temporalTools = new Set(["legal_verify_citation","legal_generate_citation_verification_report","legal_finalize_delivery_package","legal_case_reasoning_matrix","legal_case_workspace","legal_case_workflow_status","legal_message_intake_to_case"]);
+    for (const tool of definitions.filter(tool => temporalTools.has(tool.name))) {
+      const prior = expected.find((row: ToolDefinition) => row.name === tool.name);
+      for (const key of ['factDate', 'procedureDate', 'temporalReviews']) {
+        expect(tool.parameters.required || []).not.toContain(key);
+        expect(prior.parameters.properties).not.toHaveProperty(key);
+      }
+      expect(tool.parameters.properties).toMatchObject({ factDate: { type: 'string' }, procedureDate: { type: 'string' }, temporalReviews: { type: 'array' } });
+    }
+    const comparable = JSON.parse(JSON.stringify(definitions));
+    for (const tool of comparable.filter((row: ToolDefinition) => temporalTools.has(row.name))) {
+      for (const key of ['factDate', 'procedureDate', 'temporalReviews']) delete tool.parameters.properties[key];
+    }
+    const quoteTool = comparable.find((row: ToolDefinition) => row.name === 'legal_verify_citation');
+    expect(quoteTool.parameters.required || []).not.toContain('quotedText');
+    expect(quoteTool.parameters.properties.quotedText).toMatchObject({ type: 'string' });
+    delete quoteTool.parameters.properties.quotedText;
+    expect(publicContract(comparable)).toEqual(publicContract(expected));
     expect(new Set(definitions.map(tool => tool.name)).size).toBe(32);
     const archiveTools = definitions.filter(tool => archiveKeys.every(key => tool.parameters.properties[key]));
     expect(archiveTools).toHaveLength(16);

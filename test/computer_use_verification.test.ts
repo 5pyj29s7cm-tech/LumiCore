@@ -331,6 +331,7 @@ describe('computer use completion verification', () => {
     const desktop = createDesktopRelay();
     const context = {
       userId: 'desktop-lease-user',
+      userConfirmed: true,
       desktopRelay: desktop.relay,
       llmGetters: { getDeepSeek: () => null, getGemini: () => null, getOpenAI: () => ({}) },
     };

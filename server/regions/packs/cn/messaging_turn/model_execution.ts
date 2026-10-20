@@ -2,21 +2,26 @@ import type { ExecutedLumiTurn, AssembledLumiTurnData } from "../../../../cognit
 import type { MessageHandler } from "../../../../messaging/types";
 import { MessagingAuthorizationRevokedError } from "../../../../messaging/turn_authorization";
 import { toolRegistry } from "../../../../tools/registry";
+import { decodeToolResult } from "../../../../tools/result_envelope";
+import { sanitizePublicExecutionText } from "../../../../../shared/public_execution_language";
 import { setConversationActionExecutionStatus } from "../../../../conversation/manager";
 import { formatPendingConfirmationRequest } from "../../../../tools/pending_confirmation";
 import { saveStoredOperationMode } from "../../../../cognition/operation_mode_store";
 import { persistRemotePostTurnLearning } from "../remote_memory";
 import { CN_TASK_EXECUTION_MESSAGES } from "../../../messages/task_execution_messages";
+import { CN_MESSAGING_MESSAGES } from '../../../messages/messaging_messages';
 import { setOrganizationWorkItemExecutionStatus } from "../../../../org/work_routing";
 import { mergeToolExecutionRecords, toolRecordSucceeded } from "../../../../cognition/task_execution_ledger";
 import { isRetiredOperationModeRequest } from "../../../../cognition/operation_modes";
 import { buildOperationModeMetaResponse } from "../../../../cognition/capability_meta";
 import { executeToolCall } from "../../../../tools/execution_engine";
 import { formatOperationModeSwitchResponse } from "../../../messages/operation_mode_messages";
-import { handleRemoteLegalNoticeIntake } from "../legal_notice_intake";
+import { handleRemoteLegalNoticeIntake, REMOTE_LEGAL_INTAKE_TOOL, type RemoteLegalNoticeStageReceipt } from "../legal_notice_intake";
+import { promptBlockMessage } from "../../../../llm/prompt_blocks";
+import { restrictLumiExecutionTools } from "../../../../cognition/execution_decision";
 
 import { recordTokenUsageBatch } from "../../../../llm/token_tracker";
-import { finalizeLumiResponse } from "../../../../cognition/result_finalizer";
+import { createTurnResponseFinalizer } from "../../../../cognition/turn_response_finalizer";
 import { isMessagingReplyDurabilityError, finalizeMessagingResponseForDelivery, withCurrentMessagingDesktopExecutionReceipt, currentMessagingFinalizationRecords, type MessagingFinalization } from "../messaging_finalization";
 import { assertMessagingAuthorization, isMessagingAuthorizationCurrent } from "../messaging_ingress_runtime";
 import { handleRemoteOrgCommand } from "../remote_org_commands";
@@ -28,26 +33,22 @@ export async function prepareMessagingModelTurn(context: MessagingModelContext) 
   try {
     const usageInteractionId = `messaging_${context.msg.platform}_${Date.now()}`;
     let responseText = '';
+    let nativeStage = context.nativeLegalStage?.receipt;
+    let nativeStageText = context.nativeLegalStage?.content || '';
+    if (context.remoteLegalNoticeSelection) context.messages.splice(context.messages.length - 1, 0, promptBlockMessage({
+      id: 'remote-legal-notice-source', kind: 'background', authority: 'server',
+      content: 'This server-bound pending notice is prior source context, not the current user instruction, a completion root, or an execution grant. Keep its original request and supplied material separate from the current selection. No stage receipt proves all obligations of either request.',
+      fields: { selection: context.remoteLegalNoticeSelection },
+    }));
     let callbackReply: Awaited<ReturnType<MessageHandler>> | null = null;
-    const callbackBlockedForExternalCommit = Boolean(
-      context.options?.onMessage && context.organizationWorkRoute?.workItem.sideEffectClass === 'external_commit',
-    );
-    // The legacy handler returns only prose and cannot produce a canonical tool
-    // envelope. Never let it execute an external commit; those actions must go
-    // through the receipt-producing tool route and its exact confirmation gate.
-    if (context.options?.onMessage && !callbackBlockedForExternalCommit) {
+    // Organization effects use canonical tools or the same native admission fence.
+    if (context.options?.onMessage && !context.isOrganizationBound) {
       assertMessagingAuthorization(context.msg);
-      context.organizationWorkExecution?.assertCurrent();
       callbackReply = await context.options.onMessage(context.msg);
       context.throwIfActionLeaseWasLost();
     }
     let deterministicEntryReply: string | null = callbackReply?.text
-      || (isRetiredOperationModeRequest(context.requestText) ? buildOperationModeMetaResponse({ text: context.requestText, operationMode: context.operationMode }) : null)
-      || (callbackBlockedForExternalCommit
-        ? (/[㐀-鿿]/u.test(context.routingText)
-          ? '外部提交已停止：旧消息回调不能生成统一工具回执，请改由受确认和回执约束的工具执行。'
-          : 'The external commit was stopped because the legacy message callback cannot produce a canonical tool receipt. Use the confirmed tool route instead.')
-        : null);
+      || (isRetiredOperationModeRequest(context.requestText) ? buildOperationModeMetaResponse({ text: context.requestText, operationMode: context.operationMode }) : null);
     if (deterministicEntryReply) responseText = deterministicEntryReply;
 
     if (context.isIdentityBound && context.directlyAppliedMode && !deterministicEntryReply) {
@@ -107,74 +108,113 @@ export async function prepareMessagingModelTurn(context: MessagingModelContext) 
       }), data: undefined, deliver: undefined };
     }
 
-    if (!deterministicEntryReply && context.isOrganizationBound) {
+    if (!deterministicEntryReply) {
       assertMessagingAuthorization(context.msg);
-      deterministicEntryReply = await handleRemoteLegalNoticeIntake(context.msg, {
-        isCancelled: context.actionWasCancelled,
-        executionSignal: context.actionAbortController.signal,
-      });
+      const nativeReply = nativeStage ? null : await handleRemoteLegalNoticeIntake(context.msg, context.remoteToolContext);
       assertMessagingAuthorization(context.msg);
-      if (!deterministicEntryReply) {
-        context.organizationWorkExecution?.assertCurrent();
-        deterministicEntryReply = await handleRemoteOrgCommand(context.msg, () => context.organizationWorkExecution?.assertCurrent());
+      if (nativeReply) {
+        const decoded = decodeToolResult(nativeReply);
+        const stage = decoded.receipt as RemoteLegalNoticeStageReceipt | undefined;
+        if (stage?.kind !== 'legal_notice_intake_stage' || stage.version !== 1
+          || stage.requestId !== context.requestId || stage.taskId !== context.actionTaskExecution.state?.taskId
+          || (stage.orgId || '') !== context.orgId) throw new Error('The native intake stage does not belong to this accepted request.');
+        nativeStage = stage; nativeStageText = decoded.content;
+        await context.retainNativeLegalStage({ receipt: stage, content: decoded.content }, context.toolRecords);
       }
-      if (deterministicEntryReply) {
-        responseText = deterministicEntryReply;
-        context.toolRecords.push({
-          id: `${context.requestId}:organization-command`,
-          taskId: context.actionTaskExecution.state?.taskId,
-          turnId: context.msg.messageId,
-          turnRowId: context.actionTaskExecution.turnRowId,
-          externalMessageId: context.msg.messageId,
-          resolutionId: context.executionPlan.resolution.id,
-          requestId: context.requestId,
-          idempotencyKey: `${context.organizationWorkRoute?.workItem.id || context.requestId}:organization-command`,
-          name: 'organization_business_command',
-          arguments: {
-            source: context.source,
-            requestId: context.requestId,
-            workItemId: context.organizationWorkRoute?.workItem.id || '',
-          },
-          result: JSON.stringify({
-            ok: true,
-            verified: true,
-            status: 'completed',
-            verificationMethod: 'organization-server-transaction',
-            workItemId: context.organizationWorkRoute?.workItem.id || '',
-          }),
-          terminalVerification: {
-            status: 'verified',
-            strategy: 'terminal_receipt',
-            reason: 'The organization server transaction returned a verified local receipt.',
-          },
-          envelope: {
-            version: 1,
-            status: 'verified_success',
-            toolName: 'organization_business_command',
-            resolutionId: context.executionPlan.resolution.id,
-            taskId: context.actionTaskExecution.state?.taskId || '',
+      if (nativeStage) {
+        context.remoteToolContext.priorToolRecords = context.taskAwareRecords(context.toolRecords);
+        // The stage consumes this one native action; remaining prose cannot change its arguments and write again.
+        const narrowed = restrictLumiExecutionTools(context.executionPlan.execution, [REMOTE_LEGAL_INTAKE_TOOL]);
+        context.executionPlan.execution = narrowed;
+        context.executionPlan.authorizationPolicy = narrowed.toolPolicy;
+        context.remoteToolContext.toolPolicy = narrowed.toolPolicy;
+        context.executionPlan.modelToolProjection = { ...context.executionPlan.modelToolProjection,
+          toolNames: context.executionPlan.modelToolProjection.toolNames.filter(name => name !== REMOTE_LEGAL_INTAKE_TOOL) };
+        context.executionPlan.executionRequested = context.executionPlan.executionRequested
+          && narrowed.allowToolUse && context.executionPlan.modelToolProjection.toolNames.length > 0;
+        context.messages.splice(context.messages.length - 1, 0, promptBlockMessage({
+          id: 'remote-legal-notice-stage', kind: 'receipt', authority: 'server', required: true,
+          content: 'Only the case-material archive stage has been evaluated below. Continue the current full request through the same existing tool loop if work remains. A stage report is not a generated legal document or proof that any original or current extra obligation has completed; do not repeat the archived action.',
+          fields: { stage: nativeStage, report: nativeStageText }, requiredFields: ['stage', 'report'],
+        }));
+      }
+      if (!nativeStage && !deterministicEntryReply && context.isOrganizationBound) {
+        context.organizationWorkExecution?.assertCurrent();
+        const command = await handleRemoteOrgCommand(context.msg, context.remoteToolContext);
+        if (command) {
+          const decoded = decodeToolResult(command);
+          deterministicEntryReply = decoded.content;
+          const receipt = decoded.receipt as { ok?: unknown; verified?: unknown; status?: unknown; persisted?: unknown; changedCaseIds?: unknown; articleIds?: unknown } | undefined;
+          const commandSucceeded = receipt?.ok === true && receipt.verified === true && receipt.status === 'completed';
+          const archive = {
+            persisted: commandSucceeded && receipt?.persisted === true,
+            changedCaseIds: commandSucceeded && Array.isArray(receipt?.changedCaseIds) ? receipt.changedCaseIds.filter(id => typeof id === 'string' && id.trim()) : [],
+            articleIds: commandSucceeded && Array.isArray(receipt?.articleIds) ? receipt.articleIds.filter(id => typeof id === 'string' && id.trim()) : [],
+          };
+          responseText = deterministicEntryReply;
+          context.toolRecords.push({
+            id: `${context.requestId}:organization-command`,
+            taskId: context.actionTaskExecution.state?.taskId,
             turnId: context.msg.messageId,
             turnRowId: context.actionTaskExecution.turnRowId,
             externalMessageId: context.msg.messageId,
+            resolutionId: context.executionPlan.resolution.id,
             requestId: context.requestId,
             idempotencyKey: `${context.organizationWorkRoute?.workItem.id || context.requestId}:organization-command`,
-            targetIdentity: context.orgId,
-            completedAt: new Date().toISOString(),
-            result: {
+            name: 'organization_business_command',
+            arguments: {
+              source: context.source,
+              requestId: context.requestId,
               workItemId: context.organizationWorkRoute?.workItem.id || '',
+            },
+            result: JSON.stringify({
+              ok: commandSucceeded,
+              verified: commandSucceeded,
+              status: commandSucceeded ? 'completed' : 'blocked',
               verificationMethod: 'organization-server-transaction',
+              ...archive,
+              workItemId: context.organizationWorkRoute?.workItem.id || '',
+            }),
+            terminalVerification: {
+              status: commandSucceeded ? 'verified' : 'failed',
+              strategy: 'terminal_receipt',
+              reason: commandSucceeded ? 'The organization server transaction returned a verified local receipt.' : 'The organization command did not confirm completion.',
             },
-            verification: {
-              status: 'verified',
-              reason: 'The organization server transaction returned a verified local receipt.',
+            envelope: {
+              version: 1,
+              status: commandSucceeded ? 'verified_success' : 'failed',
+              toolName: 'organization_business_command',
+              resolutionId: context.executionPlan.resolution.id,
+              taskId: context.actionTaskExecution.state?.taskId || '',
+              turnId: context.msg.messageId,
+              turnRowId: context.actionTaskExecution.turnRowId,
+              externalMessageId: context.msg.messageId,
+              requestId: context.requestId,
+              idempotencyKey: `${context.organizationWorkRoute?.workItem.id || context.requestId}:organization-command`,
+              targetIdentity: context.orgId,
+              completedAt: new Date().toISOString(),
+              result: {
+                workItemId: context.organizationWorkRoute?.workItem.id || '',
+                verificationMethod: 'organization-server-transaction',
+                ...archive,
+              },
+              verification: {
+                status: commandSucceeded ? 'verified' : 'failed',
+                reason: commandSucceeded ? 'The organization server transaction returned a verified local receipt.' : 'The organization command did not confirm completion.',
+              },
             },
-          },
-        });
+          });
+          }
       }
     }
     if (deterministicEntryReply && !responseText) responseText = deterministicEntryReply;
 
     const entryHandled = Boolean(deterministicEntryReply);
+    const responseFinalizer = createTurnResponseFinalizer({
+      taskText: context.routingText, flow: context.turnFlow, taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
+      pendingConfirmation: () => context.pendingConfirmationCreatedThisTurn,
+      controlPauseReason: () => context.desktopRelay?.getControlPauseReason?.() || null,
+    });
     let missingOrganizationExternalCommitReceipt = false;
     return { terminal: undefined, data: {
       systemPrompt: context.systemPrompt, messages: context.messages, taskText: context.routingText,
@@ -203,7 +243,6 @@ export async function prepareMessagingModelTurn(context: MessagingModelContext) 
       }),
       finalization: ({ result, responseText: modelText, toolRecords }) => {
         responseText = entryHandled ? responseText : modelText;
-        if (context.pendingConfirmationCreatedThisTurn) responseText = formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn);
         const deliveryText = responseText || '这次没有生成可用回复，请稍后重试。';
         const organizationVerifiedTerminalReceipt = toolRecords.some(record => {
           const verified = record.envelope?.status === 'verified_success' || record.terminalVerification?.status === 'verified';
@@ -215,7 +254,9 @@ export async function prepareMessagingModelTurn(context: MessagingModelContext) 
         });
         missingOrganizationExternalCommitReceipt = context.organizationWorkRoute?.workItem.sideEffectClass === 'external_commit'
           && !context.pendingConfirmationCreatedThisTurn && !organizationVerifiedTerminalReceipt;
-        const initialFinalization: MessagingFinalization = callbackReply
+        const initialFinalization: MessagingFinalization = context.organizationAdmissionBlocker
+          ? { text: context.organizationAdmissionBlocker, blocked: true, reason: 'organization_action_admission_blocked' }
+          : callbackReply
           && context.organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit'
           ? { text: responseText || callbackReply.text, blocked: false }
           : missingOrganizationExternalCommitReceipt
@@ -223,37 +264,36 @@ export async function prepareMessagingModelTurn(context: MessagingModelContext) 
               ? '这次外部提交还没有完成：没有收到可验证的终态回执，Lumi 已停止，且不会盲目重试。'
               : 'The external commit is not complete: no verified terminal receipt was received, so Lumi stopped and will not retry blindly.',
               blocked: true, reason: 'The external commit has no verified terminal receipt.' }
-            : finalizeLumiResponse({ taskText: context.routingText, responseText: deliveryText,
-              completionGuard: result.completionGuard, toolRecords, source: context.source,
-              flow: context.turnFlow, taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId });
+            : responseFinalizer.finalize({ responseText: deliveryText,
+              completionGuard: result.completionGuard, toolRecords, source: context.source });
         return {
           initialFinalization,
-          allowToolUse: context.toolSessionActive && !callbackReply && !entryHandled && !missingOrganizationExternalCommitReceipt,
+          allowToolUse: context.toolSessionActive && !callbackReply && !entryHandled && !nativeStage && !missingOrganizationExternalCommitReceipt && !context.organizationAdmissionBlocker,
           pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn), requiresFreshConfirmation: context.correctionRequiresFreshConfirmation, aborted: context.actionWasCancelled(),
           isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn), isAborted: context.actionWasCancelled,
-          trustedConfirmationRequestText: () => context.pendingConfirmationCreatedThisTurn
-            ? formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn) : undefined,
-          refinalize: (candidateText, records, completionGuard) => context.pendingConfirmationCreatedThisTurn
-            ? { text: formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn), blocked: false, reason: 'waiting_confirmation' }
-            : finalizeLumiResponse({ taskText: context.routingText, responseText: candidateText, completionGuard,
+          trustedConfirmationRequestText: responseFinalizer.confirmationRequestText,
+          refinalize: (candidateText, records, completionGuard) => responseFinalizer.finalize({ responseText: candidateText, completionGuard,
               toolRecords: currentMessagingFinalizationRecords({
                 toolRecords: withCurrentMessagingDesktopExecutionReceipt(records, context.desktopExecutionTracker, context.actionTaskExecution.state?.taskId, context.requestId),
                 taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
-              }), source: context.source + '_guard_recovery', flow: context.turnFlow,
-              taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId }),
+              }), source: context.source + '_guard_recovery' }),
         };
       },
       },
     } satisfies AssembledLumiTurnData, deliver: async (completed: ExecutedLumiTurn) => {
     context.toolRecords = completed.toolRecords;
-    const finalized = completed.finalized;
+    const finalized = nativeStage && !context.pendingConfirmationCreatedThisTurn
+      ? { ...completed.finalized, blocked: true, reason: 'native_stage_whole_request_unverified',
+          text: [nativeStageText, '当前仅核验入案阶段；本次请求的完整完成状态仍待核验。',
+            completed.finalized.blocked ? completed.finalized.text : ''].filter(Boolean).join('\n\n') }
+      : completed.finalized;
     if (context.actionLeaseWasLost()) {
       await context.actionLeaseHeartbeat!.leaseLoss;
       return CN_TASK_EXECUTION_MESSAGES.persistenceUnknown;
     }
     if (await context.settleTransferredExecution(context.toolRecords)) return '';
     context.organizationWorkExecution?.assertCurrent();
-    const committedText = await context.commitReply(finalized.text, {
+    const committedText = await context.commitReply(sanitizePublicExecutionText(finalized.text), {
       toolCalls: context.toolRecords,
       ...(finalized.blocked && context.actionTaskExecution.state?.taskId ? { terminalTaskDisposition: {
         outcome: 'blocked' as const, taskId: context.actionTaskExecution.state.taskId, requestId: context.requestId,
@@ -340,9 +380,14 @@ export async function finalizeMessagingModelFailure(err: any, context: Messaging
     if (isMessagingReplyDurabilityError(err)) throw err;
     if (await context.settleTransferredExecution(context.toolRecords)) return '';
     console.warn(`[Messaging] ${context.msg.platform} model pipeline failed:`, err?.message || err);
-    const fallback = context.toolRecords.length
-      ? '当前语言模型暂时不可用，后续处理没有完成。本次已有的执行记录已保留，请稍后继续。'
-      : '当前语言模型暂时不可用，这次处理没有完成，请稍后再试。';
+    const modelBlocker = context.organizationAdmissionBlocker || (err instanceof MessagingAuthorizationRevokedError
+      ? CN_MESSAGING_MESSAGES.executionCheckRejected
+      : context.toolRecords.length
+        ? '后续处理没有完成。本次已有的执行记录已保留，请稍后继续。'
+        : '这次处理没有完成，请稍后再试。');
+    const fallback = sanitizePublicExecutionText([context.nativeLegalStage?.content,
+      context.nativeLegalStage ? '当前仅核验入案阶段；本次请求的完整完成状态仍待核验。' : '',
+      modelBlocker].filter(Boolean).join('\n\n'));
     // The assistant write closes this request with an explicit blocked outcome;
     // never recompute completion from an earlier successful substep afterward.
     return await context.commitReply(fallback, {

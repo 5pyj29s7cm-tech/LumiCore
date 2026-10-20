@@ -75,6 +75,7 @@ reconcileBundledSkillRuntimes(
           serverConfig.command = boundIdentity.runtime!.command;
           serverConfig.args = boundIdentity.runtime!.args;
           serverConfig.cwd = boundIdentity.runtime!.cwd;
+          serverConfig.env = boundIdentity.runtime!.env;
           serverConfig.transport = 'stdio';
           serverConfig.managedSkill = boundIdentity;
           config[name] = serverConfig;

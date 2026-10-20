@@ -6,7 +6,7 @@ import { packageExists } from './package_paths';
 
 export function installDepsSync(dir: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      exec('npm install --ignore-scripts --loglevel=error --no-audit --no-fund', {
+      exec('npm install --ignore-scripts --loglevel=error --no-audit --no-fund --package-lock=false', {
         timeout: 120000,
         cwd: dir,
       }, (error, _stdout, stderr) => {

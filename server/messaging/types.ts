@@ -1,3 +1,4 @@
+import type { ServerBoundCapabilitySelection } from '../tools/types';
 /**
  * Lumi Messaging — Unified message adapter types.
  * Supports: Feishu, Telegram, WeChat, Web Chat
@@ -20,6 +21,14 @@ export interface IncomingMessage {
   attachments?: IncomingAttachment[];
   boundUserId?: string;
   boundOrgId?: string;
+  /** Server-resolved pending notice choice, captured before accepted scope freezes.
+   * This is routing context only; execution revalidates the live pending target. */
+  legalNoticeSelection?: Readonly<{
+    pendingId: string; selectionText: string; requestText: string;
+    execution?: Readonly<ServerBoundCapabilitySelection>;
+    attachments: ReadonlyArray<Pick<IncomingAttachment, 'id' | 'type' | 'fileName' | 'localPath' | 'extractedText'>>;
+    target: Readonly<{ orgId: string; orgName: string; caseId?: string; caseTitle?: string; caseNumber?: string }>;
+  }>;
   /** Server-captured binding identity. Null means unbound when the message arrived. */
   bindingAuthorization?: {
     id: string;

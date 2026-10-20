@@ -31,6 +31,8 @@ type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
 export interface LumiExecutionDecisionInput {
   analysis?: TurnAnalysis;
+  /** A validated server-bound choice from the shared pipeline, still intersected with policy. */
+  serverBoundToolName?: string;
   flow: LumiTurnFlow;
   text: string;
   /** Original accepted user instruction, never a prompt/context bridge. */
@@ -386,8 +388,8 @@ function enhanceToolRouteForFlow(
   const semanticPriority = new Set<string>();
   const categories = [...route.categories];
   const reasons = [...route.reasons];
-  const recoveredCurrentAppEdit = Boolean(flow.currentAppEditTarget);
-  const recoveredWpsCreateAndType = isWpsCreateTask(flow.routeText, flow.currentAppEditTarget);
+  const recoveredCurrentAppEdit = Boolean(flow.currentAppEditTarget) && flow.desktopExecutionPreference !== 'external';
+  const recoveredWpsCreateAndType = flow.desktopExecutionPreference !== 'external' && isWpsCreateTask(flow.routeText, flow.currentAppEditTarget);
   const actionContract = analysis.contract(semanticText);
   const authoringTools = skillAuthoringTools(analysis.authoring(semanticText));
   addAvailable(additions, available, authoringTools);
@@ -404,6 +406,7 @@ function enhanceToolRouteForFlow(
   }) || [];
   if (discoveredEvidenceTools.length) {
     addAvailable(additions, available, discoveredEvidenceTools.map(tool => tool.name));
+    addAvailable(semanticPriority, available, discoveredEvidenceTools.map(tool => tool.name));
     categories.push('capability_discovery');
     reasons.push('evidence-producing tools were matched from their own descriptions and schemas');
   }
@@ -554,7 +557,7 @@ function enhanceToolRouteForFlow(
 
 export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): LumiExecutionDecision {
   const analysis = input.analysis || new TurnAnalysis();
-  const recoveredCurrentAppEdit = Boolean(input.flow.currentAppEditTarget);
+  const recoveredCurrentAppEdit = Boolean(input.flow.currentAppEditTarget) && input.flow.desktopExecutionPreference !== 'external';
   const statusOnlyContinuation = input.flow.actionFollowupIntent === 'status' && input.queryTarget !== 'runtime_work';
   const runtimeWorkIntent = classifyRuntimeWorkIntent(
     input.flow.routeText || input.text,
@@ -589,7 +592,11 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
           ? fallbackPolicy(input.flow, input.toolRegistry, input.visibilityContext)
           : NO_TOOLS_POLICY;
   const baseToolPolicy = intersectPersonalityToolPolicy(entryToolPolicy, input.personalityToolPolicy);
-  const rawToolRoute = reviewedExternalCapabilityMatches.length > 0 && allowToolUse && !input.isSanctuary
+  const rawToolRoute = input.serverBoundToolName && allowToolUse
+    ? { toolNames: [input.serverBoundToolName], requiredTools: [input.serverBoundToolName], hardAllowlist: true,
+        categories: ['server_bound_choice'], reasons: ['one current server-validated pending capability choice'],
+        totalAvailable: input.toolDeclarations.length, maxTools: 1, truncated: false }
+    : reviewedExternalCapabilityMatches.length > 0 && allowToolUse && !input.isSanctuary
     ? {
         toolNames: reviewedExternalCapabilityMatches.map(tool => tool.name),
         categories: ['reviewed_external_capability'],
@@ -677,7 +684,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     `Boundary: ${input.flow.channel}/${input.flow.surface}; tools=${allowToolUse ? 'available' : 'off'}; policyMaxIterations=${toolPolicy.maxIterations || 0}.`,
     allowToolUse ? 'For file/screen/document actions, do not answer with a future-tense promise such as "I will read/open/review it now" as the final response. Call the actual read/open/review tool in this turn. If no readable path/content is available, say clearly that no tool has run yet and ask for the file or location.' : '',
     allowToolUse ? 'The current tool declaration list is authoritative. Never invent a special tool mode or ask the user to switch to a fictional Fetcher/System Diagnostics mode. For an evidence-bearing check, state only conclusions supported by current-turn receipts and preserve each tool\'s stated limitations.' : '',
-    clientActionToolPolicy ? 'Use only Lumi client state/action tools for this turn. First read client_get_state when the current state is not already in the tool result, then call client_action. Trust the returned verification.status: verified=done, pending=state not confirmed yet, failed=diagnose or one safe recovery. Do not claim a mode/window/surface changed from intention alone.' : '',
+    clientActionToolPolicy ? 'Use only Lumi client state/action tools for this turn. Read client_get_state when the current state is not already in the tool result. Trust the returned verification.status: verified=done, pending=state not confirmed yet, failed=diagnose or one safe recovery. Do not claim a mode/window/surface changed from intention alone.' : '',
     selfRepairToolPolicy
       ? selfRepairToolPolicy.allowedTools.includes('client_self_repair')
         ? 'Inspect Lumi/client state first. Perform at most one explicitly requested safe recovery, then verify it from a fresh receipt.'

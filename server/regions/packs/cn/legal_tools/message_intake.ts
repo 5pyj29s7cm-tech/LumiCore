@@ -1,6 +1,6 @@
 import * as LegalCases from "../../../../org/legal_cases";
 import { legalWrite } from "../../../../legal/execution";
-import { legalWorkspaceId, textArg, listArg } from "./context";
+import { legalTemporalOptions, legalWorkspaceId, textArg, listArg } from "./context";
 import { normalizeLegalCaseStage } from "./case_workflow";
 import { processNoticeLinkHandler } from "./notice_intake";
 import { evaluateCurrentLawGate, formatCitationList } from "./citations";
@@ -65,23 +65,6 @@ function attachmentContentBlocks(value: unknown): string[] {
   }).filter(Boolean);
 }
 
-function extractCaseNameFromLegalMessage(message: string): string {
-  const patterns = [
-    /(?:归档|保存|入案|放入|放到|加入|新建|创建).{0,16}(?:案件|案号|卷宗)?[：:\s「《"]*([^，。；;\n」》"]{2,80})/,
-    /(?:案件|案号|卷宗)[：:\s「《"]+([^，。；;\n」》"]{2,80})/,
-  ];
-  for (const pattern of patterns) {
-    const match = message.match(pattern);
-    if (match?.[1]) {
-      return match[1]
-        .replace(/^(里|中|内|为|是|材料|链接|短信|通知)/, '')
-        .trim()
-        .slice(0, 80);
-    }
-  }
-  return '';
-}
-
 function extractSpecificCourtFromLegalMessage(message: string): string {
   const courts = Array.from(String(message || '').matchAll(/[\u4e00-\u9fa5]{2,40}(?:人民法院|法院)/g))
     .map(match => match[0])
@@ -123,7 +106,7 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
   const specificCourt = extractSpecificCourtFromLegalMessage(messageText);
   if (specificCourt) hints.court = specificCourt;
   let caseFile = textArg(args, 'caseId') ? LegalCases.getCase(orgId, textArg(args, 'caseId'), userId, 'write') : null;
-  const explicitCaseName = textArg(args, 'caseName') || textArg(args, 'title') || extractCaseNameFromLegalMessage(messageText);
+  const explicitCaseName = textArg(args, 'caseName') || textArg(args, 'title');
   if (!caseFile && explicitCaseName) {
     caseFile = LegalCases.listCases(orgId, explicitCaseName, 1, userId)[0] || null;
   }
@@ -177,17 +160,15 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
     '- 涉及签收、提交、缴费、撤回、和解承诺或正式对外发送的动作，不在本入案工具内自动完成。',
   ].join('\n');
 
-  let materialId = '';
   const attachmentMaterialIds: string[] = [];
   if (caseFile) {
-    const material = legalWrite(() => LegalCases.addMaterial(orgId, userId, caseFile.id, {
+    legalWrite(() => LegalCases.addMaterial(orgId, userId, caseFile.id, {
       type: 'consultation',
       title: `${legalRemoteMessagePlatformLabel(platform)}法律消息原文`,
       content: rawMaterialContent,
       fileName: attachmentNames.length === 1 ? attachmentNames[0] : undefined,
       source: legalRemoteMessageMaterialSource(platform),
     }));
-    materialId = material?.id || '';
     if (Array.isArray(args.attachments)) {
       for (const item of args.attachments) {
         if (!item || typeof item !== 'object') continue;
@@ -264,7 +245,7 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
     }
   }
 
-  const gate = evaluateCurrentLawGate(rawMaterialContent, orgId);
+  const gate = evaluateCurrentLawGate(rawMaterialContent, orgId, [], textArg(args, 'factDate'), { ...legalTemporalOptions(args), actorUserId: context?.userId });
   const workflow = caseFile
     ? LegalCases.evaluateCaseWorkflow(caseFile, {
         currentLawGate: gate.statuteChecks.length === 0 ? 'none' : gate.passed ? 'passed' : 'blocked',
@@ -274,10 +255,10 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
       })
     : null;
   const next = workflow?.nextStep
-    ? `${workflow.nextStep.label}：${workflow.nextStep.nextStep}（推荐 ${workflow.nextStep.tool}）`
+    ? `${workflow.nextStep.label}：${workflow.nextStep.nextStep}`
     : caseFile
       ? '案件基础材料已归档，后续进入持续复核。'
-      : '未归档到案件空间；提供 caseName/caseId 或允许 persistCase 后再继续。';
+      : '未归档到案件空间；选择目标案件后再继续。';
 
   return [
     '# 远程法律消息已入案',
@@ -285,11 +266,10 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
     `- 平台：${legalRemoteMessagePlatformLabel(platform)}`,
     `- 发送人：${sender}`,
     `- 案件：${caseFile?.title || caseName}`,
-    `- 案件ID：${caseFile?.id || '未归档'}`,
     `- 案号：${caseFile?.caseNumber || hints.caseNumber || '未识别'}`,
     `- 法院：${caseFile?.court || hints.court || textArg(args, 'court') || '未识别'}`,
     `- 开庭/通知日期：${caseFile?.hearingDate || hints.hearingDate || '未识别'}`,
-    `- 原文材料：${materialId || (caseFile ? '已尝试归档' : '未归档')}`,
+    `- 案件现有材料：${caseFile ? `共 ${caseFile.materials.length} 份` : '尚未入案'}`,
     `- 附件材料：${attachmentMaterialIds.length > 0 ? `已独立归档 ${attachmentMaterialIds.length} 份` : (attachmentNames.length > 0 ? '未形成独立附件材料' : '无')}`,
     `- 附件/文件：${attachmentNames.length ? attachmentNames.join('；') : '无'}`,
     `- 链接处理：${linkLine}`,

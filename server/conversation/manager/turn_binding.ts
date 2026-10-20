@@ -1,7 +1,7 @@
 import { readDatabaseTables, commitDatabaseTables } from "../../../db_layer";
 import type { Conversation } from "./contracts";
 import { parseStoredObject as parsePersistedObject } from "../../tools/receipt_payload";
-import { finalizeConversationActionRequestInDb, finalizeManagerActionTurnFromAssistant, acquireManagerActionTurnLease } from "../action_execution_runtime";
+import { finalizeConversationActionRequestInDb, finalizeManagerActionTurnFromAssistant, acquireManagerActionTurnLease, type PreparedConversationTurnUpgrade } from "../action_execution_runtime";
 import type { BoundConversationActionExecutionTurn, BindConversationActionExecutionTurnInput } from "../conversation_lifecycle";
 import { detachUnrelatedConversationActionState, hydrateConversationActionState } from "../action_state_hydration";
 
@@ -68,7 +68,7 @@ interface BindConversationActionExecutionTurnResult {
 export function bindConversationActionExecutionTurnInDb(
   db: any,
   conversation: Conversation,
-  input: BindConversationActionExecutionTurnInput,
+  input: BindConversationActionExecutionTurnInput & { preparedTurnUpgrade?: PreparedConversationTurnUpgrade },
   reuseExistingLease: boolean,
 ): BindConversationActionExecutionTurnResult {
   const requestId = String(input.requestId || '').trim();
@@ -85,11 +85,19 @@ export function bindConversationActionExecutionTurnInDb(
     )
   ));
   if (!row) return { turn: null, failure: 'stale' };
+  if (input.preparedTurnUpgrade) {
+    const turn = (db.conversationActionTurns || []).find((item: any) => item.id === input.preparedTurnUpgrade!.turnRowId
+      && item.userId === input.userId && item.conversationId === input.conversationId && item.requestId === requestId);
+    if (!turn || turn.userMessageId !== userMessageId || turn.taskId || row.message !== input.preparedTurnUpgrade.transcriptText
+      || (db.conversationActionReceipts || []).some((receipt: any) => receipt.conversationId === input.conversationId
+        && receipt.requestId === requestId)) return { turn: null, failure: 'stale' };
+  }
   const lease = acquireManagerActionTurnLease({
     conversationId: input.conversationId,
     userId: input.userId,
     requestId,
     reuseExistingLease,
+    preparedTurnUpgrade: input.preparedTurnUpgrade,
   });
   if (lease.acquired === false) return { turn: null, failure: lease.reason };
 

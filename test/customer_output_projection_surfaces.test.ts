@@ -8,6 +8,8 @@ import {
   sanitizeAgentStreamingTextForDisplay,
 } from '../src/lib/agentResponseDelivery';
 import { containsInternalExecutionLanguage } from '../shared/public_execution_language';
+import { normalizeChatHistoryRecord } from '../server/socket/chat/history';
+import { normalizeVoiceHistoryRecord } from '../server/socket/voice_history';
 
 const root = process.cwd();
 const source = (relativePath: string) => readImplementationSource(path.join(root, relativePath), 'utf8');
@@ -74,6 +76,43 @@ describe('customer-facing assistant output projection', () => {
       .toContain('可以安全显示');
     expect(sanitizeAgentStreamingTextForDisplay('状态：受阻。\n证据：暂时没有可核验的执行结果。', 'zh'))
       .not.toMatch(/状态|证据|回执/u);
+  });
+
+  it.each(['zh', 'en'] as const)('hides old confirmation instructions in history and every stream prefix (%s)', locale => {
+    const old = locale === 'zh'
+      ? '这项操作还没有执行，需要你确认后才能继续。\n操作：computer_use\n内容摘要：' + 'a'.repeat(64) + '\n参数：{"task":"把WPS切到前台并等待下一步指令","max_steps":20}'
+      : 'Confirmation is required before this action can run.\nAction: computer_use\nPayload digest: ' + 'a'.repeat(64) + '\nArguments: {"task":"Wait for the next model instruction","max_steps":20}';
+    const history = sanitizeAgentResponseTextForDisplay(old, locale);
+    expect(history).toMatch(/确认|confirm/u);
+    expect(history).not.toMatch(/computer_use|max_steps|下一步指令|next model instruction|a{64}/u);
+    for (let i = 1; i <= old.length; i += 1) {
+      expect(sanitizeAgentStreamingTextForDisplay(old.slice(0, i), locale)).not.toMatch(/computer_use|max_steps|下一步指令|next model instruction|a{64}/u);
+    }
+  });
+
+  it('projects old confirmation replies into public dialogue without their model instructions', () => {
+    const leaked = '这项操作还没有执行，需要你确认后才能继续。\n参数：{"task":"读取WPS并等待下一步模型指令","max_steps":20}';
+    for (const normalize of [normalizeChatHistoryRecord, normalizeVoiceHistoryRecord]) {
+      expect(normalize({ role: 'assistant', message: leaked })).toEqual([{ role: 'assistant', content: '这项操作还未执行。请先查看本次操作的目标和内容，再回复“确认”或“取消”。' }]);
+      expect(normalize({ role: 'user', message: '帮我打印会议安排', response: leaked }))
+        .toEqual([{ role: 'user', content: '帮我打印会议安排' }]);
+    }
+  });
+
+  it('hides tool markup after prose in final, history, voice, and every stream prefix', () => {
+    const prose = '我先把客户端当前状态拉出来看一眼，按真实界面给你讲，不凭印象说。\n\n';
+    for (const protocol of ['<client_get_state>\n</client_get_state>', '&lt;client_get_state&gt;&lt;/client_get_state&gt;']) {
+      const leaked = prose + protocol;
+      expect(containsInternalExecutionLanguage(leaked)).toBe(true);
+      const projected = sanitizeAgentResponseTextForDisplay(leaked, 'zh');
+      expect(projected).not.toMatch(/client_get_state|&lt;|<\//u);
+      for (const normalize of [normalizeChatHistoryRecord, normalizeVoiceHistoryRecord]) {
+        expect(JSON.stringify(normalize({ role: 'assistant', message: leaked }))).not.toContain('client_get_state');
+      }
+      for (let i = 1; i <= leaked.length; i += 1) {
+        expect(sanitizeAgentStreamingTextForDisplay(leaked.slice(0, i), 'zh')).not.toMatch(/client_get|<client|&lt;client/u);
+      }
+    }
   });
 
   it('applies the shared sanitizer at every secondary assistant surface', () => {

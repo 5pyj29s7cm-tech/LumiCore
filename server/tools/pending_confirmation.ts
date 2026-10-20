@@ -2,6 +2,13 @@ import { stableValue } from '../../shared/stable_json';
 import crypto from 'crypto';
 import { formatPendingConfirmationRequestMessage } from "../regions/messages/confirmation_messages";
 
+export function formatPendingConfirmationRequest(pending: PendingToolConfirmation): string {
+  return formatPendingConfirmationRequestMessage({
+    ...pending,
+    requiresExternalMode: pending.safeArgs.switchToExternalExecution === true,
+  });
+}
+
 export interface PendingToolConfirmation {
   id: string;
   userId: string;
@@ -34,6 +41,9 @@ export interface PendingConfirmationScope {
   taskId?: string;
   originRequestId?: string;
   actionIntent?: string;
+  /** Server-owned display metadata; never changes exact arguments or execution authority. */
+  externalDesktopHandoff?: boolean;
+  switchToExternalExecution?: boolean;
 }
 
 export const PENDING_CONFIRMATION_PERSISTENCE_VERSION = 1 as const;
@@ -220,7 +230,10 @@ function confirmationSafeArgs(toolName: string, args: Record<string, any>): Reco
       },
     };
   }
-  if (toolName !== 'desktop_write_text_file') return sanitizeValue(args || {});
+  if (toolName !== 'desktop_write_text_file') {
+    const { externalDesktopHandoff: _legacyDisplayOnly, switchToExternalExecution: _displayOnly, ...visibleArgs } = args || {};
+    return sanitizeValue(visibleArgs);
+  }
   const content = String(args.content ?? '');
   return {
     path: String(args.path || ''),
@@ -297,9 +310,12 @@ export function hydratePendingConfirmationFromPersistence(
   if (argsHash(decryptedExactArgs) !== record.argsHash) return null;
   if (confirmationPayloadDigest(decryptedExactArgs) !== record.payloadDigest) return null;
   if (confirmationTarget(decryptedExactArgs) !== record.target) return null;
+  const { externalDesktopHandoff, switchToExternalExecution, ...visibleArgs } = record.safeArgs || {};
+  if (externalDesktopHandoff !== undefined && externalDesktopHandoff !== true) return null;
+  if (switchToExternalExecution !== undefined && switchToExternalExecution !== true) return null;
   if (
     JSON.stringify(stableValue(confirmationSafeArgs(record.toolName, decryptedExactArgs)))
-    !== JSON.stringify(stableValue(record.safeArgs || {}))
+    !== JSON.stringify(stableValue(visibleArgs))
   ) return null;
   return {
     id: record.id,
@@ -389,7 +405,7 @@ export function recordPendingConfirmation(
     target: confirmationTarget(args),
     payloadDigest: confirmationPayloadDigest(args),
     exactArgs: stableValue(args || {}),
-    safeArgs: confirmationSafeArgs(toolName, args || {}),
+    safeArgs: { ...confirmationSafeArgs(toolName, args || {}), ...(scope.externalDesktopHandoff === true ? { externalDesktopHandoff: true } : {}), ...(scope.switchToExternalExecution === true ? { switchToExternalExecution: true } : {}) },
     actionIntent: String(scope.actionIntent || '').trim(),
     source,
     domain: scope.domain || '',
@@ -615,11 +631,6 @@ export function formatPendingConfirmationPrompt(pending: PendingToolConfirmation
     `Payload digest: ${pending.payloadDigest}`,
     `Arguments (secrets redacted): ${JSON.stringify(confirmationModelSafeArgs(pending))}`,
   ].join('\n');
-}
-
-/** User-facing request shown before an external or otherwise sensitive action starts. */
-export function formatPendingConfirmationRequest(pending: PendingToolConfirmation): string {
-  return formatPendingConfirmationRequestMessage(pending);
 }
 
 export function clearAllPendingConfirmationsForTests(): void {

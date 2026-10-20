@@ -1,7 +1,5 @@
 import { stableValue } from '../../shared/stable_json';
 import crypto from 'node:crypto';
-import type { LumiExecutionDecision } from './execution_decision';
-import type { LumiCapabilityPlan } from './execution_pipeline';
 import type { NormalizedActionIntent, NormalizedSideEffectClass } from './normalized_action_intent';
 import type {
   CapabilityLane,
@@ -10,6 +8,7 @@ import type {
   CapabilityRisk,
   CapabilitySideEffect,
   CapabilityVerification,
+  ToolExecutionRecord,
 } from '../tools/types';
 import { evaluateCapabilityRollout } from './capability_rollout';
 
@@ -35,6 +34,7 @@ export interface CapabilityNode {
   nodeId: string;
   type: CapabilityNodeType;
   state: CapabilityNodeState;
+  terminalStatus?: NonNullable<ToolExecutionRecord['envelope']>['status'];
   capabilityId: string;
   toolName?: string;
   lane: CapabilityLane;
@@ -96,10 +96,10 @@ export interface ArtifactReference {
 }
 
 /**
- * Channel-independent semantic plan. It deliberately records capability
- * candidates rather than pretending that every exposed tool will execute.
- * The model may choose from these nodes, but the registry/policy remains the
- * final authority and every selected node must later produce a receipt.
+ * Actual call observations and separately declared scheduler policies share
+ * this historical container. Exposed candidates are not selected actions.
+ * Registry policy, bound arguments and exact confirmation own admission;
+ * node state never upgrades the canonical receipt outcome.
  */
 export interface CapabilityExecutionPlan {
   schemaVersion: 1;
@@ -112,17 +112,15 @@ export interface CapabilityExecutionPlan {
   expectedEvidence: EvidenceRequirement[];
   fallbackPolicy: FallbackPolicy;
   contextRefs: ArtifactReference[];
-  decisionAuthority: 'semantic_planner';
+  decisionAuthority: 'semantic_planner' | 'registry_bound_call';
   scriptAuthority: 'adapter_only';
 }
 
 export interface BuildCapabilityExecutionPlanInput {
-  intent: NormalizedActionIntent;
-  capabilityPlan: LumiCapabilityPlan;
-  execution: LumiExecutionDecision;
-  manifest: CapabilityManifestEntry[];
-  taskId?: string;
-  sourcePaths?: string[];
+  record: ToolExecutionRecord;
+  capability: CapabilityManifestEntry;
+  taskId: string;
+  previousPlan?: CapabilityExecutionPlan;
 }
 
 export interface BuildScheduledCapabilityExecutionPlanInput {
@@ -148,10 +146,6 @@ function nodeType(entry: CapabilityManifestEntry): CapabilityNodeType {
   }
   if (entry.lane === 'agents') return 'internal_agent';
   return 'tool';
-}
-
-function makeNodeId(entry: CapabilityManifestEntry): string {
-  return `cap_${digest({ capabilityId: entry.capabilityId, toolName: entry.toolName }).slice(0, 16)}`;
 }
 
 function buildEvidence(node: CapabilityNode): EvidenceRequirement {
@@ -249,147 +243,49 @@ function buildFallbackPolicy(intent: NormalizedActionIntent): FallbackPolicy {
   };
 }
 
+export function resolveCapabilitySideEffectClass(nodes: ReadonlyArray<Pick<CapabilityManifestEntry, 'operation' | 'sideEffects'>>): NormalizedSideEffectClass {
+  const externalCommit = nodes.some(item => item.sideEffects.some(effect => (
+    effect.type === 'external_state_change' || effect.type === 'external_communication'
+  )));
+  const localWrite = nodes.some(item => ['create', 'mutate', 'communicate', 'unknown'].includes(item.operation)
+    || item.sideEffects.some(effect => !['none', 'local_read', 'network_read'].includes(effect.type)));
+  return externalCommit ? 'external_commit' : localWrite ? 'local_write' : 'none';
+}
+
+/** Observation of actual bound calls; authorization remains in the registry and exact confirmation. */
 export function buildCapabilityExecutionPlan(
   input: BuildCapabilityExecutionPlanInput,
 ): CapabilityExecutionPlan {
-  const routedTools = new Set(input.execution.toolRoute?.toolNames || []);
-  const allowedTools = new Set(input.execution.toolPolicy.allowedTools || []);
-  const wildcard = allowedTools.has('*');
-  const forbidden = new Set(input.execution.toolPolicy.forbiddenTools || []);
-  const preferred = new Set(input.capabilityPlan.preferredTools || []);
-  const eligible = input.manifest.filter(entry => (
-    (routedTools.has(entry.toolName) || preferred.has(entry.toolName))
-    && (wildcard || allowedTools.has(entry.toolName))
-    && !forbidden.has('*')
-    && !forbidden.has(entry.toolName)
-    && entry.executable
-    && !entry.deprecated
-  )).sort((left, right) => {
-    const routeOrder = (entry: CapabilityManifestEntry): number => {
-      const routed = (input.execution.toolRoute?.toolNames || []).indexOf(entry.toolName);
-      if (routed >= 0) return routed;
-      const preferredIndex = (input.capabilityPlan.preferredTools || []).indexOf(entry.toolName);
-      return preferredIndex >= 0 ? 10_000 + preferredIndex : 20_000;
-    };
-    return routeOrder(left) - routeOrder(right) || left.toolName.localeCompare(right.toolName);
-  });
-  const candidateNodes: CapabilityNode[] = eligible.map((entry, index) => {
-    const selectionGroup = `group_${digest({
-      lane: entry.lane,
-      operation: entry.operation,
-      family: entry.family,
-    }).slice(0, 12)}`;
-    return {
-    nodeId: makeNodeId(entry),
-    type: nodeType(entry),
-    state: 'candidate' as const,
-    capabilityId: entry.capabilityId,
-    toolName: entry.toolName,
-    lane: entry.lane,
-    operation: entry.operation,
-    risk: entry.risk,
+  const { record, capability: entry, taskId } = input;
+  if (!record.envelope) throw new Error('A bound-call observation requires its canonical outcome envelope');
+  const node: CapabilityNode = {
+    nodeId: 'call_' + digest({ taskId, id: record.id, name: record.name }).slice(0, 20),
+    type: nodeType(entry), state: record.envelope.status === 'waiting_confirmation' ? 'selected' : 'terminal',
+    terminalStatus: record.envelope.status, capabilityId: entry.capabilityId, toolName: record.name,
+    lane: entry.lane, operation: entry.operation, risk: entry.risk,
     sideEffects: entry.sideEffects.map(effect => ({ ...effect })),
-    requiresConfirmation: entry.requiresConfirmation
-      || input.execution.toolPolicy.requireConfirmation.includes(entry.toolName),
-    verification: {
-      ...entry.verification,
-      requiredFields: [...entry.verification.requiredFields],
-      requiredValues: entry.verification.requiredValues
-        ? { ...entry.verification.requiredValues }
-        : undefined,
-      requiredArtifacts: [...(entry.verification.requiredArtifacts || [])],
-      requiredArtifactCollections: [...(entry.verification.requiredArtifactCollections || [])],
-      successStatuses: [...(entry.verification.successStatuses || [])],
-      failureStatuses: [...(entry.verification.failureStatuses || [])],
-      successSignals: [...entry.verification.successSignals],
-      limitations: [...entry.verification.limitations],
-    },
-    provenance: {
-      source: entry.source,
-      provider: entry.provenance.provider,
-      trust: entry.trust,
-    },
-    executionRole: 'adapter' as const,
-    selectionGroup,
-    selectionRank: index,
-    };
-  });
-  const taskId = String(input.taskId || '').trim()
-    || `task_${digest({ intent: input.intent, capabilityIds: input.capabilityPlan.capabilityIds }).slice(0, 24)}`;
-  const planId = `plan_${digest({
-    taskId,
-    intent: input.intent,
-    nodes: candidateNodes.map(node => node.capabilityId),
-  }).slice(0, 24)}`;
-
-  const nodes: CapabilityNode[] = [];
-  const edges: ExecutionEdge[] = [];
-  const grouped = new Map<string, CapabilityNode[]>();
-  for (const node of candidateNodes) {
-    const groupId = node.selectionGroup!;
-    const group = grouped.get(groupId) || [];
-    group.push(node);
-    grouped.set(groupId, group);
-  }
-  for (const [groupId, candidates] of grouped) {
-    const lane = candidates[0].lane;
-    const operation = candidates[0].operation;
-    const selectorId = `select_${groupId}`;
-    const verifierId = `verify_${groupId}`;
-    nodes.push(syntheticNode({
-      nodeId: selectorId,
-      type: 'model',
-      role: 'planner',
-      capabilityId: `lumi.semantic_selector.${groupId}`,
-      lane,
-      operation,
-      selectionGroup: groupId,
-    }));
-    nodes.push(...candidates);
-    nodes.push(syntheticNode({
-      nodeId: verifierId,
-      type: 'judge',
-      role: 'verifier',
-      capabilityId: `lumi.receipt_verifier.${groupId}`,
-      lane,
-      operation,
-      selectionGroup: groupId,
-    }));
-    for (const candidate of candidates) {
-      edges.push({ from: selectorId, to: candidate.nodeId, condition: 'selected' });
-      edges.push({ from: candidate.nodeId, to: verifierId, condition: 'success' });
-    }
-  }
-  if (grouped.size > 0) {
-    const joinId = `join_${digest([...grouped.keys()]).slice(0, 12)}`;
-    nodes.push(syntheticNode({
-      nodeId: joinId,
-      type: 'join',
-      role: 'join',
-      capabilityId: 'lumi.verified_receipt_join',
-      lane: candidateNodes[0].lane,
-      operation: candidateNodes[0].operation,
-    }));
-    for (const groupId of grouped.keys()) {
-      edges.push({ from: `verify_${groupId}`, to: joinId, condition: 'verified' });
-    }
-  }
-
+    requiresConfirmation: entry.requiresConfirmation || record.envelope.status === 'waiting_confirmation', verification: entry.verification,
+    provenance: { source: entry.source, provider: entry.provenance.provider, trust: entry.trust },
+    executionRole: 'adapter',
+  };
+  const prior = input.previousPlan?.decisionAuthority === 'registry_bound_call'
+    && input.previousPlan.taskId === taskId ? input.previousPlan : undefined;
+  const nodes = [...(prior?.nodes || []).filter(item => item.nodeId !== node.nodeId), node];
+  const sideEffectClass = resolveCapabilitySideEffectClass(nodes);
+  const externalCommit = sideEffectClass === 'external_commit';
+  const intent: NormalizedActionIntent = {
+    kind: 'work_task', operation: sideEffectClass === 'none' ? 'read' : 'mutate',
+    subject: entry.provenance.provider, target: record.name, payload: '', sideEffectClass,
+    relation: prior ? 'continue' : 'new', confidence: 1, rule: 'registry-bound-call',
+  };
   return {
-    schemaVersion: 1,
-    planId,
-    taskId,
-    intent: { ...input.intent },
-    nodes,
-    edges,
-    risk: buildRiskDecision(input.intent, nodes, taskId),
-    expectedEvidence: candidateNodes.map(buildEvidence),
-    fallbackPolicy: buildFallbackPolicy(input.intent),
-    contextRefs: Array.from(new Set(input.sourcePaths || []))
-      .filter(Boolean)
-      .map(value => ({ kind: 'source' as const, value })),
-    decisionAuthority: 'semantic_planner',
-    scriptAuthority: 'adapter_only',
+    schemaVersion: 1, planId: 'plan_' + digest({ taskId, nodes: nodes.map(item => item.nodeId) }).slice(0, 24),
+    taskId, intent, nodes, edges: [],
+    risk: { sideEffectClass, requiresConfirmation: externalCommit || nodes.some(item => item.requiresConfirmation),
+      failClosed: externalCommit, reasons: ['Observed bound tool calls; exact registry grants remain authoritative.'] },
+    expectedEvidence: nodes.map(buildEvidence), fallbackPolicy: buildFallbackPolicy(intent),
+    contextRefs: [...(prior?.contextRefs || []), ...(record.id ? [{ kind: 'receipt' as const, value: record.id }] : [])],
+    decisionAuthority: 'registry_bound_call', scriptAuthority: 'adapter_only',
   };
 }
 
@@ -560,21 +456,3 @@ export function bindCapabilityExecutionPlanTask(
   };
 }
 
-export function formatCapabilityExecutionPlanPrompt(plan: CapabilityExecutionPlan): string {
-  const candidates = plan.nodes
-    .filter(node => node.executionRole === 'adapter')
-    .map(node => `${node.toolName || node.capabilityId} (${node.capabilityId}; ${node.operation}; verification=${node.verification.strategy})`)
-    .join(', ');
-  return [
-    '## Capability Execution Plan',
-    `Plan ${plan.planId}; task ${plan.taskId}; intent=${plan.intent.kind}/${plan.intent.operation}; sideEffect=${plan.risk.sideEffectClass}.`,
-    `Eligible capability candidates: ${candidates || 'none'}. These are candidates, not instructions to execute all tools.`,
-    `Execution graph: ${plan.edges.length} conditional edge(s); each selection group chooses only the exact adapter needed, then receipt verification gates the final join.`,
-    'Semantic planning owns intent, decomposition, and capability selection. Workflows and scripts are execution adapters only.',
-    plan.risk.requiresConfirmation
-      ? 'Bind confirmation to the selected tool, exact target, task id, and payload digest before execution.'
-      : 'No confirmation is implied by this plan; the registry remains authoritative for each selected tool.',
-    'A completion claim requires the selected terminal node receipt to satisfy its verification contract.',
-    'Never fall back to a legacy route. Target mismatch or unknown external outcome stops execution.',
-  ].join('\n');
-}

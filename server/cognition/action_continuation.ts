@@ -1,3 +1,4 @@
+import type { ActiveTaskMessageResolution } from "./task_concurrency";
 import type { ActionIntentAnalysis } from "./normalized_action_intent";
 import { randomUUID } from "node:crypto";
 import { buildActionContract } from "./action_contract";
@@ -47,7 +48,7 @@ export { buildRecentActionContinuationBridge } from './continuation/prompt';
 export function buildConversationActionContinuationState(
   input: ConversationActionContinuationUpdate, analysis?: ActionIntentAnalysis
 ): ConversationActionContinuationState | null {
-  const userText = compact(input.userText, 700);
+  const userText = String(input.userText || '').trim();
   const assistantText = compact(input.assistantText, 700);
   const calls = coalesceToolExecutionRecords(parseToolCalls({ toolCalls: input.toolCalls }))
     .filter(call => toolCallName(call) && (toolCallFailure(call) || toolRecordHasTerminalPayload(call)));
@@ -169,12 +170,14 @@ export function prepareConversationActionTaskState(
     forceNewTask?: boolean;
     /** Canonical capability planning determined that this turn needs a ledger. */
     forceTask?: boolean;
+    /** The existing accepted pipeline owns whether this turn needs a new task. */
+    acceptedTaskRelation?: ActiveTaskMessageResolution;
     /** Resolved once by the shared pipeline; legacy callers may omit it. */
     followupIntent?: RecentActionFollowupIntent;
     now?: string;
   }, analysis?: ActionIntentAnalysis
 ): { state: ConversationActionContinuationState | null; kind: 'new' | 'resume' | 'status' | 'conversation' } {
-  const userText = compact(input.userText, 700);
+  const userText = String(input.userText || '').trim();
   const previous = normalizeConversationActionState(previousValue);
   const followupIntent = input.followupIntent ?? classifyConversationActionFollowupIntent(userText, previous, undefined, analysis);
   const resume = !input.forceNewTask && Boolean(
@@ -190,8 +193,8 @@ export function prepareConversationActionTaskState(
     && !input.forceResume
     && !input.forceNewTask
   ) return { state: previous, kind: 'status' };
-  const contract = buildActionContract(userText, undefined, analysis);
-  const isAction = (contract.applies && contract.kind !== 'none') || input.forceTask === true;
+  const contract = input.acceptedTaskRelation ? null : buildActionContract(userText, undefined, analysis);
+  const isAction = input.forceTask === true || Boolean(contract?.applies && contract.kind !== 'none');
   // An unrelated conversational turn may inspect the same conversation, but
   // it does not own the durable action pointer. Returning the previous task
   // here caused callers to bind the new turn's execution plan and receipts to

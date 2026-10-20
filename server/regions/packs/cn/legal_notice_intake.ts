@@ -1,5 +1,15 @@
+import { getActiveConversation } from '../../../conversation/manager';
+import { buildTransportNeutralConfirmationScope, getPendingConfirmation, isExplicitConfirmationReply } from '../../../tools/pending_confirmation';
+import { ensurePendingConfirmationPersistenceInitialized } from '../../../tools/pending_confirmation_repository';
+import { planPersonalOrganizationScope, requestsOrganizationScope, type PersonalOrganizationScopePlan } from '../../../messaging/personal_org_scope';
+import { messagingConversationAgentId } from './remote_materials';
+import type { ToolContext, ToolExecutionRecord } from '../../../tools/types';
 import { toolRegistry } from '../../../tools/registry';
-import { executeToolCallOrThrow } from '../../../tools/execution_engine';
+import { executeToolCallOrThrow, getCanonicalToolExecutionInputDigests, isCanonicalToolExecutionRecord, toolExecutionInputDigests } from '../../../tools/execution_engine';
+import { createHash } from 'crypto';
+import { encodeToolResult } from '../../../tools/result_envelope';
+import { frozenCapabilitySnapshot } from '../../../tools/definitions/workflow/capability_snapshot';
+export const REMOTE_LEGAL_INTAKE_TOOL = 'legal_message_intake_to_case';
 import * as LegalCases from '../../../org/legal_cases';
 import { getMember, listUserOrgs } from '../../../org/db';
 import { upsertPendingReminder } from '../../../memory';
@@ -14,13 +24,97 @@ import {
   type PendingLegalNoticeCandidate,
 } from '../../../messaging/legal_notice_pending';
 
-interface LegalNoticeExecutionControl {
+interface LegalNoticeExecutionControl extends Partial<ToolContext> {
   isCancelled?: () => boolean;
   executionSignal?: AbortSignal;
 }
 
+export interface RemoteLegalNoticeStageReceipt {
+  kind: 'legal_notice_intake_stage';
+  version: 1;
+  scope: 'case_material_archive';
+  disposition: 'archived' | 'awaiting_target' | 'no_target' | 'blocked';
+  taskId?: string;
+  requestId?: string;
+  orgId?: string;
+  pendingId?: string;
+  archive?: {
+    toolName: string;
+    capabilityId: string;
+    idempotencyKey: string;
+    inputDigest: string;
+    changedCaseIds: string[];
+    materialSources: { caseId: string; materialId: string; sourceDigest: string }[];
+  };
+}
+
+interface RemoteLegalToolResult {
+  content: string;
+  record?: ToolExecutionRecord;
+}
+
+function archiveStageProof(
+  msg: IncomingMessage,
+  control: LegalNoticeExecutionControl,
+  result: RemoteLegalToolResult,
+  target: PendingLegalNoticeCandidate,
+): RemoteLegalNoticeStageReceipt['archive'] | undefined {
+  const record = result.record;
+  const receipt = record?.receipt as { ok?: unknown; persisted?: unknown; changedCaseIds?: unknown; materialSources?: unknown } | undefined;
+  const digests = record && getCanonicalToolExecutionInputDigests(record);
+  if (!record || !isCanonicalToolExecutionRecord(record) || !digests?.argumentsDigest
+    || record.error || record.terminalVerification?.status !== 'verified' || record.envelope?.status !== 'verified_success'
+    || !control.taskId || !control.requestId || record.taskId !== control.taskId || record.requestId !== control.requestId
+    || record.envelope.taskId !== control.taskId || record.envelope.requestId !== control.requestId
+    || record.externalMessageId !== msg.messageId || record.arguments.orgId !== target.orgId || target.orgId !== msg.boundOrgId
+    || record.arguments.userId !== msg.boundUserId || record.arguments.persistCase !== true
+    || record.capability?.operation !== 'create' || !record.capability.sideEffects.some(effect => effect.type === 'local_state_change')
+    || !record.envelope.idempotencyKey || receipt?.ok !== true || receipt.persisted !== true
+    || !Array.isArray(receipt.changedCaseIds) || !receipt.changedCaseIds.length || !Array.isArray(receipt.materialSources)) return undefined;
+  const changedCaseIds = receipt.changedCaseIds.filter((id): id is string => typeof id === 'string' && Boolean(id));
+  if (changedCaseIds.length !== 1 || changedCaseIds.length !== receipt.changedCaseIds.length
+    || (target.caseId && (changedCaseIds[0] !== target.caseId || record.arguments.caseId !== target.caseId))) return undefined;
+  const archivedCase = LegalCases.getCase(target.orgId, changedCaseIds[0], msg.boundUserId);
+  if (!archivedCase || (!target.caseId && (target.caseTitle && archivedCase.title !== target.caseTitle
+    || target.caseNumber && archivedCase.caseNumber !== target.caseNumber))) return undefined;
+  const materialSources: NonNullable<RemoteLegalNoticeStageReceipt['archive']>['materialSources'] = [];
+  for (const source of receipt.materialSources) {
+    if (!source || typeof source !== 'object') return undefined;
+    const material = source as { caseId?: unknown; materialId?: unknown; sourceDigest?: unknown };
+    if (typeof material.caseId !== 'string' || !changedCaseIds.includes(material.caseId)
+      || typeof material.materialId !== 'string' || typeof material.sourceDigest !== 'string') return undefined;
+    const current = LegalCases.getCase(target.orgId, material.caseId, msg.boundUserId)?.materials.find(item => item.id === material.materialId);
+    if (!current || createHash('sha256').update(JSON.stringify([
+      current.source, current.title, current.content, current.fileName || '', current.localPath || '',
+    ])).digest('hex') !== material.sourceDigest) return undefined;
+    materialSources.push({ caseId: material.caseId, materialId: material.materialId, sourceDigest: material.sourceDigest });
+  }
+  if (!materialSources.length) return undefined;
+  return { toolName: record.name, capabilityId: record.capability.capabilityId,
+    idempotencyKey: record.envelope.idempotencyKey, inputDigest: digests.argumentsDigest, changedCaseIds, materialSources };
+}
+
+function nativeStageReply(
+  msg: IncomingMessage,
+  control: LegalNoticeExecutionControl,
+  content: string,
+  disposition: RemoteLegalNoticeStageReceipt['disposition'],
+  archive?: RemoteLegalNoticeStageReceipt['archive'],
+): string {
+  const receipt: RemoteLegalNoticeStageReceipt = {
+    kind: 'legal_notice_intake_stage', version: 1, scope: 'case_material_archive',
+    disposition: disposition === 'archived' && !archive ? 'blocked' : disposition,
+    taskId: control.taskId, requestId: control.requestId, orgId: msg.boundOrgId,
+    pendingId: msg.legalNoticeSelection?.pendingId, ...(archive ? { archive } : {}),
+  };
+  return encodeToolResult(disposition === 'archived' && !archive
+    ? `${content}\n\n入案工具已执行；当前案件材料核验未通过，因此未将这轮请求标为完成，且不会自动重复归档。`
+    : content, receipt);
+}
+
 function assertNoticeAuthorized(msg: IncomingMessage, control: LegalNoticeExecutionControl): void {
   assertMessagingAuthorization(msg);
+  if (msg.legalNoticeSelection && !currentPendingNoticeSelection(msg)) throw new MessagingAuthorizationRevokedError();
   if (control.isCancelled?.() || control.executionSignal?.aborted) throw new MessagingAuthorizationRevokedError();
 }
 
@@ -30,20 +124,47 @@ async function executeRegisteredTool(
   name: string,
   args: Record<string, any>,
   context: Record<string, any>,
-): Promise<string> {
+): Promise<RemoteLegalToolResult> {
   assertNoticeAuthorized(msg, control);
+  const binding = msg.legalNoticeSelection?.execution;
+  if (binding) {
+    const scope = { ...control, ...context };
+    const definition = toolRegistry.get(name), manifest = toolRegistry.getCapabilityManifestEntry(name, control.toolPolicy, scope);
+    const prepared = toolRegistry.prepareExecution(name, args, scope);
+    if (!definition || !manifest || binding.toolName !== name || binding.capabilityId !== manifest.capabilityId
+      || binding.capabilityContractHash !== frozenCapabilitySnapshot(manifest, definition.parameters).contractHash
+      || binding.argumentsDigest !== toolExecutionInputDigests(prepared.arguments).argumentsDigest
+      || binding.targetIdentity !== noticeTargetIdentity(msg.legalNoticeSelection!.target)) throw new MessagingAuthorizationRevokedError();
+  }
+  let record: ToolExecutionRecord | undefined;
+  let expectedInputDigest = '';
   const result = await executeToolCallOrThrow({
     registry: toolRegistry,
     name,
     arguments: args,
     context: {
+      ...control,
       ...context,
+      onAdapterStart: control.onAdapterStart ? async event => {
+        assertNoticeAuthorized(msg, control);
+        await control.onAdapterStart!(event);
+        assertNoticeAuthorized(msg, control);
+      } : undefined,
+      onToolStart: current => {
+        if (!expectedInputDigest && current.name === name) expectedInputDigest = toolExecutionInputDigests(current.arguments).argumentsDigest;
+        control.onToolStart?.(current);
+      },
+      onToolRecord: current => {
+        if (current.name === name && getCanonicalToolExecutionInputDigests(current)?.argumentsDigest === expectedInputDigest) record = current;
+        control.onToolRecord?.(current);
+      },
+      onAdapterSettlement: control.onAdapterSettlement,
       executionSignal: control.executionSignal,
       isCancelled: () => Boolean(control.isCancelled?.() || control.executionSignal?.aborted || !isMessagingAuthorizationCurrent(msg)),
     },
   });
   assertNoticeAuthorized(msg, control);
-  return result;
+  return { content: result, record };
 }
 
 function text(value: unknown): string {
@@ -88,14 +209,6 @@ function extractFirstUrl(input: string): string {
   return input.match(/https?:\/\/[^\s"'<>，。；;）)】]+/i)?.[0] || '';
 }
 
-function extractSpecificCourt(input: string): string {
-  const candidates = Array.from(input.matchAll(/[\u4e00-\u9fa5]{2,40}(?:人民法院|法院)/g))
-    .map(match => match[0])
-    .filter(candidate => !['人民法院', '法院'].includes(candidate))
-    .sort((a, b) => b.length - a.length);
-  return candidates[0] || '';
-}
-
 function extractCaseTarget(input: string): string {
   const patterns = [
     /(?:归档|保存|放入|放到|加入).{0,10}(?:案件|案号|卷宗)?[：:\s「《"]*([^，。；;\n」》"]{2,80})/,
@@ -131,65 +244,6 @@ export function classifyRemoteLegalNoticeIntakeIntent(input: string): RemoteLega
 
 export function isExplicitLegalNoticeIntakeRequest(input: string): boolean {
   return classifyRemoteLegalNoticeIntakeIntent(input) !== 'none';
-}
-
-function findOrCreateCaseFromNotice(params: {
-  orgId: string;
-  userId: string;
-  message: string;
-}): { caseFile: LegalCases.OrgLegalCaseFile; hints: ReturnType<typeof LegalCases.extractLegalCaseHints>; rawMaterialId: string } {
-  const hints = LegalCases.extractLegalCaseHints(params.message);
-  const specificCourt = extractSpecificCourt(params.message);
-  if (specificCourt) hints.court = specificCourt;
-  const explicitTarget = extractCaseTarget(params.message);
-
-  let caseFile: LegalCases.OrgLegalCaseFile | null = null;
-  if (explicitTarget) caseFile = LegalCases.listCases(params.orgId, explicitTarget, 1, params.userId)[0] || null;
-  if (!caseFile && hints.caseNumber) caseFile = LegalCases.listCases(params.orgId, hints.caseNumber, 1, params.userId)[0] || null;
-
-  if (!caseFile) {
-    caseFile = LegalCases.createCase(params.orgId, params.userId, {
-      title: explicitTarget || hints.caseNumber || `远程法院短信通知 ${new Date().toISOString().slice(0, 10)}`,
-      caseNumber: hints.caseNumber || '',
-      court: hints.court || '',
-      cause: hints.cause || '',
-      hearingDate: hints.hearingDate || '',
-      stage: hints.hearingDate ? 'trial' : 'consultation',
-      notes: params.message.slice(0, 3000),
-    });
-  } else {
-    const patch: Partial<LegalCases.OrgLegalCaseFile> = {};
-    if (hints.caseNumber && !caseFile.caseNumber) patch.caseNumber = hints.caseNumber;
-    if (hints.court && !caseFile.court) patch.court = hints.court;
-    if (hints.cause && !caseFile.cause) patch.cause = hints.cause;
-    if (hints.hearingDate && !caseFile.hearingDate) {
-      patch.hearingDate = hints.hearingDate;
-      if (caseFile.stage === 'consultation') patch.stage = 'trial';
-    }
-    if (Object.keys(patch).length > 0) {
-      caseFile = LegalCases.updateCase(params.orgId, params.userId, caseFile.id, patch) || caseFile;
-    }
-  }
-
-  const rawMaterial = LegalCases.addMaterial(params.orgId, params.userId, caseFile.id, {
-    type: 'note',
-    title: '微信/飞书转发法院短信原文',
-    content: [
-      '# 微信/飞书转发法院短信原文',
-      '',
-      `- 收取时间：${new Date().toISOString()}`,
-      `- 案号：${hints.caseNumber || '未识别'}`,
-      `- 法院：${hints.court || '未识别'}`,
-      `- 开庭/通知日期：${hints.hearingDate || '未识别'}`,
-      '',
-      '## 原文',
-      '',
-      params.message,
-    ].join('\n'),
-    source: 'tool',
-  });
-
-  return { caseFile, hints, rawMaterialId: rawMaterial?.id || '' };
 }
 
 function platformLabel(platform: IncomingMessage['platform']): string {
@@ -282,7 +336,7 @@ function looksLikePendingSelection(input: string): boolean {
 }
 
 function selectPendingCandidate(pending: PendingLegalNotice, reply: string): PendingLegalNoticeCandidate | null {
-  const indexMatch = reply.match(/(?:归档到|选择|第)?\s*(\d+)\s*(?:个|项|号)?/);
+  const indexMatch = reply.match(/^\s*(?:归档到|选择|第)?\s*(\d+)\s*(?:个|项|号)?\s*$/);
   if (indexMatch) {
     const selected = pending.candidates[Number(indexMatch[1]) - 1];
     if (selected) return selected;
@@ -294,13 +348,15 @@ function selectPendingCandidate(pending: PendingLegalNotice, reply: string): Pen
     .trim();
   if (query) {
     const labelMatches = pending.candidates.filter(candidate =>
-      candidateLabel(candidate).toLowerCase().includes(query.toLowerCase()),
+      [candidateLabel(candidate), candidate.caseTitle, candidate.caseNumber, candidate.orgName]
+        .some(value => value?.toLowerCase() === query.toLowerCase()),
     );
     if (labelMatches.length === 1) return labelMatches[0];
 
     const caseMatches: PendingLegalNoticeCandidate[] = [];
     for (const candidate of pending.candidates) {
       for (const caseFile of LegalCases.listCases(candidate.orgId, query, 10, pending.userId)) {
+        if (![caseFile.title, caseFile.caseNumber].some(value => value?.toLowerCase() === query.toLowerCase())) continue;
         caseMatches.push({
           orgId: candidate.orgId,
           orgName: candidate.orgName,
@@ -312,9 +368,6 @@ function selectPendingCandidate(pending: PendingLegalNotice, reply: string): Pen
     }
     const unique = Array.from(new Map(caseMatches.map(candidate => [`${candidate.orgId}:${candidate.caseId}`, candidate])).values());
     if (unique.length === 1) return unique[0];
-    if (pending.candidates.length === 1 && !pending.candidates[0].caseId) {
-      return { ...pending.candidates[0], caseTitle: query };
-    }
   }
 
   if (pending.candidates.length === 1 && /^(?:确认|可以|好|就这个|归档)$/.test(reply.trim())) {
@@ -323,9 +376,71 @@ function selectPendingCandidate(pending: PendingLegalNotice, reply: string): Pen
   return null;
 }
 
-function parseCaseId(report: string): string {
-  const value = report.match(/案件ID：([^\n]+)/)?.[1]?.trim() || '';
-  return value && !/未归档|未持久化/.test(value) ? value : '';
+function noticeTargetIdentity(target: PendingLegalNoticeCandidate): string {
+  return JSON.stringify([target.orgId, target.caseId || '', target.caseTitle || '', target.caseNumber || '']);
+}
+
+function currentPendingNoticeSelection(msg: IncomingMessage): PendingLegalNotice | null {
+  const selected = msg.legalNoticeSelection;
+  if (!selected || !msg.boundUserId || selected.selectionText !== currentUserRequestText(msg)
+    || selected.target.orgId !== msg.boundOrgId) return null;
+  const pending = getPendingLegalNotice(msg, msg.boundUserId);
+  if (!pending || pending.id !== selected.pendingId || pending.messageText !== selected.requestText) return null;
+  const target = selectPendingCandidate(pending, selected.selectionText);
+  if (!target || noticeTargetIdentity(target) !== noticeTargetIdentity(selected.target)) return null;
+  const member = getMember(target.orgId, msg.boundUserId);
+  if (member?.status !== 'active' || member.role === 'viewer') return null;
+  if (target.caseId) {
+    const caseFile = LegalCases.getCase(target.orgId, target.caseId, msg.boundUserId);
+    if (!caseFile || caseFile.title !== target.caseTitle || (caseFile.caseNumber || '') !== (target.caseNumber || '')) return null;
+  }
+  return pending;
+}
+
+/** Reuse the existing pending choice and scope plan before transcript/task admission. */
+export async function planRemoteOrganizationScope(input: IncomingMessage): Promise<PersonalOrganizationScopePlan> {
+  const { legalNoticeSelection: _untrustedSelection, ...message } = input;
+  const request = currentUserRequestText(message);
+  const ordinary = () => planPersonalOrganizationScope(message, requestsOrganizationScope(request), undefined, isRequestedLegalNoticeIntake(message));
+  if (!message.boundUserId || message.boundOrgId) return ordinary();
+  assertMessagingAuthorization(message);
+  const pending = getPendingLegalNotice(message, message.boundUserId);
+  if (!pending || !looksLikePendingSelection(request) || isRequestedLegalNoticeIntake(message)) return ordinary();
+  if (isExplicitConfirmationReply(request)) {
+    await ensurePendingConfirmationPersistenceInitialized();
+    const conversation = getActiveConversation(message.boundUserId, messagingConversationAgentId(message), 'personal', '');
+    if (conversation) {
+      const scope = buildTransportNeutralConfirmationScope({ domain: 'personal', orgId: '', conversationId: conversation.id });
+      const taskId = conversation.actionContinuationState?.taskId;
+      if (getPendingConfirmation(message.boundUserId, { ...scope, ...(taskId ? { taskId } : {}) })
+        || getPendingConfirmation(message.boundUserId, scope)) return ordinary();
+    }
+  }
+  const target = selectPendingCandidate(pending, request);
+  if (!target) return { resolution: { kind: 'reply', message, reply: pendingPrompt(pending.candidates, pending.inspectionReport) }, commit: () => undefined };
+  const scope = { userId: message.boundUserId, domain: 'work' as const, orgId: target.orgId };
+  const definition = toolRegistry.get(REMOTE_LEGAL_INTAKE_TOOL);
+  const manifest = toolRegistry.getCapabilityManifestEntry(REMOTE_LEGAL_INTAKE_TOOL, undefined, scope);
+  const execution = definition && manifest ? Object.freeze({
+    toolName: REMOTE_LEGAL_INTAKE_TOOL, capabilityId: manifest.capabilityId,
+    capabilityContractHash: frozenCapabilitySnapshot(manifest, definition.parameters).contractHash,
+    argumentsDigest: toolExecutionInputDigests(toolRegistry.prepareExecution(REMOTE_LEGAL_INTAKE_TOOL,
+      legalIntakeArguments({ ...message, attachments: pending.attachments }, target, pending.messageText), scope).arguments).argumentsDigest,
+    sourceId: pending.id, selectionText: request, targetIdentity: noticeTargetIdentity(target), scope,
+  }) : undefined;
+  const selected: IncomingMessage = { ...message, legalNoticeSelection: Object.freeze({
+    pendingId: pending.id, selectionText: request, requestText: pending.messageText, target: Object.freeze({ ...target }), execution,
+    attachments: Object.freeze(pending.attachments.map(attachment => Object.freeze({
+      id: String(attachment.id || ''), type: attachment.type, fileName: String(attachment.fileName || ''),
+      ...(attachment.localPath ? { localPath: attachment.localPath } : {}),
+      extractedText: String(attachment.extractedText || Reflect.get(attachment, 'text') || Reflect.get(attachment, 'content') || ''),
+    }))),
+  }) };
+  if (!currentPendingNoticeSelection({ ...selected, boundOrgId: target.orgId })) return {
+    resolution: { kind: 'reply', message, reply: '所选组织权限已变化，本轮没有归档。请重新选择可访问的组织案件。' }, // i18n-allow: reuse existing pending-scope refusal.
+    commit: () => undefined,
+  };
+  return planPersonalOrganizationScope(selected, false, target.orgId);
 }
 
 interface DeadlineSignal {
@@ -404,7 +519,7 @@ async function inspectPersonalNotice(msg: IncomingMessage, messageText: string, 
   const url = extractFirstUrl(messageText);
   if (!url || !msg.boundUserId || !toolRegistry.get('legal_process_notice_link')) return '';
   try {
-    return await executeRegisteredTool(msg, control, 'legal_process_notice_link', {
+    return (await executeRegisteredTool(msg, control, 'legal_process_notice_link', {
       userId: msg.boundUserId,
       url,
       message: messageText,
@@ -419,11 +534,20 @@ async function inspectPersonalNotice(msg: IncomingMessage, messageText: string, 
       domain: 'personal',
       orgId: '',
       source: `${msg.platform}-personal-legal-notice-inspection`,
-    });
+    })).content;
   } catch (err: any) {
     assertNoticeAuthorized(msg, control);
     return `链接检查未完成：${err?.message || String(err)}`;
   }
+}
+
+function legalIntakeArguments(msg: IncomingMessage, target: PendingLegalNoticeCandidate, messageText: string) {
+  return {
+    orgId: target.orgId, userId: msg.boundUserId!, platform: msg.platform,
+    sender: msg.userName || msg.userId, message: messageText, attachments: msg.attachments || [],
+    receivedAt: msg.timestamp, caseId: target.caseId || undefined,
+    caseName: target.caseId ? undefined : target.caseTitle, processLinks: true, persistCase: true,
+  };
 }
 
 async function runOrganizationLegalIntake(
@@ -436,11 +560,14 @@ async function runOrganizationLegalIntake(
   const userId = msg.boundUserId!;
   const member = getMember(target.orgId, userId);
   if (!member || member.status !== 'active' || member.role === 'viewer') {
-    return '当前 Lumi 身份没有向该组织案件写入材料的权限。';
+    return nativeStageReply(msg, control, '当前 Lumi 身份没有向该组织案件写入材料的权限。', 'blocked');
   }
-  msg.boundOrgId = target.orgId;
-  msg.organizationAuthorization = captureMessagingOrganization(msg).organizationAuthorization;
+  if (msg.boundOrgId !== target.orgId) throw new MessagingAuthorizationRevokedError();
+  if (!toolRegistry.get(REMOTE_LEGAL_INTAKE_TOOL)) {
+    return nativeStageReply(msg, control, '当前法律消息入案工具未注册，本轮没有归档，也没有创建案件。请恢复该工具后再选择入案。', 'blocked');
+  }
 
+  assertNoticeAuthorized(msg, control);
   let resolvedTarget = target;
   const intakeIntent = classifyRemoteLegalNoticeIntakeIntent(messageText);
   if (!resolvedTarget.caseId && intakeIntent !== 'create_case') {
@@ -449,79 +576,36 @@ async function runOrganizationLegalIntake(
     if (matches.length === 1) {
       resolvedTarget = matches[0];
     } else if (matches.length > 1) {
-      return [
+      return nativeStageReply(msg, control, [
         '找到多个可能的已有案件，本轮没有归档，也没有创建新案件。请明确回复案件名称或案号：',
         ...matches.slice(0, 8).map((candidate, index) => `${index + 1}. ${candidateLabel(candidate)}`),
-      ].join('\n');
+      ].join('\n'), 'awaiting_target');
     } else {
-      return '没有找到可唯一匹配的已有案件，本轮没有归档，也没有创建新案件。请提供已有案件名称/案号，或明确说“新建案件并归档”。';
+      return nativeStageReply(msg, control, '没有找到可唯一匹配的已有案件，本轮没有归档，也没有创建新案件。请提供已有案件名称/案号，或明确说“新建案件并归档”。', 'no_target');
     }
   }
 
-  if (toolRegistry.get('legal_message_intake_to_case')) {
-    const report = await executeRegisteredTool(msg, control, 'legal_message_intake_to_case', {
-      orgId: resolvedTarget.orgId,
-      userId,
-      platform: msg.platform,
-      sender: msg.userName || msg.userId,
-      message: messageText,
-      attachments: msg.attachments || [],
-      receivedAt: msg.timestamp,
-      caseId: resolvedTarget.caseId || undefined,
-      caseName: resolvedTarget.caseId ? undefined : resolvedTarget.caseTitle,
-      processLinks: true,
-      persistCase: true,
-    }, {
+  {
+    const execution = await executeRegisteredTool(msg, control, REMOTE_LEGAL_INTAKE_TOOL, legalIntakeArguments(msg, resolvedTarget, messageText), {
       userId,
       orgId: resolvedTarget.orgId,
       domain: 'work',
       source: `${msg.platform}-legal-notice-intake`,
     });
-    const caseId = parseCaseId(report) || resolvedTarget.caseId || '';
-    const caseFile = caseId ? LegalCases.getCase(resolvedTarget.orgId, caseId, userId) : null;
+    const report = execution.content;
+    const archive = archiveStageProof(msg, control, execution, resolvedTarget);
+    const caseId = archive?.changedCaseIds[0];
+    const caseFile = caseId ? LegalCases.getCase(resolvedTarget.orgId, caseId, userId, 'write') : null;
     const reminderCount = caseFile
       ? createCaseAlerts({ userId, orgId: resolvedTarget.orgId, caseFile, content: `${messageText}\n${report}` })
       : 0;
-    return `${report}\n\n- 案件提醒：${reminderCount ? `已生成/更新 ${reminderCount} 条` : '未识别到未来期限，请人工核对通知日期'}`;
+    // The verified adapter has committed; consume its target selection once even
+    // if current readback is insufficient, so evidence repair never replays intake.
+    if (msg.legalNoticeSelection) consumePendingLegalNotice(msg.legalNoticeSelection.pendingId);
+    return nativeStageReply(msg, control, `${report}\n\n- 案件提醒：${reminderCount ? `已生成/更新 ${reminderCount} 条` : '未识别到未来期限，请人工核对通知日期'}`,
+      'archived', archive);
   }
 
-  const url = extractFirstUrl(messageText);
-  if (!url) return '已识别法律入案请求，但当前法律消息入案工具未注册。';
-  const { caseFile, hints, rawMaterialId } = findOrCreateCaseFromNotice({
-    orgId: resolvedTarget.orgId,
-    userId,
-    message: messageText,
-  });
-  const report = await executeRegisteredTool(msg, control, 'legal_process_notice_link', {
-    orgId: resolvedTarget.orgId,
-    userId,
-    caseId: caseFile.id,
-    caseName: caseFile.title,
-    url,
-    message: messageText,
-    noticeText: messageText,
-    title: '微信/飞书转发法院通知链接材料',
-    persistCase: true,
-    confirmedForKb: false,
-    includeExtractedText: true,
-    extractedTextLimit: 6000,
-  }, {
-    userId,
-    orgId: resolvedTarget.orgId,
-    domain: 'work',
-    source: `${msg.platform}-legal-notice-intake`,
-  });
-  const refreshed = LegalCases.getCase(resolvedTarget.orgId, caseFile.id, userId) || caseFile;
-  const reminderCount = createCaseAlerts({ userId, orgId: resolvedTarget.orgId, caseFile: refreshed, content: `${messageText}\n${report}` });
-  return [
-    `已收到${platformLabel(msg.platform)}转发的法院短信链接，并写入案件。`,
-    `案件：${refreshed.title}`,
-    `案号：${refreshed.caseNumber || hints.caseNumber || '未识别'}`,
-    `法院：${refreshed.court || hints.court || '未识别'}`,
-    `开庭/通知日期：${refreshed.hearingDate || hints.hearingDate || '未识别'}`,
-    `短信原文材料：${rawMaterialId || '已尝试归档'}`,
-    `案件提醒：${reminderCount ? `已生成/更新 ${reminderCount} 条` : '未识别到未来期限'}`,
-  ].join('\n');
 }
 
 async function handlePersonalLegalNotice(
@@ -539,22 +623,13 @@ async function handlePersonalLegalNotice(
     candidates = caseCandidates(userId, `${matchText}\n${inspected}`);
   }
 
-  if (candidates.length === 1) {
-    return runOrganizationLegalIntake(msg, candidates[0], messageText, control);
-  }
-
   if (candidates.length === 0) {
     const organizations = organizationCandidates(userId);
     const hints = LegalCases.extractLegalCaseHints(`${matchText}\n${inspected}`);
     const explicitTarget = extractCaseTarget(messageText);
     if (organizations.length === 1 && (hints.caseNumber || explicitTarget)) {
-      return runOrganizationLegalIntake(msg, {
-        ...organizations[0],
-        caseTitle: explicitTarget || hints.caseNumber,
-        caseNumber: hints.caseNumber,
-      }, messageText, control);
-    }
-    candidates = organizations;
+      candidates = [{ ...organizations[0], caseTitle: explicitTarget || hints.caseNumber, caseNumber: hints.caseNumber }];
+    } else candidates = organizations;
   }
 
   if (candidates.length === 0) {
@@ -563,7 +638,7 @@ async function handlePersonalLegalNotice(
       title: '法院通知待归档',
       message: '个人微信已收到法院通知，但当前身份没有可写入的组织案件空间。',
     });
-    return '链接已经按个人待归档材料检查，但当前 Lumi 身份没有可写入的组织。请先创建或加入组织后再归档。';
+    return nativeStageReply(msg, control, '链接已经按个人待归档材料检查，但当前 Lumi 身份没有可写入的组织。请先创建或加入组织后再归档。', 'blocked');
   }
 
   savePendingLegalNotice({
@@ -578,12 +653,10 @@ async function handlePersonalLegalNotice(
     title: '法院通知等待选择案件',
     message: `已收到个人微信法院通知，等待从 ${candidates.length} 个可用目标中选择案件。`,
   });
-  return pendingPrompt(candidates, inspected);
+  return nativeStageReply(msg, control, pendingPrompt(candidates, inspected), 'awaiting_target');
 }
 
-export async function handleRemoteLegalNoticeIntake(msg: IncomingMessage, control: LegalNoticeExecutionControl = {}): Promise<string | null> {
-  msg.organizationAuthorization = captureMessagingOrganization(msg).organizationAuthorization;
-  assertNoticeAuthorized(msg, control);
+function isRequestedLegalNoticeIntake(msg: IncomingMessage): boolean {
   const messageText = currentUserRequestText(msg);
   const signalText = legalSignalText(msg);
   const hasCourtNoticeAttachment = Boolean(msg.attachments?.length)
@@ -597,26 +670,27 @@ export async function handleRemoteLegalNoticeIntake(msg: IncomingMessage, contro
   // or extracted body looks like a court notice. Case creation/archiving opens
   // only from the current user's explicit wording (or a durable pending target
   // selection handled below).
-  const legalCandidate = explicitIntakeRequest && hasLegalMaterialSignal;
+  return explicitIntakeRequest && hasLegalMaterialSignal;
+}
 
-  if (msg.boundUserId && !msg.boundOrgId && !legalCandidate) {
-    const pending = getPendingLegalNotice(msg, msg.boundUserId);
-    if (pending && looksLikePendingSelection(messageText)) {
-      const selected = selectPendingCandidate(pending, messageText);
-      if (!selected) return pendingPrompt(pending.candidates, pending.inspectionReport);
-      consumePendingLegalNotice(pending.id);
-      msg.text = pending.messageText;
-      msg.attachments = pending.attachments;
-      return runOrganizationLegalIntake(msg, selected, pending.messageText, control);
-    }
+export async function handleRemoteLegalNoticeIntake(msg: IncomingMessage, control: LegalNoticeExecutionControl = {}): Promise<string | null> {
+  msg.organizationAuthorization = captureMessagingOrganization(msg).organizationAuthorization;
+  assertNoticeAuthorized(msg, control);
+  const messageText = currentUserRequestText(msg);
+  const legalCandidate = isRequestedLegalNoticeIntake(msg);
+
+  if (msg.legalNoticeSelection) {
+    const pending = currentPendingNoticeSelection(msg);
+    if (!pending) throw new MessagingAuthorizationRevokedError();
+    return runOrganizationLegalIntake({ ...msg, attachments: pending.attachments }, msg.legalNoticeSelection.target, pending.messageText, control);
   }
 
   if (!legalCandidate) return null;
 
   if (!msg.boundUserId) {
-    return bindingPrompt(msg.platform);
+    return nativeStageReply(msg, control, bindingPrompt(msg.platform), 'blocked');
   }
-  if (!msg.boundOrgId) return handlePersonalLegalNotice(msg, messageText, signalText, control);
+  if (!msg.boundOrgId) return handlePersonalLegalNotice(msg, messageText, legalSignalText(msg), control);
 
   return runOrganizationLegalIntake(msg, {
     orgId: msg.boundOrgId,

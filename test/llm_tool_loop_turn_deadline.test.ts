@@ -190,8 +190,9 @@ describe('bounded cumulative model-wait lifecycle', () => {
     expect(result.usageRecords).toEqual([
       expect.objectContaining({ provider: 'deepseek', model: 'test-model', totalTokens: 16 }),
     ]);
-    expect(result.text).toContain('青穹跟进：目标是完成客户回访');
-    expect(result.text).toContain('当前进度与回执仍可用于继续');
+    expect(result.toolCalls[0].result).toContain('青穹跟进：目标是完成客户回访');
+    expect(result.text).toMatch(/尚未.*完成|还没完成|未.*完成/u);
+    expect(result.text).not.toMatch(/verified_context|test\.verified_context|execution_/u);
   });
 
   it('aborts the turn and quarantines late chunks and tool calls after cancellation', async () => {

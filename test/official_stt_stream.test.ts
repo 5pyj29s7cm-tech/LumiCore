@@ -144,7 +144,13 @@ describe('Lumi official streaming STT protocol', () => {
       header: { event: 'result-generated', task_id: runTask.header.task_id },
       payload: { output: { sentence: { text: 'hello', sentence_end: true } } },
     });
-    await expect(promise).resolves.toMatchObject({ text: 'hello', isFinal: true });
+    let settled = false; void promise.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    socket.message({ header: { event: 'result-generated', task_id: runTask.header.task_id },
+      payload: { output: { sentence: { text: 'complete tail', sentence_end: true } } } });
+    socket.message({ header: { event: 'task-finished', task_id: runTask.header.task_id }, payload: { output: {} } });
+    await expect(promise).resolves.toMatchObject({ text: 'hello\ncomplete tail', isFinal: true });
   });
 
   it('waits for task-started before sending queued binary audio, then sends finish-task', () => {

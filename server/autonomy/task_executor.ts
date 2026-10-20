@@ -33,14 +33,12 @@ import { finalizeAutonomousTaskFailure } from './executor/failure';
 export type { LLMGetters } from './executor/contracts';
 export { isLocalBodyLearningTask } from './executor/tool_policy';
 export { buildAutonomousToolPolicy } from './executor/tool_policy';
-export { buildAutonomousCapabilityPipeline } from './executor/tool_policy';
 export { projectAutonomousCustomerMessage } from './executor/customer_projection';
 export { projectAutonomousCompletionFeedback } from './executor/customer_projection';
 export { isSuccessfulAutonomousToolRecord } from './executor/receipts';
 export { hasVerifiedSelfImprovementStageReceipt } from './executor/outcome';
 export type { AutonomousTaskOutcome } from './executor/contracts';
 export { evaluateAutonomousTaskOutcome } from './executor/outcome';
-export { finalizeAutonomousTaskOutcomeForDelivery } from './executor/outcome';
 export { persistAutonomousTaskFinalizations } from './executor/durable_finalization';
 export { retryAutonomousTaskFinalizations } from './executor/durable_finalization';
 
@@ -211,21 +209,6 @@ export async function executeNextAutonomousTask(
     });
     releaseDesktopControlLease = () => desktopRelay.releaseControlLease('autonomous_task_complete');
 
-    sideEffectClass = executionPipeline.executionPlan.risk.sideEffectClass;
-    attachAutonomousExecutionPlan(
-      running.id,
-      sanitizeCapabilityExecutionPlan(executionPipeline.executionPlan, new Date().toISOString()),
-      running.leaseId,
-    );
-    checkpointAutonomousTask(running.id, {
-      phase: 'planned',
-      receiptIds: running.checkpoint?.receiptIds,
-      receipts: running.checkpoint?.receipts,
-      detail: `Capability plan persisted for attempt ${running.attempt || 1}`,
-    }, running.leaseId);
-    if (executionPipeline.executionPlan.risk.sideEffectClass === 'external_commit') {
-      throw new Error('Autonomous external commit blocked: an action-time immutable user confirmation is required.');
-    }
     const toolPolicy = executionPipeline.authorizationPolicy;
 
     const context: ToolContext = attachAutonomousHostAuthority({
@@ -312,6 +295,11 @@ export async function executeNextAutonomousTask(
       onToolCall: async (record) => {
         await settleAutonomousTaskAction(running.id, running.leaseId!, record);
         upsertToolLedger(toolLedger, record);
+        if (executionPipeline.executionPlan) {
+          sideEffectClass = executionPipeline.executionPlan.risk.sideEffectClass;
+          attachAutonomousExecutionPlan(running.id,
+            sanitizeCapabilityExecutionPlan(executionPipeline.executionPlan, new Date().toISOString()), running.leaseId);
+        }
         if (record.result !== undefined || record.error !== undefined) {
           checkpointAutonomousTask(running.id, {
             phase: 'tool_execution',
@@ -399,7 +387,7 @@ export async function executeNextAutonomousTask(
         error: failureReason,
         verificationFailure: true,
         receiptSnapshots,
-        sideEffectClass: executionPipeline.executionPlan.risk.sideEffectClass,
+        sideEffectClass,
         leaseLost,
       }, running.leaseId);
       if (!settled) {

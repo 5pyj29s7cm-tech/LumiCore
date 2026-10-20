@@ -2,7 +2,7 @@ import './helpers';
 import fs from 'node:fs';
 import { createServer, type Server as HttpServer } from 'node:http';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Server as SocketIOServer } from 'socket.io';
 import { io as createSocketClient, type Socket as ClientSocket } from 'socket.io-client';
 
@@ -434,8 +434,9 @@ describe('accepted STT Voice -> Chat task continuity', () => {
     conversationId = String(voiceResponse.conversationId || '');
     expect(voiceRequestId).toMatch(/^voice_/u);
     expect(conversationId).toMatch(/^conv_/u);
-    expect(String(voiceResponse.text || '')).toMatch(/文件|路径/u);
-    expect(String(voiceResponse.text || '')).not.toMatch(/No successful current-turn|persistence_unknown/u);
+    expect(voiceResponse.blocked).toBe(true);
+    expect(String(voiceResponse.text || '')).toMatch(/没能开始|(?:未|没有).*完成|尚未.*核验/u);
+    expect(String(voiceResponse.text || '')).not.toMatch(/No successful current-turn|persistence_unknown|Document analysis is blocked|trusted application|window\/object\/path anchor/u);
     expect(clientEvents.some(item => (
       item.event === 'audio:confirm'
       && String(item.payload.text || '').includes(missingPath)
@@ -911,5 +912,185 @@ describe('accepted STT Voice -> Chat task continuity', () => {
       mocks.makeLLMCall.mockImplementation(beforeCall!);
     }
   }, 20000);
+
+
+  describe('literal STT source bytes through the real voice socket', () => {
+    let captureSequence = 0;
+    let activeLiteralCapture = '';
+    let priorCall: ReturnType<typeof mocks.makeLLMCall.getMockImplementation>;
+    let priorStreaming: ReturnType<typeof mocks.makeLLMCallStreaming.getMockImplementation>;
+    const literal = '甲，乙\r\n丙  丁\r\nＷ Ｐ Ｓ ①';
+    const acceptedUsers = () => (readDB().interactions || []).filter((row: any) => row.userId === userId && row.role === 'user');
+
+    beforeEach(() => {
+      clearAllPendingConfirmationsForTests();
+      priorCall = mocks.makeLLMCall.getMockImplementation();
+      priorStreaming = mocks.makeLLMCallStreaming.getMockImplementation();
+      mocks.makeLLMCall.mockClear();
+      mocks.makeLLMCallStreaming.mockClear();
+    });
+    afterEach(async () => {
+      if (activeLiteralCapture) {
+        const idle = waitForEvent<Record<string, any>>(client, 'audio:status', payload => payload.status === 'idle', 5_000);
+        client.emit('audio:stop');
+        await idle;
+        activeLiteralCapture = '';
+      }
+      if (priorCall) mocks.makeLLMCall.mockImplementation(priorCall);
+      if (priorStreaming) mocks.makeLLMCallStreaming.mockImplementation(priorStreaming);
+    });
+    async function startLiteralCapture(transcriptionOnly = false) {
+      const before = sttHarness.sessions.length;
+      activeLiteralCapture = captureSessionId + '-literal-' + (++captureSequence);
+      latestVoiceprintEpoch = 0;
+      const listening = waitForEvent<Record<string, any>>(client, 'audio:status', payload => payload.status === 'listening' && payload.sessionId === activeLiteralCapture);
+      client.emit('audio:start', { agentId: 'lumi', domain: 'personal', sessionId: activeLiteralCapture,
+        captureSessionId: activeLiteralCapture, audioInputKind: 'physical_microphone', transcriptionOnly });
+      await listening;
+      await waitUntil(() => sttHarness.sessions.length > before && latestVoiceprintEpoch > 0);
+      return sttHarness.sessions[before];
+    }
+    async function physicalFinal(stt: typeof sttHarness.sessions[number], text: string) {
+      client.emit('audio:chunk', Buffer.alloc(640, 7));
+      client.emit('voiceprint:result', { isOwnerSpeaking: true, confidence: 0.99, quality: 0.95,
+        frameCount: 16, source: 'local-mfcc', speakerLabel: 'S6 literal owner', utteranceEpoch: latestVoiceprintEpoch });
+      await new Promise(resolve => setTimeout(resolve, 40));
+      await stt.emitResult({ text, isFinal: true, speechStarted: true, speechFinal: true });
+    }
+
+    it('keeps literal provider bytes in confirmation, accepted user row and the actual model user message', async () => {
+      const observed: any[][] = [];
+      const answer = { text: '原文保真测试收到；不作执行或法律结论。', toolCalls: [],
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+      mocks.makeLLMCallStreaming.mockImplementation(async (messages: any[]) => { observed.push(messages); return answer; });
+      mocks.makeLLMCall.mockImplementation(async (...args: any[]) => {
+        const [messages] = args;
+        if (messages.some((message: any) => message.role === 'user' && message.sourceMessageId)) {
+          observed.push(messages); return answer;
+        }
+        return priorCall?.(...args);
+      });
+      const stt = await startLiteralCapture();
+      const raw = '  请逐字复述以下引号中的原文，不操作文件：“' + literal + '”。  ';
+      const expected = raw.trim();
+      const confirm = waitForEvent<Record<string, any>>(client, 'audio:confirm', payload => payload.text === expected);
+      const terminal = waitForEvent<Record<string, any>>(client, 'agent:response', payload => payload.channel === 'voice' && payload.finalized === true, 20_000);
+      await physicalFinal(stt, raw);
+      expect((await confirm).text).toBe(expected);
+      const result = await terminal;
+      const user = getMessages(result.conversationId).find((row: any) => row.role === 'user' && row.requestId === result.requestId);
+      expect(user).toMatchObject({ userId, source: 'voice', channel: 'voice', audioInputKind: 'physical_microphone',
+        syntheticAudio: false, captureSessionId: activeLiteralCapture, executionSessionId });
+      expect(user?.message).toBe(expected);
+      expect(Buffer.from(user!.message, 'utf8')).toEqual(Buffer.from(expected, 'utf8'));
+      expect(user?.sttReceiptId).toMatch(/^stt_[0-9a-f-]{36}$/u);
+      expect(getConversationActionTurn({ conversationId: result.conversationId, userId, requestId: result.requestId }))
+        .toMatchObject({ userId, requestId: result.requestId, userMessageId: user!.id, domain: 'personal', orgId: '' });
+      const modelUsers = observed.map(messages => {
+        const acceptedSources = messages.filter(message => message.role === 'user' && message.sourceMessageId === user!.id);
+        expect(acceptedSources).toHaveLength(1);
+        return acceptedSources[0];
+      });
+      const recoveryControls = observed.flatMap(messages => messages.filter(message => message.role === 'user'
+        && typeof message.content === 'string' && message.content.startsWith('Internal execution recovery.')));
+      expect(recoveryControls.length).toBeGreaterThan(0);
+      for (const control of recoveryControls) expect(control.sourceMessageId).toBeUndefined();
+      expect(modelUsers.length).toBeGreaterThan(0);
+      expect(modelUsers.some(message => message.content === expected)).toBe(true);
+      for (const message of modelUsers) {
+        expect(message.content).toBe(expected);
+        expect(Buffer.from(message.content, 'utf8')).toEqual(Buffer.from(expected, 'utf8'));
+      }
+    }, 30_000);
+
+    it('keeps transcription-only final bytes without admitting a chat user turn or task', async () => {
+      const stt = await startLiteralCapture(true);
+      const raw = '  会议原文：“' + literal + '”。  ';
+      const expected = raw.trim();
+      const usersBefore = acceptedUsers().length;
+      const tasksBefore = (readDB().conversationActionTasks || []).filter((row: any) => row.userId === userId).length;
+      const turnsBefore = (readDB().conversationActionTurns || []).filter((row: any) => row.userId === userId).length;
+      const confirm = waitForEvent<Record<string, any>>(client, 'audio:confirm', payload => payload.text === expected);
+      const transcript = waitForEvent<Record<string, any>>(client, 'audio:transcript', payload => payload.isFinal === true);
+      await physicalFinal(stt, raw);
+      expect((await confirm).text).toBe(expected);
+      const final = await transcript;
+      expect(final.text).toBe(expected);
+      expect(Buffer.from(final.text, 'utf8')).toEqual(Buffer.from(expected, 'utf8'));
+      expect(acceptedUsers()).toHaveLength(usersBefore);
+      expect((readDB().conversationActionTasks || []).filter((row: any) => row.userId === userId)).toHaveLength(tasksBefore);
+      expect((readDB().conversationActionTurns || []).filter((row: any) => row.userId === userId)).toHaveLength(turnsBefore);
+      expect(mocks.makeLLMCall).not.toHaveBeenCalled();
+      expect(mocks.makeLLMCallStreaming).not.toHaveBeenCalled();
+    }, 20_000);
+
+    it.each([
+      ['comma', '甲,乙\r\n丙  丁\r\nＷ Ｐ Ｓ ①'],
+      ['space', '甲，乙\r\n丙 丁\r\nＷ Ｐ Ｓ ①'],
+      ['fullwidth', '甲，乙\r\n丙  丁\r\nW P S ①'],
+    ])('keeps distinct %s literal commands queued during real active work while suppressing an exact-byte repeated final', async (kind, changedLiteral) => {
+      const activePath = path.join(isolatedDataDir, 'literal-active-' + kind + '-' + suffix + '.txt');
+      const queuedPath = path.join(isolatedDataDir, 'literal-queued-' + kind + '-' + suffix + '.txt');
+      fs.writeFileSync(activePath, 'Literal active source ' + kind, 'utf8');
+      fs.writeFileSync(queuedPath, 'Literal queued source ' + kind, 'utf8');
+      const originalReader = toolRegistry.get('read_file')!;
+      let entered!: () => void, release!: () => void;
+      const entry = new Promise<void>(resolve => { entered = resolve; });
+      const released = new Promise<void>(resolve => { release = resolve; });
+      toolRegistry.unregister('read_file');
+      toolRegistry.register({ ...originalReader, handler: async (args, context) => {
+        if (args.path === activePath) { entered(); await released; }
+        return originalReader.handler(args, context);
+      } });
+      const iterations = new Map<string, number>();
+      mocks.makeLLMCallStreaming.mockImplementation(async (...args: any[]) => {
+        const context = mocks.runWithTools.mock.calls.at(-1)?.[11];
+        const key = String(context?.requestId || 'sidecar');
+        const count = (iterations.get(key) || 0) + 1; iterations.set(key, count);
+        const lastUser = args[0].filter((message: any) => message.role === 'user').at(-1)?.content || '';
+        if (count === 1 && (lastUser.includes(activePath) || lastUser.includes(queuedPath))) return {
+          text: '', toolCalls: [{ id: 'literal-read-' + kind + '-' + key, name: 'read_file',
+            arguments: { path: lastUser.includes(activePath) ? activePath : queuedPath } }],
+          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        };
+        return { text: '本轮仅报告实际读取结果，不代表其他操作已完成。', toolCalls: [],
+          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+      });
+      const eventStart = clientEvents.length;
+      const first = '请读取 ' + queuedPath + '，然后原样报告标记“' + literal + '”。';
+      const second = '请读取 ' + queuedPath + '，然后原样报告标记“' + changedLiteral + '”。';
+      expect(first).not.toBe(second);
+      try {
+        const stt = await startLiteralCapture();
+        await physicalFinal(stt, '请读取 ' + activePath + '，完成后返回该文件全文。');
+        await entry;
+        const queuedOne = waitForEvent<Record<string, any>>(client, 'audio:work_queued', payload => payload.text === first);
+        const queuedAt = Date.now();
+        await physicalFinal(stt, first);
+        expect(await queuedOne).toMatchObject({ text: first, queuePosition: 1 });
+        const queuedTwo = waitForEvent<Record<string, any>>(client, 'audio:work_queued', payload => payload.text === second);
+        await physicalFinal(stt, second);
+        expect(await queuedTwo).toMatchObject({ text: second, queuePosition: 2 });
+        expect(Date.now() - queuedAt).toBeLessThan(2_500);
+        const repeatedConfirm = waitForEvent<Record<string, any>>(client, 'audio:confirm', payload => payload.text === second);
+        await physicalFinal(stt, second);
+        await repeatedConfirm;
+        const queueEvents = clientEvents.slice(eventStart).filter(event => event.event === 'audio:work_queued');
+        expect(queueEvents.map(event => ({ text: event.payload.text, position: event.payload.queuePosition })))
+          .toEqual([{ text: first, position: 1 }, { text: second, position: 2 }]);
+        release();
+        await waitUntil(() => acceptedUsers().some(row => row.message === first) && acceptedUsers().some(row => row.message === second), 20_000);
+        const firstRows = acceptedUsers().filter(row => row.message === first);
+        const secondRows = acceptedUsers().filter(row => row.message === second);
+        expect(firstRows).toHaveLength(1); expect(secondRows).toHaveLength(1);
+        expect(firstRows[0].requestId).not.toBe(secondRows[0].requestId);
+        expect(Buffer.from(firstRows[0].message, 'utf8')).toEqual(Buffer.from(first, 'utf8'));
+        expect(Buffer.from(secondRows[0].message, 'utf8')).toEqual(Buffer.from(second, 'utf8'));
+      } finally {
+        release();
+        toolRegistry.unregister('read_file'); toolRegistry.register(originalReader);
+      }
+    }, 40_000);
+  });
 
 });

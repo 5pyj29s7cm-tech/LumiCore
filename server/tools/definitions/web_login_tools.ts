@@ -44,7 +44,7 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
     },
     handler: async (args) => JSON.stringify({
       presets: listWebLoginSitePresets(args.category),
-      note: 'Use web_login_profile_save_from_preset to create a local authorized login profile from one of these presets. Use web_login_learn_site for any other website.',
+      note: 'Select a listed site to prepare an authorized browser session. Other websites can be configured separately.',
     }, null, 2),
     permission: 'user',
     securityLevel: 'safe',
@@ -96,8 +96,8 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
         }, scopeFromContext(context)),
         preset,
         note: args.password
-          ? 'Saved from preset with encrypted credentials. Run web_login_run with this profile id to open the visible login session and complete captcha/2FA if needed.'
-          : 'Saved from preset. Run web_login_run with this profile id to reuse the authorized browser session and complete captcha/2FA manually if needed.',
+          ? 'Saved with encrypted credentials. Open the authorized browser session and complete any required verification manually.'
+          : 'Saved. Open the authorized browser session and complete any required verification manually.',
       }, null, 2);
     },
     permission: 'user',
@@ -140,7 +140,7 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
     },
     handler: async (_args, context) => JSON.stringify({
       profiles: listWebLoginProfiles(scopeFromContext(context)),
-      note: 'Use web_login_run to open a login session, or url_fetch_logged_in for pages that need the saved session.',
+      note: 'Open an authorized browser session to read pages that require login.',
     }, null, 2),
     permission: 'user',
     securityLevel: 'safe',
@@ -189,7 +189,7 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
           successUrlPattern: args.successUrlPattern,
           notes: args.notes,
         }, scopeFromContext(context)),
-        note: 'Saved. Run web_login_run to create or refresh the browser session.',
+        note: 'Saved. Open or refresh the authorized browser session.',
       }, null, 2);
     },
     permission: 'user',
@@ -368,14 +368,19 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
       },
       required: [],
     },
-    handler: async (args, context) => JSON.stringify(await runWebLogin({
-      profileId: args.profileId,
-      url: args.url,
-      headless: args.headless === true,
-      autoSubmit: args.autoSubmit !== false,
-      waitForManualMs: Number(args.waitForManualMs) || undefined,
-      keepOpenMs: Number(args.keepOpenMs) || undefined,
-    }, scopeFromContext(context)), null, 2),
+    handler: async (args, context) => {
+      const scope = scopeFromContext(context);
+      if (args.profileId && getWebLoginSitePreset(String(args.profileId))
+        && !listWebLoginProfiles(scope).some(profile => profile.id === args.profileId)) assertCanMutateWebLoginProfile(context);
+      return JSON.stringify(await runWebLogin({
+        profileId: args.profileId,
+        url: args.url,
+        headless: args.headless === true,
+        autoSubmit: args.autoSubmit !== false,
+        waitForManualMs: Number(args.waitForManualMs) || undefined,
+        keepOpenMs: Number(args.keepOpenMs) || undefined,
+      }, scope), null, 2);
+    },
     permission: 'user',
     securityLevel: 'safe',
     capability: capabilityContract({

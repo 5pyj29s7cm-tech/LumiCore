@@ -27,8 +27,8 @@ export function extractPersistedMediaArtifacts(message: any): MediaGenerationArt
   const collected: MediaGenerationArtifact[] = [];
   for (const record of records) {
     const toolName = String(record.name || record.toolName || '').trim();
-    if (!MEDIA_GENERATION_TOOL_NAMES.has(toolName) && toolName !== 'get_image_generation_status') continue;
-    const fallbackKind: MediaGenerationKind = toolName === 'generate_video' ? 'video' : 'image';
+    if (!MEDIA_GENERATION_TOOL_NAMES.has(toolName) && !['get_image_generation_status', 'get_video_generation_status'].includes(toolName)) continue;
+    const fallbackKind: MediaGenerationKind = ['generate_video', 'get_video_generation_status'].includes(toolName) ? 'video' : 'image';
     const args = record.arguments && typeof record.arguments === 'object'
       ? record.arguments
       : record.args && typeof record.args === 'object'
@@ -45,9 +45,9 @@ export function extractPersistedMediaArtifacts(message: any): MediaGenerationArt
     const artifacts = extractMediaGenerationArtifacts(record.result, fallbackKind).map(artifact => ({
       ...artifact,
       requestId: String(record.requestId || message?.requestId || '').trim() || undefined,
-      operation,
+      operation: artifact.operation || operation,
       prompt: String(args.prompt || '').trim() || undefined,
-      model: String((record.result as any)?.model || '').trim() || undefined,
+      model: artifact.model || String((record.result as any)?.model || '').trim() || undefined,
     }));
     collected.push(...artifacts);
   }

@@ -3,6 +3,7 @@ import { runResolvedLumiRecovery } from "../server/cognition/turn_recovery";
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initDatabase } from '../db_layer';
 import { ToolRegistry } from '../server/tools/registry';
+import { executeToolCall, isCanonicalToolExecutionRecord } from '../server/tools/execution_engine';
 import { buildLumiExecutionPipeline } from '../server/cognition/execution_pipeline';
 import { runResolvedLumiTurn } from '../server/cognition/turn_model';
 import { createModelTurnState } from '../server/llm/model_turn_state';
@@ -31,6 +32,17 @@ function admitted(source: string, text: string) {
     personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 },
   });
   return { execution, registry, messages: [{ role: 'user' as const, content: text }], config: { provider: 'deepseek' as const, model: 'fixture', userId: 'resolved-turn-owner' }, getters: {} };
+}
+async function canonicalObservation(model: ReturnType<typeof admitted>, id: string, query: string, requestId = model.execution.resolution.requestId) {
+  const records: any[] = [];
+  const record = await executeToolCall({ registry: model.registry, name: 'web_search', id, arguments: { query }, executionOrigin: 'model_selected',
+    context: { userId: model.config.userId, requestId, turnId: requestId, currentTurnExecutionRequested: true,
+      actionIntent: model.execution.resolution.userText, toolPolicy: model.execution.authorizationPolicy, onToolRecord: observed => records.push(observed) } });
+  expect(isCanonicalToolExecutionRecord(record)).toBe(true);
+  expect(record.requestId).toBe(requestId);
+  expect(record.error).toBeFalsy();
+  expect(records).toEqual([record]);
+  return record;
 }
 describe('admitted model mode across transport entries', () => {
   it.each(['chat', 'voice', 'messaging', 'autonomous', 'rest_chat', 'mcp_chat', 'mcp_route_task'])('keeps %s conversation out of the tool adapter despite a visible registry', async source => {
@@ -110,8 +122,8 @@ describe('accepted recovery ownership', () => {
   it.each(['chat', 'voice', 'messaging', 'rest_chat', 'mcp_chat'])('keeps the %s request, provider budget, receipts and failed response guard through recovery', async source => {
     const model = admitted(source, 'Search the public web for synthetic examples.');
     await runResolvedLumiTurn(model);
-    const prior = { id: 'prior-observation', name: 'web_search', arguments: { query: 'prior' }, result: 'Earlier source evidence' };
-    const record = { id: 'new-observation', name: 'web_search', arguments: { query: 'new' }, result: 'New source evidence' };
+    const prior = await canonicalObservation(model, 'prior-observation', 'prior');
+    const record = await canonicalObservation(model, 'new-observation', 'new');
     const guard = { text: 'The recovery response is incomplete.', blocked: true, reason: 'conversation_response_incomplete' };
     const order: string[] = [], recordTool = vi.fn(() => { order.push('guard'); });
     const onChunk = vi.fn();
@@ -151,4 +163,18 @@ describe('accepted recovery ownership', () => {
     })).rejects.toThrow('Owner revoked');
     expect(mocks.tools).not.toHaveBeenCalled(); expect(mocks.conversation).not.toHaveBeenCalled(); expect(recordTool).not.toHaveBeenCalled();
   });
+});
+
+it('keeps only an untouched canonical observation of this request during recovery', async () => {
+  const model = admitted('canonical-filter', 'Search the public web for synthetic examples.');
+  const prior = await canonicalObservation(model, 'exact-request-observation', 'prior');
+  const forged = { ...prior, id: 'forged-copy' };
+  const foreign = await canonicalObservation(model, 'foreign-observation', 'other', 'a-different-request');
+  expect(isCanonicalToolExecutionRecord(forged)).toBe(false);
+  expect(isCanonicalToolExecutionRecord(foreign)).toBe(true);
+  await runResolvedLumiRecovery({ model, responseText: '', recovery: {
+    decision: { recoverable: true, reason: 'retry_real_tool_route' }, instruction: 'Continue only missing observation.',
+    priorToolRecords: [prior, forged, foreign], recordTool: vi.fn(),
+  } });
+  expect(mocks.tools.mock.calls[0][11].priorToolRecords).toEqual([prior]);
 });

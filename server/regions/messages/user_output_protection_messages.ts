@@ -10,6 +10,6 @@ export const CN_USER_OUTPUT_PROTECTION_MESSAGES = {
   ),
   processesChecked: '已检查运行中的程序。原始进程表和系统字段已省略；需要时我可以只列出相关程序。',
   savedFiles: (files: string[], failed: boolean) => `已保存文件：${files.join('、')}。${failed ? '部分步骤失败，尚不能确认整项任务完成。' : '目前只确认这些文件已生成，是否完成任务需核对你要求的交付物。'}`,
-  genericSummary: '已获取执行结果。为便于阅读并保护本机信息，原始系统数据已省略；我会只汇报与当前任务有关的结论和异常。',
+  genericSummary: '这次未能给出可确认的结果。',
   failedSummary: '执行中有步骤失败，目前不能确认任务完成。原始系统数据已省略。',
 } as const;

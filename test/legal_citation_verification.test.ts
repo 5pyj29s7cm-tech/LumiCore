@@ -1,4 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import {beforeAll,beforeEach,describe,expect,it} from 'vitest';
+import {initDatabase} from '../db_layer';
+import {installCivilCodeFixture,installMetadataOnlyFixtures,resetAuthorityFixture} from './fixtures/legal_authority_fixture';
+import {loadStatuteAuthorityRefreshState,saveStatuteAuthorityRefreshState} from '../server/legal/statute_authority_store';
+import {evaluateCurrentLawGate} from '../server/regions/packs/cn/legal_tools/citations';
+beforeAll(()=>initDatabase());
+beforeEach(()=>{resetAuthorityFixture();installCivilCodeFixture();});
 import './helpers';
 import { verifyCitation, verifyMultipleCitations } from '../server/legal/kb';
 
@@ -8,7 +14,10 @@ describe('Authoritative legal citation verification', () => {
     expect(check.exists).toBe(true);
     expect(check.isEffective).toBe(true);
     expect(check.source).toContain('国家法律法规数据库');
-    expect(check.source).toContain('2026-07-12');
+    expect(check.provisionVerified).toBe(true);
+    expect(check.verificationStatus).toBe('verified');
+    expect(check.sourceText).toContain('违约金');
+    expect(check.verifiedAt).toBe('2026-09-18');
   });
 
   it('rejects an impossible article instead of validating only the law title', () => {
@@ -19,12 +28,15 @@ describe('Authoritative legal citation verification', () => {
   });
 
   it('accepts a Company Law article inside its independently sourced current snapshot', () => {
+    installMetadataOnlyFixtures();
     const check = verifyCitation('《公司法》第五十条');
     expect(check.exists).toBe(true);
     expect(check.isEffective).toBe(true);
     expect(check.source).toContain('国家法律法规数据库');
     expect(check.source).toContain('2023-12-29');
-    expect(check.verificationStatus).toBe('verified');
+    expect(check.verificationStatus).toBe('metadata_only');
+    expect(check.provisionVerified).toBe(false);
+    expect(evaluateCurrentLawGate(check.citation,undefined,[],'2026-01-15').passed).toBe(false);
   });
 
   it.each([
@@ -50,12 +62,18 @@ describe('Authoritative legal citation verification', () => {
     ['《担保制度解释》第七十一条', 71],
     ['《买卖合同司法解释》第三十三条', 33],
   ])('verifies the final article in a sourced current-law snapshot: %s', (citation, articleMax) => {
-    const check = verifyCitation(citation);
+    installMetadataOnlyFixtures();
+    const check=verifyCitation(citation);
+    if(citation==='《民诉法解释》第五百五十二条'){
+      expect(check.exists).toBe(false);expect(check.verificationStatus).toBe('not_found');expect(check.detail).toContain('550');
+      expect(evaluateCurrentLawGate(citation,undefined,[],'2026-01-15',{procedureDate:'2026-09-18'}).passed).toBe(false);return;
+    }
     expect(check.exists).toBe(true);
-    expect(check.isEffective).toBe(true);
-    expect(check.detail).toContain(`第${articleMax}条`);
-    expect(check.sourceUrl).toMatch(/^https:\/\//);
-    expect(check.reviewAfter).toBe('2026-10-10');
+    expect(check.verificationStatus).toBe('metadata_only');
+    expect(check.provisionVerified).toBe(false);
+    expect(check.sourceUrl?.startsWith('https://')).toBe(true);
+    expect(verifyCitation(citation.replace(/第[^条]+条/,'第'+(articleMax+1)+'条')).exists).toBe(false);
+    expect(evaluateCurrentLawGate(citation,undefined,[],'2026-01-15',{procedureDate:'2026-09-18'}).passed).toBe(false);
   });
 
   it('fails closed after an authoritative snapshot reaches its review deadline', () => {
@@ -94,4 +112,20 @@ describe('Authoritative legal citation verification', () => {
     expect(check.exists).toBe(true);
     expect(check.isEffective).toBe(false);
   });
+});
+
+describe('exact authoritative body and case-time gates',()=>{
+ const factDate='2026-01-15';
+ const correctQuote='当事人可以约定一方违约时应当根据违约情况向对方支付一定数额的违约金';
+ it('requires exact article text rather than a title and article-range cache',()=>{installMetadataOnlyFixtures();const check=verifyCitation('《民法典》第五百八十五条');expect(check.verificationStatus).toBe('metadata_only');expect(check.provisionVerified).toBe(false);expect(evaluateCurrentLawGate(check.citation,undefined,[],factDate).passed).toBe(false);});
+ it('accepts a complete source-bound body for a post-effective fact date',()=>{const check=verifyCitation('《民法典》第五百八十五条',undefined,{factDate,quotedText:correctQuote});expect(check.provisionVerified).toBe(true);expect(check.quotationVerified).toBe(true);expect(check.sourceText).toContain(correctQuote);expect(evaluateCurrentLawGate(check.citation,undefined,[],factDate,{quotedText:correctQuote}).passed).toBe(true);});
+ it('keeps a different article under the same statute title from proving a quotation',()=>{const check=verifyCitation('《民法典》第五百八十六条',undefined,{factDate,quotedText:correctQuote});expect(check.quotationVerified).toBe(false);expect(evaluateCurrentLawGate(check.citation,undefined,[],factDate,{quotedText:correctQuote}).passed).toBe(false);});
+ it('rejects the first paragraph quote when the citation identifies the real second paragraph',()=>{const citation='《民法典》第五百八十五条第二款';const check=verifyCitation(citation,undefined,{factDate,quotedText:correctQuote});expect(check.exists).toBe(true);expect(check.verificationStatus).toBe('text_mismatch');expect(check.quotationVerified).toBe(false);expect(evaluateCurrentLawGate(citation,undefined,[],factDate,{quotedText:correctQuote}).passed).toBe(false);});
+ it('rejects a nonexistent paragraph even when the article is real',()=>{const check=verifyCitation('《民法典》第五百八十五条第九十九款');expect(check.provisionVerified).not.toBe(true);expect(evaluateCurrentLawGate(check.citation,undefined,[],factDate).passed).toBe(false);});
+ it('does not pass formal applicability without the case fact date',()=>{const gate=evaluateCurrentLawGate('《民法典》第五百八十五条');expect(gate.missingFactDate).toBe(true);expect(gate.passed).toBe(false);});
+ it('does not use the present Civil Code body to confirm a pre-effective fact date',()=>{const gate=evaluateCurrentLawGate('《民法典》第五百八十五条',undefined,[],'2019-01-15');expect(gate.passed).toBe(false);expect(gate.statuteChecks[0].temporalApplicabilityVerified).toBe(false);expect(gate.statuteChecks[0].applicabilityStatus).toBe('historical_review_required');});
+ it('requires the procedure date separately for procedural citations',()=>{installMetadataOnlyFixtures();const gate=evaluateCurrentLawGate('《民事诉讼法》第三百零六条',undefined,[],factDate);expect(gate.missingProcedureDate).toBe(true);expect(gate.passed).toBe(false);});
+ it('keeps an expired original-text source from being a current verified provision',()=>{const check=installCivilCodeFixture();check.reviewAfter='2020-01-01';const state=loadStatuteAuthorityRefreshState();state.checks[check.title]=check;saveStatuteAuthorityRefreshState(state);const result=verifyCitation('《民法典》第五百八十五条');expect(result.verificationStatus).toBe('expired');expect(result.provisionVerified).not.toBe(true);expect(evaluateCurrentLawGate(result.citation,undefined,[],factDate).passed).toBe(false);});
+ it.each(['source','record','digest','version','effective'])('rejects mismatched original-text provenance (%s)',kind=>{const check=installCivilCodeFixture();if(kind==='source')check.originalText.sourceUrl='https://example.invalid/copied-law';if(kind==='record')check.originalText.recordId='other-record';if(kind==='digest')check.originalText.sha256='not-a-sha256';if(kind==='version')check.originalText.versionDate='2019-01-01';if(kind==='effective')check.observed.effectiveDate='2020-01-01';const state=loadStatuteAuthorityRefreshState();state.checks[check.title]=check;saveStatuteAuthorityRefreshState(state);const result=verifyCitation('《民法典》第五百八十五条');expect(result.provisionVerified).not.toBe(true);expect(evaluateCurrentLawGate(result.citation,undefined,[],factDate).passed).toBe(false);});
+ it('treats the corrected 550th procedural interpretation article as metadata until its original body is available',()=>{installMetadataOnlyFixtures();const valid=verifyCitation('《民诉法解释》第五百五十条');expect(valid.verificationStatus).toBe('metadata_only');expect(valid.provisionVerified).toBe(false);expect(verifyCitation('《民诉法解释》第五百五十一条').exists).toBe(false);expect(evaluateCurrentLawGate(valid.citation,undefined,[],factDate,{procedureDate:'2026-09-18'}).passed).toBe(false);});
 });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { normalizeLumiOfficialBaseUrl } from '../shared/model_provider_capabilities';
+import { normalizeLumiOfficialBaseUrl, LUMI_OFFICIAL_DEFAULT_MODELS } from '../shared/model_provider_capabilities';
 import {
   officialApiBinary,
   officialApiWebSocketUrl,
@@ -113,6 +113,17 @@ describe('official API transport', () => {
     expect(catalog.byRole.video_generation).toEqual(['huawei_maas/Wan2.2-T2V-A14B']);
     expect(catalog.byRole.image_to_video).toEqual(['huawei_maas/Wan2.2-I2V-A14B']);
     expect(catalog.byRole.speech_recognition).toEqual(['aliyun/qwen-audio-3.0-asr-flash-streaming']);
+  });
+
+  it('exposes the catalogued unified default video model in both configured roles', async () => {
+    process.env.RELAY_API_KEY = 'test-relay-key';
+    process.env.RELAY_BASE_URL = 'https://relay.example.test/v1';
+    const model = LUMI_OFFICIAL_DEFAULT_MODELS.image_to_video;
+    const catalog = await listOfficialApiModels({
+      fetchImpl: async () => jsonResponse({ data: [{ id: model, capability: 'video_generation' }] }),
+    });
+    expect(catalog.byRole.video_generation).toEqual([model]);
+    expect(catalog.byRole.image_to_video).toEqual([model]);
   });
 
   it('merges repeated and array capabilities for one public model id', async () => {

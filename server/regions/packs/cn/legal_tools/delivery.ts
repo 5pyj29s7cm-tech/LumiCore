@@ -4,7 +4,7 @@ import { parseDocument } from "../../../../legal/parser";
 import { legalWrite, legalExecutionSignal } from "../../../../legal/execution";
 import { createLegalArticle, indexLegalArticle, verifyMultipleCitations } from "../../../../legal/kb";
 import * as LegalCases from "../../../../org/legal_cases";
-import { textArg, expandLocalPath, legalWorkspaceId, resolveWritableOutputDir, ensureLegalDeliveryRoot, safeFileSegment } from "./context";
+import { legalTemporalOptions, textArg, expandLocalPath, legalWorkspaceId, resolveWritableOutputDir, ensureLegalDeliveryRoot, safeFileSegment } from "./context";
 import { formatCitationReportMarkdown, findArchivedLegalReasoningGateText, ownCaseNumbersFromArgs, evaluateCurrentLawGate, evaluateLegalReasoningGate, formatCurrentLawGateBlock, formatCitationList, formatCaseSourceGateBlock } from "./citations";
 import { markdownTitle, normalizeFormalDocumentType, buildFormalLegalMarkdown, writeDocxFromMarkdown, tryConvertDocxToPdf } from "./documents";
 import { appendLegalCaseMaterial } from "./case_workflow";
@@ -67,7 +67,7 @@ export async function generateCitationVerificationReportHandler(args: Record<str
     kbLine = `- 知识库：已导入 articleId=${article.id}，索引块数=${indexed}`;
   }
 
-  const checks = verifyMultipleCitations(input.text, orgId);
+  const checks = verifyMultipleCitations(input.text, orgId, { ...legalTemporalOptions(args), actorUserId: context?.userId });
   const repealed = checks.filter(item => item.isEffective === false).length;
   const missing = checks.filter(item => !item.exists).length;
 
@@ -83,7 +83,7 @@ export async function generateCitationVerificationReportHandler(args: Record<str
     kbLine,
     '',
     '## 下一步',
-    '- 已废止法条请替换为现行有效法律或司法解释。',
+    '- 已废止法条应核验与案件事实日期对应的历史版本和时间效力规则；不得机械替换为现行法。',
     '- 未在本地库命中的案号，请到人民法院案例库、裁判文书网或授权商业库人工复核。',
   ].join('\n');
 }
@@ -118,7 +118,7 @@ export async function finalizeDeliveryPackageHandler(args: Record<string, any>, 
   const ownCaseNumbers = ownCaseNumbersFromArgs(citationGateArgs);
   const formalMarkdown = buildFormalLegalMarkdown({ ...args, caseName, documentType }, content);
   const citationReport = formatCitationReportMarkdown(citationGateArgs, formalMarkdown, 'formal_delivery_document');
-  const currentLawGate = evaluateCurrentLawGate(formalMarkdown, orgId, ownCaseNumbers);
+  const currentLawGate = evaluateCurrentLawGate(formalMarkdown, orgId, ownCaseNumbers, textArg(args, 'factDate'), { ...legalTemporalOptions(args), actorUserId: context?.userId });
   const reasoningGate = evaluateLegalReasoningGate(reasoningArgs, content);
   const reasoningSourceRow = archivedReasoning
     ? '| 内部推理底稿 | 案件工作台 | 已归档三段论底稿 | 案件材料 | 已归档 | 三段论推理链 gate | 已复用 |'

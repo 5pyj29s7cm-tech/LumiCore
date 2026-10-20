@@ -36,28 +36,6 @@ async function handler(args: any) {
       return { content: [{ type: 'text' as const, text: result }] };
     }
 
-    if (action === 'extract_text') {
-      if (!files || !Array.isArray(files) || files.length === 0) {
-        throw new Error('At least 1 PDF file path required');
-      }
-      const results: any[] = [];
-      for (const filePath of files) {
-        const bytes = await fs.readFile(String(filePath));
-        const doc = await PDFDocument.load(bytes);
-        // pdf-lib doesn't support text extraction directly — use a simple approach
-        // Report metadata + page count as structured info
-        const pages = doc.getPages();
-        results.push({
-          file: String(filePath),
-          pages: pages.length,
-          title: doc.getTitle() || 'Untitled',
-          author: doc.getAuthor() || 'Unknown',
-        });
-      }
-      const result = JSON.stringify(results, null, 2);
-      return { content: [{ type: 'text' as const, text: result }] };
-    }
-
     if (action === 'info') {
       if (!files || !Array.isArray(files) || files.length === 0) {
         throw new Error('At least 1 PDF file path required');
@@ -79,17 +57,17 @@ async function handler(args: any) {
       return { content: [{ type: 'text' as const, text: result }] };
     }
 
-    throw new Error(`Unknown action: ${action}. Use: merge, extract_text, or info.`);
+    throw new Error(`Unknown action: ${action}. Use: merge or info.`);
   } catch (e: any) {
     return { content: [{ type: 'text' as const, text: `PDF processing failed: ${e.message}` }], isError: true };
   }
 }
 
-const server = new McpServer({ name: 'pdftools', version: '1.0.0' }, { capabilities: { tools: {} } });
+const server = new McpServer({ name: 'pdftools', version: '1.0.1' }, { capabilities: { tools: {} } });
 server.registerTool('pdf_tools', {
-  description: 'Work with PDF files: merge multiple PDFs, extract metadata/info, or inspect. Input must be local file paths.',
+  description: 'Work with PDF files: merge multiple PDFs or inspect document metadata. Input must be local file paths.',
   inputSchema: {
-    action: z.enum(['merge', 'extract_text', 'info']).describe('Action: merge PDFs, get metadata, or file info'),
+    action: z.enum(['merge', 'info']).describe('Action: merge PDFs or inspect metadata'),
     files: z.array(z.string()).describe('Array of PDF file paths'),
     output: z.string().optional().describe('Output file path (for merge, default: merged.pdf)'),
   },

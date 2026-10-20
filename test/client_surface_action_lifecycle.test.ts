@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import * as surfaces from '../shared/client_surfaces';
 import * as surfaceTargets from '../shared/client_surface_target';
 import * as organizations from '../shared/org_workspace';
-import { loadSourceModule } from './source_expression';
+import { extractSourceExpression, loadSourceModule } from './source_expression';
 
 const cleanups: Array<() => void> = [];
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()); vi.restoreAllMocks(); });
@@ -76,11 +76,24 @@ it.each([
   expect(reply.reject).toHaveBeenCalledWith(expect.stringContaining('confirmation'));
   for (const fn of [c.runtime.setOperationMode, c.runtime.resetMeetingCapture, c.runtime.endMeetingAndReport, c.runtime.applyWallpaperMode]) expect(fn).not.toHaveBeenCalled();
 });
-it('accepts a confirmed meeting action and applies each transition once', async () => {
-  const c = client(); const reply = c.send({ action: 'start_meeting_mode', confirmed: true, resetNotes: true }); await settle();
-  expect(c.runtime.resetMeetingCapture).toHaveBeenCalledTimes(1); expect(c.runtime.setOperationMode).toHaveBeenCalledExactlyOnceWith('meeting');
-  expect(c.runtime.setMeetingPaused).toHaveBeenCalledExactlyOnceWith(false); expect(c.runtime.setMeetingNotesOpen).toHaveBeenCalledExactlyOnceWith(true);
-  expect(reply.respond).toHaveBeenCalledWith(expect.objectContaining({ ok: true, mode: 'meeting' }));
+it('accepts a confirmed meeting action once through the actual owner and stays ready without recording', async () => {
+  const c = client({ meetingHistoryReadOnly: false }), createMeetingRecord = vi.fn(() => true);
+  const openMeetingMode = extractSourceExpression('src/components/desktop/useMeetingWorkflow.ts', 'openMeetingMode', {
+    callState: 'idle', operationMode: 'assistant', meetingHistoryReadOnly: false, meetingPaused: true,
+    createMeetingRecord, endCall: vi.fn(), setOperationMode: c.runtime.setOperationMode,
+    setMeetingPaused: c.runtime.setMeetingPaused, setMeetingNotesOpen: c.runtime.setMeetingNotesOpen,
+    requestOperationModeChange: vi.fn(), copy: { finishBeforeNew: 'Finish capture first', historyUpdateFailed: 'History update failed' },
+  });
+  const owner = (event: Event) => { void openMeetingMode((event as CustomEvent).detail); };
+  window.addEventListener('lumi:request-meeting-mode', owner);
+  try {
+    const reply = c.send({ action: 'start_meeting_mode', confirmed: true, resetNotes: true }); await settle();
+    expect(createMeetingRecord).toHaveBeenCalledTimes(1); expect(c.runtime.resetMeetingCapture).not.toHaveBeenCalled();
+    expect(c.runtime.setOperationMode).toHaveBeenCalledExactlyOnceWith('meeting');
+    expect(c.runtime.setMeetingPaused).toHaveBeenCalledExactlyOnceWith(true); expect(c.runtime.setMeetingNotesOpen).toHaveBeenCalledExactlyOnceWith(true);
+    expect(reply.respond).toHaveBeenCalledWith(expect.objectContaining({ ok: true, mode: 'meeting', status: 'ready' }));
+    expect(reply.reject).not.toHaveBeenCalled();
+  } finally { window.removeEventListener('lumi:request-meeting-mode', owner); }
 });
 it('denies a restricted organization route before opening or switching the workspace', async () => {
   const c = client({ orgConnection: { connected: true, orgRole: 'member' } });

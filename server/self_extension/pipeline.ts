@@ -279,7 +279,7 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
       marketplaceSkills: matchingMarketplace,
       learnedCapabilities,
     },
-    gap: buildGap(goal, domain, readiness, {
+    gap: buildGap(domain, readiness, {
       coverageReady,
       repairableSkill,
       installableSkill,
@@ -307,7 +307,6 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
 }
 
 function buildGap(
-  goal: string,
   domain: string,
   readiness: SelfExtensionPlan['readiness'],
   facts: {

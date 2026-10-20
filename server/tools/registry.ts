@@ -28,6 +28,9 @@ import {
   type CapabilityRoutingProjection,
 } from './capability_projection';
 import { beginToolMetric, recordToolRetry } from '../runtime/tool_metrics';
+import { decodeToolResult } from './result_envelope';
+import { verifyCapabilityReceipt } from './capability_verification';
+import { buildToolExecutionEnvelope } from './execution_envelope';
 import {
   adapterFailureIsTransient,
   beforeAdapterExecution,
@@ -235,11 +238,13 @@ export function getToolExecutionTimeoutMs(name: string, args?: Record<string, an
   if (name === 'generate_video') {
     const seconds = Number(args?.duration);
     const clips = Number.isFinite(seconds) ? Math.ceil(Math.min(120, Math.max(1, seconds)) / 5) : 1;
-    return Math.min(45, Math.max(15, clips * 2 + 5)) * 60_000;
+    return Math.max(15, clips * 2 + 5) * 60_000;
   }
   if (name === 'generate_image' || name === 'generate_image_dalle' || name === 'ai_edit_image') return 3 * 60_000;
   if (/^model_configuration_(?:update|test)$/i.test(name)) return 2 * 60_000;
   if (name === 'transcribe_audio_to_text_file') return 60 * 60_000;
+  if (name === 'chat_song_draft_dialogue') return 180_000;
+  if (name === 'chat_song_render') return 660_000;
   if (/^mcp_cad-drafting_autocad_playback_file$/i.test(name)) return 30 * 60_000;
   if (name === 'cad_draw_floorplan_in_autocad') return 45 * 60_000;
   if (/^cad_prepare_autocad_operations$/i.test(name)) return 5 * 60_000;
@@ -867,13 +872,16 @@ export class ToolRegistry {
     return { level: builtIn, reason: 'tool default' };
   }
 
-  async execute(name: string, args: Record<string, any>, context?: ToolContext): Promise<string> {
+  async execute(
+    name: string, args: Record<string, any>, context?: ToolContext,
+    onTerminalMetric?: (finish: ReturnType<typeof beginToolMetric>) => void,
+  ): Promise<string> {
     // Capture transport-owned fields; signal objects and lifecycle callbacks stay live.
     context = context ? { ...context } : undefined;
     // Tools can invoke browsers, MCP servers and child processes. Side-effect
     // labels alone cannot prove that their execution stays on this computer.
     requireNotStrict('Automatic tool execution');
-    const finishMetric = beginToolMetric(name);
+    let finishMetric = beginToolMetric(name);
     const tool = this.get(name);
     if (!tool) {
       finishMetric('failed');
@@ -916,6 +924,23 @@ export class ToolRegistry {
     }
 
     const capability = cloneDatabaseValue(this.buildCapabilityManifestEntry(tool, policy, effective));
+    const externalCommit = capability.sideEffects.some(effect => (
+      effect.type === 'external_communication' || effect.type === 'external_state_change'
+    ));
+    const hasSideEffect = capability.operation === 'mutate'
+      || capability.operation === 'create'
+      || capability.operation === 'communicate'
+      || capability.operation === 'unknown'
+      || capability.sideEffects.some(effect => ![
+        'local_read',
+        'network_read',
+        'none',
+      ].includes(effect.type));
+    if (context?.autonomous && externalCommit
+      && !(semanticToolName === 'desktop_ai_ask' && executionArgs.send === false)) {
+      finishMetric('forbidden');
+      throw new Error('Autonomous external commit blocked: an action-time immutable user confirmation is required.');
+    }
     const constitutional = evaluateActionConstitution(
       semanticToolName,
       executionArgs,
@@ -947,7 +972,7 @@ export class ToolRegistry {
       if (context?.userConfirmed === true) {
         userConfirmed = true;
       } else if (context?.requestConfirmation) {
-        const allowed = await context.requestConfirmation(name, executionArgs);
+        const allowed = await context.requestConfirmation(name, executionArgs, capability);
         if (!allowed) {
           finishMetric('waiting_confirmation');
           return `Tool "${name}" requires user confirmation and was not approved.`;
@@ -972,20 +997,25 @@ export class ToolRegistry {
 
     // Wrap with timeouts to prevent hanging. Vision/CAD extraction needs more room than simple tools.
     const timeoutMs = getToolExecutionTimeoutMs(semanticToolName, executionArgs);
-    const externalCommit = capability.sideEffects.some(effect => (
-      effect.type === 'external_communication' || effect.type === 'external_state_change'
-    ));
-    const hasSideEffect = capability.operation === 'mutate'
-      || capability.operation === 'create'
-      || capability.operation === 'communicate'
-      || capability.operation === 'unknown'
-      || capability.sideEffects.some(effect => ![
-        'local_read',
-        'network_read',
-        'none',
-      ].includes(effect.type));
+    let metricDeferred = false;
+    if (!externalCommit && onTerminalMetric) {
+      try {
+        onTerminalMetric(finishMetric);
+        metricDeferred = true;
+        finishMetric = () => {};
+      } catch { /* A metric observer cannot change tool execution. */ }
+    }
+    const finishResultMetric = (result: string) => {
+      if (metricDeferred) return;
+      const decoded = decodeToolResult(result);
+      const record: ToolExecutionRecord = {
+        name, arguments: executionArgs, result: decoded.content, receipt: decoded.receipt, capability,
+      };
+      record.terminalVerification = verifyCapabilityReceipt(capability, record);
+      finishMetric(buildToolExecutionEnvelope(record).status);
+    };
     const fence = await prepareToolExecutionFence({
-      name, executionArgs, context, externalCommit, hasSideEffect, adapterPermit, finishMetric,
+      name, executionArgs, context, externalCommit, hasSideEffect, adapterPermit, finishMetric, finishResultMetric,
       pinnedLocalIdempotencyReplay, pinnedReconcileExternalCommit,
     });
     if ('replay' in fence) return fence.replay;
@@ -1035,7 +1065,9 @@ export class ToolRegistry {
         try {
           assertHandlerCurrent();
           try {
-            await executionContext.onAdapterStart?.({ name, attempt });
+            await executionContext.onAdapterStart?.({
+              name, attempt, arguments: cloneDatabaseValue(executionArgs), capability: cloneDatabaseValue(capability),
+            });
           } catch (error) {
             throw brandToolLifecyclePersistenceFailure(error);
           }

@@ -462,11 +462,12 @@ export function acquireConversationActionTurnLease(
 
 export function bindConversationActionTurnTask(
   input: BindConversationActionTurnTaskInput,
+  database?: Parameters<typeof commitDatabaseTables>[0],
 ): BindConversationActionTurnTaskResult {
   const identity = identityFrom(input);
   const taskId = required(input.taskId, 'taskId');
   const { iso } = resolveNow(input.now);
-  const db = readDatabaseTables(["conversationActionTurns"]);
+  const db = database || readDatabaseTables(["conversationActionTurns"]);
   const rows = turnRows(db);
   const index = findTurnIndex(rows, identity);
   if (index < 0) return { bound: false, changed: false, reason: 'not_found', turn: null };
@@ -489,7 +490,7 @@ export function bindConversationActionTurnTask(
   turn.taskId = taskId;
   turn.updatedAt = iso;
   turn.revision += 1;
-  commitDatabaseTables(db);
+  if (!database) commitDatabaseTables(db);
   return { bound: true, changed: true, turn: cloneTurn(turn) };
 }
 

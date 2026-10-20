@@ -135,16 +135,8 @@ describe('desktop execution plan', () => {
     const plan = buildDesktopExecutionPlan({
       text: '微信发送消息给 Alice',
       lane: 'messaging',
-      capabilityExecutionPlan: {
-        schemaVersion: 1,
-        planId: 'cap-plan',
-        taskId: 'send-task',
-        intent: { kind: 'messaging_send', operation: 'mutate', subject: 'user', target: 'Alice', payload: 'hello', sideEffectClass: 'external_commit', relation: 'new', confidence: 1, rule: 'test' },
-        nodes: [], edges: [], expectedEvidence: [], contextRefs: [],
-        risk: { sideEffectClass: 'external_commit', requiresConfirmation: true, failClosed: true, reasons: [] },
-        fallbackPolicy: { retryClass: 'none', maxRetries: 0, jitter: false, reconcileUnknownOutcome: true, allowLegacyRoute: false, onTargetMismatch: 'stop', onUnknownOutcome: 'reconcile_then_stop' },
-        decisionAuthority: 'semantic_planner', scriptAuthority: 'adapter_only',
-      },
+      actionIntent: { kind: 'messaging_send', operation: 'mutate', subject: 'user', target: 'Alice', payload: 'hello', sideEffectClass: 'external_commit', relation: 'new', confidence: 1, rule: 'test' },
+      taskId: 'send-task',
     });
     const actionSteps = plan.steps.filter(step => step.operation === 'commit');
     expect(actionSteps.length).toBeGreaterThan(0);
@@ -165,16 +157,7 @@ describe('desktop execution plan', () => {
       text,
       lane: 'desktop_control',
       taskId: `task-${operation}-${text}`,
-      capabilityExecutionPlan: {
-        schemaVersion: 1,
-        planId: `cap-${operation}-${text}`,
-        taskId: `task-${operation}-${text}`,
-        intent: { kind: 'desktop_operation', operation, subject: 'user', target: 'WPS', payload: '', sideEffectClass: operation === 'read' || operation === 'navigate' ? 'none' : 'local_write', relation: 'new', confidence: 1, rule: 'test' },
-        nodes: [], edges: [], expectedEvidence: [], contextRefs: [],
-        risk: { sideEffectClass: operation === 'read' || operation === 'navigate' ? 'none' : 'local_write', requiresConfirmation: false, failClosed: false, reasons: [] },
-        fallbackPolicy: { retryClass: 'none', maxRetries: 0, jitter: false, reconcileUnknownOutcome: false, allowLegacyRoute: false, onTargetMismatch: 'stop', onUnknownOutcome: 'stop_and_report' },
-        decisionAuthority: 'semantic_planner', scriptAuthority: 'adapter_only',
-      },
+      actionIntent: { kind: 'desktop_operation', operation, subject: 'user', target: 'WPS', payload: '', sideEffectClass: operation === 'read' || operation === 'navigate' ? 'none' : 'local_write', relation: 'new', confidence: 1, rule: 'test' },
     });
     expect(planFor('打开 WPS', 'navigate').verification.profile).toBe('open');
     expect(planFor('读取 WPS 当前文档', 'read').verification.profile).toBe('read');

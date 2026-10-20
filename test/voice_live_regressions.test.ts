@@ -196,7 +196,9 @@ describe('live voice regression cases', () => {
       }],
       source: 'voice',
     });
-    expect(result.text).toBe('还没有完成 AutoCAD 绘制。');
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('AutoCAD');
+    expect(result.text).toMatch(/还没完成|还没有完成|尚未完成|未完成|没有完成/u);
     expect(result.text).not.toContain('自检');
   });
 

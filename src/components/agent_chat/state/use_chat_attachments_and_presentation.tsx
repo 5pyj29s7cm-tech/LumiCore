@@ -118,21 +118,6 @@ export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<t
 
   useEffect(() => {
     if (!isOpen || isCreationWorkspace) return;
-    const pasteIntoCommandInput = (event: ClipboardEvent) => {
-      const active = document.activeElement;
-      if (active && active !== document.body && active !== document.documentElement) return;
-      const text = event.clipboardData?.getData('text/plain') || '';
-      if (!text || !messageInputRef.current) return;
-      event.preventDefault();
-      setDraftText(`${messageInputRef.current.value || ''}${text}`);
-      messageInputRef.current.focus();
-    };
-    window.addEventListener('paste', pasteIntoCommandInput);
-    return () => window.removeEventListener('paste', pasteIntoCommandInput);
-  }, [isCreationWorkspace, isOpen, messageInputRef, setDraftText]);
-
-  useEffect(() => {
-    if (!isOpen || isCreationWorkspace) return;
     const replaceCommandInput = (event: Event) => {
       const text = String((event as CustomEvent<{ text?: string }>).detail?.text || '');
       if (!text) return;

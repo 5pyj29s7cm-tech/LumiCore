@@ -7,7 +7,8 @@ import * as routing from '../server/org/work_routing';
 import { mountOrgRoutes } from '../server/org/routes';
 import { processWithPersonality } from '../server/regions/packs/cn/messaging_routes';
 import { flushDBOrThrow, querySQL, readDB } from '../db_layer';
-import * as legalIntake from '../server/regions/packs/cn/legal_notice_intake';
+import * as orgCommands from '../server/regions/packs/cn/remote_org_commands';
+import { encodeToolResult } from '../server/tools/result_envelope';
 import type { IncomingMessage } from '../server/messaging/types';
 import { registerOutboundTask, getTask, getTasksForSession, updateTaskStatus, resetLAPTasksForTests } from '../server/lap/delegate';
 import type { LAPSession, LAPTaskDelegateRequest } from '../server/lap/types';
@@ -103,6 +104,12 @@ describe('organization assignment and handoff regressions', () => {
     expect((await api(`work-approvals/${item.approvalId}/decision`, ownerId, { decision: 'approve' })).status).toBe(200);
     await processWithPersonality(message('continue', `${id}-approved`), { onMessage });
     expect(onMessage).toHaveBeenCalledOnce();
+  });
+
+  it.each(['不要调用工具，只解释组织审批的含义。'])('keeps an ordinary organization question outside work-item creation: %s', async text => {
+    const reply = { onMessage: vi.fn(async () => ({platform: 'feishu' as const,text: 'Synthetic explanation.'})) };
+    await processWithPersonality(message(text, 'no-work-'+sequence), reply);
+    expect(routing.listOrganizationWorkItems(orgId)).toEqual([]);
   });
 
   it('suppresses a late completion after the recipient accepts a running task', async () => {
@@ -202,14 +209,14 @@ describe('organization assignment and handoff regressions', () => {
 
   it('keeps late transaction receipts but does not publish a completion for the new human owner', async () => {
     let finish!: (text: string) => void;
-    const intake = vi.spyOn(legalIntake, 'handleRemoteLegalNoticeIntake').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const intake = vi.spyOn(orgCommands, 'handleRemoteOrgCommand').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     const running = processWithPersonality(message('查询组织知识库 synthetic-evidence', `receipt-${sequence}`));
     try {
       await waitFor(() => Boolean(finish));
       const [item] = routing.listOrganizationWorkItems(orgId);
       const handoff = routing.requestOrganizationWorkHandoff({ orgId, workItemId: item.id, actorUserId: requester, targetMemberId: target, reason: 'Synthetic ownership change' })!;
       routing.decideOrganizationWorkHandoff({ orgId, handoffId: handoff.id, actorUserId: target, decision: 'accept' });
-      finish('Synthetic local transaction receipt.');
+      finish(encodeToolResult('Synthetic local transaction receipt.', { ok: true, verified: true, status: 'completed', persisted: true, changedCaseIds: [], articleIds: [] }));
       expect(await running).toBe('');
       expect(routing.getOrganizationWorkItem(orgId, item.id)?.status).toBe('waiting_human');
       expect(readDB().conversationActionReceipts.some((receipt: any) => receipt.taskId === item.taskId && receipt.toolName === 'organization_business_command' && receipt.outcome === 'verified_success')).toBe(true);

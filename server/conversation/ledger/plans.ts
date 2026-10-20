@@ -18,6 +18,7 @@ export function sanitizeCapabilityExecutionPlan(
     nodes: plan.nodes.map(node => ({
       nodeId: node.nodeId,
       type: node.type,
+      ...(node.terminalStatus ? { terminalStatus: node.terminalStatus } : {}),
       capabilityId: node.capabilityId,
       ...(node.toolName ? { toolName: node.toolName } : {}),
       lane: node.lane,

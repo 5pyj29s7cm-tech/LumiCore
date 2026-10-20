@@ -1,6 +1,7 @@
 // Spatiotemporal unification — cross-analyze time + location for pattern detection
 
 import { listUserInteractions } from '../conversation/history_repository';
+import { isOwnerInteractionEvidence } from '../memory/provenance';
 import { listMemoryRows } from '../memory/repository';
 import { getDateString, getDayOfWeekCN, getTimeOfDay, getSeasonInfo, getNearbyHoliday, isWeekend, hoursSince, formatDuration } from './utils';
 import { queryMemories } from '../memory/store';
@@ -14,12 +15,12 @@ export interface SpatiotemporalPattern {
 
 // ── Pattern Detection ──
 
-export function detectSpatiotemporalPatterns(userId: string, domain = 'personal', orgId = ''): SpatiotemporalPattern[] {
+export function detectSpatiotemporalPatterns(userId: string, domain = 'personal', orgId = '', interactionHistory?: any[]): SpatiotemporalPattern[] {
   const patterns: SpatiotemporalPattern[] = [];
 
   try {
     const memories = listMemoryRows({ userId, domain: domain === 'work' ? 'work' : 'personal', orgId });
-    const interactions = listUserInteractions(userId, { domain, orgId });
+    const interactions = interactionHistory ?? listUserInteractions(userId, { domain, orgId });
 
     // ── Location routine detection ──
     const memoriesWithLocation = memories.filter((m: any) => m.location && m.location.trim());
@@ -114,7 +115,7 @@ export function detectSpatiotemporalPatterns(userId: string, domain = 'personal'
 
 // ── Unified Context Generation ──
 
-export function generateSpatiotemporalContext(userId: string, domain = 'personal', orgId = ''): string {
+export function generateSpatiotemporalContext(userId: string, domain = 'personal', orgId = '', agentId = 'lumi'): string {
   const lines: string[] = [];
   lines.push('\n## Spatiotemporal Context');
 
@@ -139,20 +140,23 @@ export function generateSpatiotemporalContext(userId: string, domain = 'personal
 
   lines.push(`- ${isWeek ? 'Weekend' : 'Workday'} — ${season.mood}.`);
 
-  // ── Recency ──
+  // ── Retained history and recency ──
+  let userInteractions: any[] | undefined;
   try {
-    const userInteractions = listUserInteractions(userId, { domain, orgId, order: 'newest', limit: 1 });
-
-    if (userInteractions.length > 0) {
-      const lastTs = userInteractions[0].timestamp;
-      const hrsSince = hoursSince(lastTs);
-      if (hrsSince < 0.05) {
-        lines.push('- The user is actively talking to you right now.');
-      } else if (hrsSince < 24) {
-        lines.push(`- User last active: ${formatDuration(hrsSince)}.`);
-      } else {
-        lines.push(`- User last active: ${formatDuration(hrsSince)} — they may be returning after a break.`);
-      }
+    userInteractions = listUserInteractions(userId, { domain, orgId })
+      .filter(row => isOwnerInteractionEvidence(row) && typeof row.message === 'string' && row.message.trim()
+        && (row.role === 'user' || (!row.role && row.module === 'lumi' && row.response))
+        && (agentId === 'lumi'
+          ? row.agentId === 'lumi' || row.agentId === 'lumi_default' || (!row.role && row.module === 'lumi')
+          : row.agentId === agentId));
+    const timestamps = userInteractions.map(row => Date.parse(row.timestamp))
+      .filter(timestamp => Number.isFinite(timestamp) && timestamp <= Date.now())
+      .sort((a, b) => a - b);
+    if (timestamps.length > 0) {
+      lines.push(`- Earliest retained user dialogue with this agent in this workspace: ${getDateString(userId, new Date(timestamps[0]))}. This history boundary overrides dates inferred from memories or earlier assistant replies; it does not prove an earlier first meeting beyond retained records.`);
+      const hrsSince = hoursSince(new Date(timestamps[timestamps.length - 1]).toISOString());
+      lines.push(hrsSince < 0.05 ? '- The user is actively talking to you right now.'
+        : `- User last active: ${formatDuration(hrsSince)}${hrsSince < 24 ? '.' : ' — they may be returning after a break.'}`);
     }
   } catch {}
 
@@ -174,7 +178,7 @@ export function generateSpatiotemporalContext(userId: string, domain = 'personal
 
   // ── Patterns ──
   try {
-    const patterns = detectSpatiotemporalPatterns(userId, domain, orgId);
+    const patterns = detectSpatiotemporalPatterns(userId, domain, orgId, userInteractions);
     if (patterns.length > 0) {
       lines.push('- Learned patterns:');
       for (const p of patterns.slice(0, 3)) {

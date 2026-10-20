@@ -1,10 +1,11 @@
-import { containsInternalExecutionLanguage } from '../../shared/public_execution_language';
+import { containsInternalExecutionLanguage, sanitizePublicExecutionText } from '../../shared/public_execution_language';
+import { sanitizeUserFacingExecutionOutput } from '../cognition/user_output_protection';
 
 /**
  * Text emitted by the execution/completion guard is a system verification
  * result, not a factual assistant answer. The customer display boundary turns
- * legacy rows into natural copy, while prompt and summary paths quarantine
- * them so the model cannot learn the verifier's implementation vocabulary.
+ * legacy rows into natural copy. Dialogue keeps that public failure; action
+ * evidence and summaries still quarantine the verifier's vocabulary.
  */
 const GUARDED_ASSISTANT_TEXT_RE =
   /我还没有真正开始读取或审查|我还没有真正操作客户端|我还没有拿到可确认的桌面动作结果|我还不能说客户端动作已经完成|我还不能说这件事已经完成|我还不能说正在执行|我已经开始处理了，但卡在一个需要确认的本地动作上|我已经开始处理，但还不能说完成|这一轮没有记录到成功的工具执行|没有记录到成功的真实工具执行|真正读取时|尚未开始实际读取文件|I have not actually started that action yet|I have not actually operated the Lumi client yet|I have not verified the desktop action yet|I did start the workflow, but it is blocked at a confirmation step|I started the workflow, but cannot mark it complete yet|I cannot honestly say I am executing this yet|I cannot honestly mark this complete yet|Completion claim blocked/i; // i18n-allow: Chinese guard-output recognition pattern; not user-visible copy.
@@ -30,6 +31,12 @@ export function isGuardGeneratedConversationRecord(value: {
   return isGuardGeneratedAssistantText(
     value.response || value.message || value.content || value.text || '',
   );
+}
+
+/** Preserve public failure dialogue without replaying internal guard protocol. */
+export function projectGuardedAssistantText(value: unknown): string {
+  const text = sanitizePublicExecutionText(value);
+  return isGuardGeneratedAssistantText(text) || sanitizeUserFacingExecutionOutput(text) !== text ? '' : text;
 }
 
 export interface LegacyGuardSummaryState {

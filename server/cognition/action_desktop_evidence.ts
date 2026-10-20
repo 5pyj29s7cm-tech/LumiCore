@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { toolRecordSucceeded } from '../tools/receipt_payload';
 import type { ToolExecutionRecord } from '../tools/types';
 import { sameArtifactPath } from '../tools/artifact_evidence';
@@ -512,8 +513,9 @@ export function hasMeaningfulArguments(record: ToolExecutionRecord): boolean {
 
 type RequestedAuthoringApplication = 'wps' | 'word' | 'excel' | 'powerpoint' | 'microsoft_office' | 'any_authoring';
 
-const CURRENT_DOCUMENT_READER_RE = /^(?:read_file|extract_document_text|read_pdf|read_docx|read_xlsx)$/i;
+const CURRENT_DOCUMENT_READER_RE = /^(?:read_file|extract_document_text|read_pdf|read_docx|read_xlsx|ocr_image_file)$/i;
 const DOCUMENT_TARGET_EXTENSION_RE = /\.(?:pptx?|docx?|xlsx?|pdf|rtf|txt|md|csv|json|wps|et|dps)$/i;
+const DOCUMENT_TARGET_MENTION_RE = new RegExp(DOCUMENT_TARGET_EXTENSION_RE.source.replace(/\$$/u, '\\b'), DOCUMENT_TARGET_EXTENSION_RE.flags);
 const FAILED_DOCUMENT_READ_STATUS_RE = /^(?:failed|error|blocked|denied|forbidden|timeout|timed_out|cancelled|canceled|not_found|not_ready|partial|pending|queued|unverified|unknown)$/i;
 
 function requestedAuthoringApplication(taskText: string): RequestedAuthoringApplication | null {
@@ -611,7 +613,7 @@ function verifiedObservedDocumentPath(record: ToolExecutionRecord, taskText: str
   return DOCUMENT_TARGET_EXTENSION_RE.test(candidate) ? candidate : '';
 }
 
-function documentBasename(value: string): string {
+function documentBasename(value: string, extensions = DOCUMENT_TARGET_EXTENSION_RE): string {
   const withoutQuery = compact(value)
     .normalize('NFKC')
     .split(/[?#]/, 1)[0]
@@ -619,7 +621,7 @@ function documentBasename(value: string): string {
     .replace(/[\s'"`\u201c\u201d\u2018\u2019]+$/gu, '')
     .replace(/\\/gu, '/');
   const basename = withoutQuery.split('/').pop()?.trim() || '';
-  return DOCUMENT_TARGET_EXTENSION_RE.test(basename) ? basename : '';
+  return extensions.test(basename) ? basename : '';
 }
 
 function verifiedObservedDocumentName(record: ToolExecutionRecord, taskText: string): string {
@@ -805,7 +807,8 @@ function sameExactDocumentTarget(left: string, right: string): boolean {
 function exactDocumentReadTarget(record: ToolExecutionRecord): string {
   const args = record.arguments || {};
   const target = compact(
-    args.path
+    (record.name === 'ocr_image_file' ? args.imagePath : '')
+    || args.path
     || args.filePath
     || args.filepath
     || args.documentPath
@@ -821,10 +824,11 @@ function exactDocumentReadTarget(record: ToolExecutionRecord): string {
     || /^(?:none|null|undefined|unknown|n\/a|current|active|file|document|current\s+(?:file|document)|active\s+(?:file|document)|当前(?:文件|文档)|活动(?:文件|文档))$/iu.test(target)
   ) return '';
   const withoutQuery = target.split(/[?#]/, 1)[0].replace(/["'“”‘’]+$/u, '');
-  return DOCUMENT_TARGET_EXTENSION_RE.test(withoutQuery) ? target : '';
+  const extensions = record.name === 'ocr_image_file' ? /\.(?:png|jpe?g|webp|bmp|gif|tiff?)$/i : DOCUMENT_TARGET_EXTENSION_RE;
+  return extensions.test(withoutQuery) ? target : '';
 }
 
-function actualDocumentReadContent(record: ToolExecutionRecord): string {
+export function actualDocumentReadContent(record: ToolExecutionRecord): string {
   const persistedResult = String(record.result || '').trim();
   let rawResult = persistedResult;
   try {
@@ -854,6 +858,7 @@ function actualDocumentReadContent(record: ToolExecutionRecord): string {
   } catch {
     payload = null;
   }
+  if (record.name === 'knowledge_file_stats' && !payload) return '';
   if (payload) {
     const verification = payload.verification && typeof payload.verification === 'object'
       ? payload.verification as Record<string, any>
@@ -872,6 +877,21 @@ function actualDocumentReadContent(record: ToolExecutionRecord): string {
       || FAILED_DOCUMENT_READ_STATUS_RE.test(status)
       || compact(payload.error || verification.error)
     ) return '';
+    if (record.name === 'knowledge_file_stats') {
+      const ids = record.arguments?.fileIds;
+      const files = payload.files;
+      if (record.error || record.adapterStarted !== true || record.terminalVerification?.status !== 'verified'
+        || !record.requestId || !record.taskId || record.envelope?.requestId !== record.requestId || record.envelope?.taskId !== record.taskId
+        || record.envelope?.status !== 'verified_success' || record.envelope.verification?.status !== 'verified' || record.envelope.toolName !== record.name
+        || payload.mode !== 'source_text' || payload.ok !== true || payload.status !== 'observed' || !payload.userId
+        || !['personal', 'work'].includes(payload.domain) || !Array.isArray(ids) || !ids.length || !Array.isArray(files)
+        || ids.some((id: unknown) => typeof id !== 'string' || !id || /[\\/]/.test(id)) || files.length !== new Set(ids).size
+        || !files.every((file: any, i: number) => file.fileId === [...new Set(ids)][i] && typeof file.name === 'string' && file.name.trim()
+          && typeof file.text === 'string' && file.text.trim() && file.characters === file.text.length && file.truncated === false
+          && /^[a-f0-9]{64}$/.test(file.sourceHash || '') && file.sourceRevision === file.sourceHash
+          && file.textHash === crypto.createHash('sha256').update(file.text).digest('hex'))) return '';
+      return files.map((file: any) => '[Knowledge original fileId=' + file.fileId + ' filename=' + file.name + ' sourceSHA256=' + file.sourceHash + ' textSHA256=' + file.textHash + ']\n' + file.text).join('\n\n');
+    }
     // read_file returns the file bytes as UTF-8 text. A JSON object here is
     // therefore the document itself (for example package.json), not a generic
     // adapter receipt. Wrapped desktop reads are unwrapped by the handler.
@@ -881,6 +901,7 @@ function actualDocumentReadContent(record: ToolExecutionRecord): string {
       payload.text,
       payload.excerpt,
       payload.bodyText,
+      record.name === 'ocr_image_file' && typeof payload.analysis === 'string' ? payload.analysis : undefined,
       payload.data,
     ];
     for (const value of structuredContent) {
@@ -915,6 +936,7 @@ function hasActualDocumentReadContent(record: ToolExecutionRecord): boolean {
 }
 
 export function isSuccessfulExactDocumentRead(record: ToolExecutionRecord): boolean {
+  if (record.name === 'knowledge_file_stats') return Boolean(actualDocumentReadContent(record));
   return CURRENT_DOCUMENT_READER_RE.test(record.name)
     && !record.error
     && record.terminalVerification?.status !== 'failed'
@@ -1002,6 +1024,12 @@ export function resolveVerifiedCurrentAuthoringDocumentEvidence(
   };
 }
 
+function explicitDocumentTargets(taskText: string): string[] {
+  return taskText.match(
+    /(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/]|\/(?!\/))[^\r\n<>|*?"']+?\.(?:pptx?|docx?|xlsx?|pdf|rtf|txt|md|csv|json|wps|et|dps|png|jpe?g|webp|bmp|gif|tiff?)\b/giu,
+  ) || [];
+}
+
 export function requestsExactReadOnlyArtifactInspection(taskText: string): boolean {
   const primary = compact(extractPrimaryTaskText(taskText));
   if (!primary) return false;
@@ -1012,7 +1040,7 @@ export function requestsExactReadOnlyArtifactInspection(taskText: string): boole
   const wantsSemanticRead = /(?:计算|核算|汇总|算出|口算|重新算|列出|金额|数量|\u8bfb\u53d6|\u9605\u8bfb|\u67e5\u770b|\u68c0\u67e5|\u68c0\u89c6|\u5206\u6790|\u603b\u7ed3|\u5ba1\u9605|\u5185\u5bb9|\u91cc\u9762|\u6587\u4ef6\u4e2d)|\b(?:read|calculate|recalculate|compute|inspect|examine|analy[sz]e|review|summari[sz]e|contents?|inside|marker|amount|quantity)\b/iu.test(primary);
   if (!wantsSemanticRead) return false;
   // i18n-allow: File/attachment subject recognition.
-  const hasFileSubject = /(?:附件|\u6587\u4ef6|\u6587\u6863|\u6587\u672c|\u8def\u5f84)|\b(?:attachment|file|document|filepath|path)\b|\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf|rtf)\b/iu.test(primary);
+  const hasFileSubject = /(?:附件|\u6587\u4ef6|\u6587\u6863|\u6587\u672c|\u8def\u5f84)|\b(?:attachment|file|document|filepath|path)\b/iu.test(primary) || explicitDocumentTargets(primary).length > 0 || DOCUMENT_TARGET_MENTION_RE.test(primary);
   if (!hasFileSubject) return false;
   const wantsMutation = hasRequestedArtifactMutation(primary);
   return !wantsMutation;
@@ -1028,7 +1056,14 @@ export function documentReadMatchesRequestedTarget(
   taskText: string,
   acceptedTaskTarget?: AcceptedTaskTarget,
   currentAttachmentPaths: string[] = [],
+  sourceScope?: { userId: string; domain: string; orgId: string },
 ): boolean {
+  if (record.name === 'knowledge_file_stats') {
+    if (!isSuccessfulExactDocumentRead(record)) return false;
+    const payload = JSON.parse(record.result);
+    if (sourceScope && (payload.userId !== sourceScope.userId || payload.domain !== sourceScope.domain || String(payload.orgId || '') !== sourceScope.orgId)) return false;
+    return record.arguments.fileIds.every((id: string) => new RegExp('(^|[^A-Za-z0-9_.-])' + id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=$|[^A-Za-z0-9_.-])', 'u').test(taskText));
+  }
   // Target correlation is independent from content retention. Large structured
   // reads may be compacted before a later finalization pass, but their exact
   // path and verified envelope remain authoritative for deciding whether this
@@ -1048,15 +1083,13 @@ export function documentReadMatchesRequestedTarget(
 
   // When the user supplied an absolute document path, basename equality is
   // insufficient: two directories may legitimately contain the same name.
-  const absoluteTargets = primaryTask.match(
-    /(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/]|\/(?!\/))[^\r\n<>|*?"']+?\.(?:pptx?|docx?|xlsx?|pdf|rtf|txt|md|csv|json|wps|et|dps)\b/giu,
-  ) || [];
+  const absoluteTargets = explicitDocumentTargets(primaryTask);
   if (absoluteTargets.length > 0) {
     return absoluteTargets.some(candidate => sameExactDocumentTarget(candidate, target));
   }
 
   // i18n-allow: Current-upload reference recognition.
-  if (/(?:附件|这个文件|该文件|\b(?:this\s+)?attachment\b)/iu.test(primaryTask) && currentAttachmentPaths.length) {
+  if (/(?:附件|这个文件|该文件|这张图|这个图|\b(?:this\s+)?attachment\b)/iu.test(primaryTask) && currentAttachmentPaths.length) {
     return currentAttachmentPaths.some(candidate => sameExactDocumentTarget(candidate, target));
   }
 
@@ -1065,7 +1098,7 @@ export function documentReadMatchesRequestedTarget(
       && sameExactDocumentTarget(acceptedTaskTarget.target.path, target);
   }
 
-  const targetName = documentBasename(target);
+  const targetName = documentBasename(target, record.name === 'ocr_image_file' ? /\.(?:png|jpe?g|webp|bmp|gif|tiff?)$/i : DOCUMENT_TARGET_EXTENSION_RE);
   if (targetName) {
     const normalizedTask = primaryTask.normalize('NFKC').toLocaleLowerCase('en-US');
     if (normalizedTask.includes(targetName.normalize('NFKC').toLocaleLowerCase('en-US'))) {
@@ -1087,7 +1120,7 @@ export function documentReadMatchesRequestedTarget(
     normalizedTask.includes(identity.normalize('NFKC').toLocaleLowerCase('en-US'))
   ))) return true;
   const envelopeTarget = compact(record.envelope?.targetIdentity);
-  const refersToAttachment = /(?:附件|这个文件|该文件|\b(?:this\s+)?attachment\b)/iu.test(primaryTask); // i18n-allow: reviewed attachment-reference intent.
+  const refersToAttachment = /(?:附件|这个文件|该文件|这张图|这个图|\b(?:this\s+)?attachment\b)/iu.test(primaryTask); // i18n-allow: reviewed attachment-reference intent.
   return refersToAttachment
     && envelopeTarget.length >= 4
     && explicitAttachmentIdentities.some(identity => identity === envelopeTarget);
@@ -1101,8 +1134,7 @@ export function hasVerifiedExactReadOnlyArtifactEvidence(
   if (!requestsExactReadOnlyArtifactInspection(taskText)) return false;
   return records.some(record => {
     if (
-      !CURRENT_DOCUMENT_READER_RE.test(record.name)
-      || record.terminalVerification?.status !== 'verified'
+      record.terminalVerification?.status !== 'verified'
       || !isSuccessfulExactDocumentRead(record)
     ) return false;
     return documentReadMatchesRequestedTarget(record, taskText, acceptedTaskTarget);

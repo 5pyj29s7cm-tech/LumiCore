@@ -113,13 +113,25 @@ describe('task-center control wiring', () => {
     });
     expect(task).not.toBeNull();
     expect(buildLumiCoreOrbitTasks([task!])).toEqual([
-      expect.objectContaining({ id: 'orbit-1', title: 'Verify the report', state: 'working', active: true }),
+      { id: 'orbit-1', title: 'Verify the report', state: 'working' },
     ]);
   });
 
   it('keeps a running task active even when its checkpoint phase is domain-specific', () => {
     expect(commandCenterTaskIsActive({ id: 'active-1', title: 'Active', status: 'running', phase: 'verify' })).toBe(true);
-    expect(commandCenterTaskIsActive({ id: 'terminal-1', title: 'Done', status: 'completed', phase: 'complete' })).toBe(false);
+    for (const status of ['waiting_confirmation', 'completed', 'delivered', 'cancelled', 'blocked', 'failed', 'paused']) {
+      const terminal = { id: status, title: status, status, phase: 'working' };
+      expect(commandCenterTaskIsActive(terminal)).toBe(false);
+      expect(buildLumiCoreOrbitTasks([terminal])).toEqual([]);
+    }
+    for (const status of ['running', 'in_progress', 'executing', 'planning', 'pausing', 'cancelling']) {
+      const running = { id: status, title: status, status, phase: 'verify' };
+      expect(buildLumiCoreOrbitTasks([running])).toEqual([{ id: status, title: status, state: 'working' }]);
+    }
+    for (const status of ['pending', 'queued']) {
+      expect(buildLumiCoreOrbitTasks([{ id: status, title: status, status, phase: 'queued' }]))
+        .toEqual([{ id: status, title: status, state: 'queued' }]);
+    }
   });
 
   it('rejects responses from an earlier generation or another scope', () => {
@@ -153,7 +165,7 @@ describe('task-center control wiring', () => {
     const planner = source('src/components/CommandCenterPlanner.tsx');
     const autonomousFeed = source('src/components/AutonomousFeed.tsx');
 
-    expect(panel).toContain("apiFetch('/api/autonomy/work')");
+    expect(panel).toContain("apiFetch('/api/autonomy/work', { signal: AbortSignal.timeout(6_000) })");
     expect(panel).toContain('tasks.filter(commandCenterTaskIsActive)');
     expect(panel).toContain('data-command-center-task-controls');
     expect(panel).toContain('data-task-cancel-requested');

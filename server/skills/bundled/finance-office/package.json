@@ -1,6 +1,6 @@
 {
   "name": "lumi-skill-finance-office",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Read-only finance workbench for reconciliation, ratio and variance analysis, statement consistency checks, cash-flow forecasts, tax workpapers, and management reporting.",
   "type": "module",
   "main": "index.ts",

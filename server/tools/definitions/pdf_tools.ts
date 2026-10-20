@@ -74,9 +74,8 @@ async function pdfToText(args: Record<string, any>): Promise<string> {
 
   const data = await extractPdfTextContent(filePath, args.password);
 
-  // Save extracted text alongside the PDF
-  const outPath = filePath.replace(/\.pdf$/i, '.txt');
-  fs.writeFileSync(outPath, data.text, 'utf-8');
+  const outPath = path.join(getGeneratedOutputDir(), `${path.parse(filePath).name}_${require('node:crypto').randomUUID()}.txt`);
+  fs.writeFileSync(outPath, data.text, { encoding: 'utf-8', flag: 'wx' });
   return JSON.stringify({ ok: true, status: 'converted', path: outPath, characters: data.text.length, size: fs.statSync(outPath).size }, null, 2);
 }
 
@@ -418,7 +417,7 @@ export function registerPdfTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'pdf_to_text',
-    description: 'Extract all text from a PDF, including a password-protected PDF when the user supplies the password, and save it as an unencrypted .txt file alongside the original. Returns the output path. Never repeat the password.',
+    description: 'Extract all text from a PDF, including a password-protected PDF when the user supplies the password, and save it as a unique unencrypted .txt file in the generated output directory. Returns the output path. Never repeat the password.',
     parameters: {
       type: 'object',
       properties: {

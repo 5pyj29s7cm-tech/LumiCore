@@ -1,3 +1,4 @@
+import { runRetrievalRequest } from '../../llm/retrieval_request';
 import { Memory, MemoryQuery } from '../types';
 
 import { getRerankSelection, rerankConfiguredDocuments } from '../../llm/rerank_provider';
@@ -149,7 +150,11 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
   }
 
   // Generate query embedding
-  const queryEmbedding = await generateEmbeddingWithIdentity(q.query, q.userId, { signal: q.signal });
+  const queryEmbedding = await runRetrievalRequest(signal => generateEmbeddingWithIdentity(q.query!, q.userId, { signal }), q.signal, q.semanticTimeoutMs ?? 3_000).catch(error => {
+    q.signal?.throwIfAborted();
+    console.warn(`[Memory] Embedding unavailable: ${error?.message || String(error)}`);
+    return null;
+  });
   q.signal?.throwIfAborted();
   if (!queryEmbedding) {
     // Embeddings unavailable — fall back to keyword search
@@ -203,13 +208,13 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
   if (rerank.enabled && scored.length > 1 && (!isStrictPrivacy() || isProviderLocalOnly(rerank.provider))) {
     try {
       const candidates = scored.slice(0, candidateLimit);
-      const ranked = await rerankConfiguredDocuments(
+      const ranked = await runRetrievalRequest(signal => rerankConfiguredDocuments(
         q.query,
         candidates.map(({ m }) => `${m.type}: ${m.content}\nKeywords: ${m.keywords.join(', ')}`),
         retrievalUserId,
         Math.max(limit, rerank.topN),
-        { signal: q.signal },
-      );
+        { signal },
+      ), q.signal, q.semanticTimeoutMs ?? 3_000);
       q.signal?.throwIfAborted();
       const seen = new Set<number>();
       const reordered = ranked.items

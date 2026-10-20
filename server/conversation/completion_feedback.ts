@@ -48,10 +48,10 @@ function publicStatusItem(
       // i18n-allow -- compact server-owned public feedback for Chinese chat.
       if (status === 'working') return '任务仍在进行中。';
       // i18n-allow -- compact server-owned public feedback for Chinese chat.
-      return '任务尚未完成。';
+      return status === 'blocked' ? '整项请求尚未核验完成。' : '任务尚未完成。';
     }
     // i18n-allow -- compact server-owned public feedback for Chinese chat.
-    if (section === 'blockers') return '当前步骤未能完成。';
+    if (section === 'blockers') return status === 'blocked' ? '整项请求尚未核验完成；已取得的结果予以保留。' : '当前步骤未能完成。';
     // i18n-allow -- compact server-owned public feedback for Chinese chat.
     if (status === 'completed' || status === 'cancelled') return '无需后续操作。';
     // i18n-allow -- compact server-owned public feedback for Chinese chat.
@@ -62,9 +62,9 @@ function publicStatusItem(
   if (section === 'incomplete') {
     if (status === 'cancelled') return 'The task was cancelled.';
     if (status === 'working') return 'The task is still in progress.';
-    return 'The task is not complete yet.';
+    return status === 'blocked' ? 'The whole request has not been verified complete.' : 'The task is not complete yet.';
   }
-  if (section === 'blockers') return 'The current step could not be completed.';
+  if (section === 'blockers') return status === 'blocked' ? 'The whole request has not been verified complete; existing results were preserved.' : 'The current step could not be completed.';
   if (status === 'completed' || status === 'cancelled') return 'No further action is needed.';
   return status === 'working' ? 'Continue from the current progress.' : 'Resolve the current blocker, then continue.';
 }

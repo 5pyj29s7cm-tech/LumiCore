@@ -1,3 +1,4 @@
+import type { OfficialApiModelCatalog } from './official_api';
 import { readSettingJson } from '../persistence/settings_repository';
 import { writeModelPreference } from './model_preference_revision';
 import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
@@ -125,4 +126,23 @@ export function isVideoGenerationProvider(value: unknown): value is VideoGenerat
 
 export function isImageToVideoProvider(value: unknown): value is ImageToVideoProvider {
   return isSelectionProvider(value, GENERATION_MODEL_ROLES.image_to_video);
+}
+
+/** A selected official model must be advertised for this exact generation role. */
+export function assertOfficialGenerationModel(catalog: OfficialApiModelCatalog, role: GenerationModelRole, model: string): void {
+  const available = catalog.byRole[role] || [];
+  if (!available.includes(model)) {
+    throw new Error(`The selected official model ${model} is unavailable for ${role}. Available models: ${available.join(', ') || 'none'}. No generation was submitted or model preference changed.`);
+  }
+}
+
+export function validateOfficialGenerationPreferences(input: unknown, catalog: OfficialApiModelCatalog): GenerationModelPrefs {
+  const prefs = normalizeGenerationModelPrefs(input);
+  const provided = input && typeof input === 'object' ? input : {};
+  for (const [role, definition] of Object.entries(GENERATION_MODEL_ROLES)) {
+    if (!Object.hasOwn(provided, definition.field)) continue;
+    const selection = prefs[definition.field];
+    if (selection.provider === 'relay') assertOfficialGenerationModel(catalog, role as GenerationModelRole, selection.model);
+  }
+  return prefs;
 }

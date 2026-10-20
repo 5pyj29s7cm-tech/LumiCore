@@ -4,6 +4,7 @@ export type WebLoginSitePreset = {
   category: 'legal';
   loginUrl: string;
   matchHosts: string[];
+  loginFrameSelector?: string;
   notes: string;
   sourceUrl: string;
 };

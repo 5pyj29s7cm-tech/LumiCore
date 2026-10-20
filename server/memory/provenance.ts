@@ -26,7 +26,7 @@ export function isOwnerInteractionEvidence(row: {
 
 /** Generated reflections may be displayed, but never fed back as new evidence. */
 export function isDerivedLearningMemory(memory: Pick<Memory, 'sourceInteractionId' | 'content'>): boolean {
-  return /^(?:growth_journal|narrative_consolidation|predictive_lumi|proactive_lumi|proactive_scan)/i.test(memory.sourceInteractionId || '')
+  return /^(?:growth_journal|narrative_consolidation|predictive_lumi|proactive_lumi|proactive_scan|greeting_)/i.test(memory.sourceInteractionId || '')
     || /^\[(?:Growth Journal|Predictive|Proactive Scan)\b/i.test(memory.content || '');
 }
 

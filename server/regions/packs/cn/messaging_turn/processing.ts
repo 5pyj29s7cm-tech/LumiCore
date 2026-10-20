@@ -6,6 +6,9 @@ import { runLumiEntryTurn, type ExecutedLumiTurn } from "../../../../cognition/t
 import { captureRequestAuthorization } from "../../../../conversation/lifecycle";
 import type { MessagingRouteOptions } from "../messaging_finalization";
 import { getRequestText } from "../remote_materials";
+import { planRemoteOrganizationScope } from "../legal_notice_intake";
+import { createMessagingReplyCommitter } from "../messaging_persistence";
+import { flushMessagingStateOrThrow } from "../messaging_finalization";
 import { assertMessagingAuthorization } from "../messaging_ingress_runtime";
 import { admitBoundMessagingTurnDurably, conversationForMessagingTurn } from "../messaging_persistence";
 import { messagingPendingOffer } from './history';
@@ -17,9 +20,22 @@ export async function processWithPersonality(
   msg: IncomingMessage, options?: MessagingRouteOptions, preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null,
 ): Promise<string> {
   msg = captureMessagingOrganization(msg); assertMessagingAuthorization(msg);
-  const accepted = !msg.boundUserId || preacceptedAdmission && preacceptedAdmission.persisted === msg.userMessageId
+  const preaccepted = preacceptedAdmission && preacceptedAdmission.persisted === msg.userMessageId;
+  const scopePlan = preaccepted ? null : await planRemoteOrganizationScope(msg);
+  if (scopePlan) msg = captureMessagingOrganization(scopePlan.resolution.message);
+  assertMessagingAuthorization(msg);
+  const accepted = !msg.boundUserId || preaccepted
     ? { message: msg, admission: preacceptedAdmission }
     : await admitBoundMessagingTurnDurably(msg, options?.onConversationUpdated);
+  msg = accepted.message;
+  scopePlan?.commit();
+  if (scopePlan?.resolution.kind === 'reply') {
+    return createMessagingReplyCommitter(msg, {
+      flush: async () => { if (msg.boundUserId) await flushMessagingStateOrThrow('terminal_reply'); },
+      isCancelled: () => !isMessagingAuthorizationCurrent(msg),
+      onConversationUpdated: options?.onConversationUpdated,
+    })(scopePlan.resolution.reply);
+  }
   const conversation = msg.boundUserId ? conversationForMessagingTurn(accepted.message) : null;
   if (msg.boundUserId && !conversation) throw new Error('The accepted messaging conversation is unavailable');
   const pendingAssistantOfferContext = conversation ? messagingPendingOffer(accepted.message, conversation) : undefined;

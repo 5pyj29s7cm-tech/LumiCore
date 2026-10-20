@@ -1,9 +1,13 @@
 import './helpers';
-import { beforeEach, describe, expect, it } from 'vitest';
+import interfaceCopy from '../src/i18n/locales/ui.generated.json';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { prepareChatPromptContext } from '../server/socket/chat/prompt_context';
+import { personalityRegistry } from '../server/personality';
 import { ToolRegistry } from '../server/tools/registry';
 import { registerClientSelfTools } from '../server/tools/definitions/client_self_tools';
 import {
   formatCompactClientSelfPrompt,
+  formatClientSelfPromptForTurn,
   formatClientSelfPrompt,
   getClientActionExpectation,
   getClientCapabilities,
@@ -28,6 +32,42 @@ describe('Lumi client self model', () => {
   beforeEach(async () => {
     const { initDatabase } = await import('../db_layer');
     await initDatabase();
+  });
+
+  it('grounds an ordinary interface follow-up in the registered menu without claiming live visibility', () => {
+    const userId = 'client_self_menu_grounding';
+    const definition = PERSONAL_CLIENT_SURFACES.find(surface => surface.id === 'command-center')!;
+    const prompt = formatClientSelfPromptForTurn(userId, 'This is your command center interface');
+    expect(prompt).toContain(definition.useWhen);
+    expect(definition.useWhen).toContain(interfaceCopy['command-center.inner-realm.4d8f2a1c09'].en);
+    expect(definition.useWhen).toContain(interfaceCopy['command-center.inner-realm.4d8f2a1c09'].zh);
+    expect(prompt).toContain('not a live visibility claim');
+    expect(prompt).toContain('no live desktop state');
+    expect(definition.useWhen).toMatch(/Memory Territory.*Breath Realm.*Knowledge Base.*AI Creation/);
+    expect(prompt).not.toContain('### Client Adapter Registry');
+    expect(prompt.length).toBeLessThan(5_000);
+  });
+
+  it.each(['local', 'remote_restricted'])('delivers client facts once to ordinary chat while respecting the %s boundary', async (boundary) => {
+    const personality = personalityRegistry.getDefault();
+    const build = vi.spyOn(personalityRegistry, 'buildSystemPrompt').mockReturnValue({ config: personality, systemPrompt: 'Conversation personality.' });
+    try {
+      const prepared = await prepareChatPromptContext({
+        uid: 'client_self_chat_delivery', visibleUserText: 'This is your command center interface', text: 'A screenshot with four icons',
+        resolvedDomain: 'personal', resolvedOrgId: '', isMemoryAvatar: false, personalityId: 'lumi',
+        conversationAgentId: 'lumi', conversationId: '', conversationMode: '', operationMode: 'assistant',
+        relevantMemories: [], ragChunks: [], attachments: [], persistedConversationHistory: [],
+        sensoryFn: () => ({}), buildNaturalReplyStyleOverlay: () => '',
+        toolSecurityContext: { executionBoundary: boundary },
+      } as any);
+      const flow = { promptOverlay: '', currentAttachmentPaths: [], routeText: '' };
+      const result = await prepared.assemble({
+        turnIntent: { flow, promptOverlay: '' }, executionRequested: false,
+      } as any);
+      const definition = PERSONAL_CLIENT_SURFACES.find(surface => surface.id === 'command-center')!.useWhen;
+      expect(result.effectiveSystemPrompt.split(definition)).toHaveLength(boundary === 'local' ? 2 : 1);
+      expect(result.effectiveSystemPrompt).not.toContain('### Client Adapter Registry');
+    } finally { build.mockRestore(); }
   });
 
   it('verifies client actions against fresh client state instead of intent alone', () => {

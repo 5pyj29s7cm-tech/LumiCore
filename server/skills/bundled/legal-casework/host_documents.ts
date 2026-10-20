@@ -15,4 +15,3 @@ export async function readDocumentText(filePath: string, options?: { password?: 
   return (loaded.readDocumentText ? loaded : loaded.default).readDocumentText(filePath, options);
 }
 export const walkSourceFiles: (root: string, limit: number, ignored: ReadonlySet<string>) => string[] = documents.walkSourceFiles;
-export const extractRtfText: (source: string) => string = require(path.join(hostRoot, 'server/knowledge/rtf.ts')).extractRtfText;

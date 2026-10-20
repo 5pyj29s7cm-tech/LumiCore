@@ -239,6 +239,7 @@ async function transcribeAudioToTextFile(args: Record<string, any>, context?: To
       model: result.model,
       language: result.language,
       characters: result.text.length,
+      segments: result.segments,
       warnings: result.warnings || [],
       excerpt: result.text.trim().slice(0, excerptLimit),
     }, null, 2);

@@ -248,7 +248,7 @@ async function searchFilesHandler(args: Record<string, any>, context?: HostFiles
 
 async function grepFilesHandler(args: Record<string, any>, context?: HostFilesystemContext): Promise<string> {
   assertHostFilesystemAccess(context);
-  const directory = resolveSafePath(args.directory || '.', context?.cwd);
+  const directory = resolveSafePath(requirePathArg(args, ['directory'], 'grep_files'), context?.cwd);
   const pattern = args.pattern || '';
   if (!pattern) throw new Error('Search pattern is required.');
 
@@ -449,11 +449,11 @@ export function registerFileOpsTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         pattern: { type: 'string', description: 'Regex pattern to search for in file contents (e.g. "function\\s+loadConfig", "import.*from")' },
-        directory: { type: 'string', description: 'Directory to search in. Defaults to current directory.' },
+        directory: { type: 'string', description: 'Explicit bounded directory to search in.' },
         glob: { type: 'string', description: 'Optional file filter, e.g. "*.ts" or "*.{ts,tsx}" to only search matching files.' },
         maxResults: { type: 'number', description: 'Maximum matches to return (default 100, max 500).' },
       },
-      required: ['pattern'],
+      required: ['pattern', 'directory'],
     },
     handler: grepFilesHandler,
     permission: 'user',

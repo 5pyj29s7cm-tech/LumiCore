@@ -1,7 +1,7 @@
 import { motion } from 'motion/react';
 import { Shield, Lock, Cpu, Network, ArrowLeft } from 'lucide-react';
 
-export function FoundersSanctuary({ t, user, onBack }: { t: any; user: any; onBack: () => void }) {
+export function FoundersSanctuary({ t, onBack }: { t: any; onBack: () => void }) {
   const blueprints = [
     {
       id: 'SHARD_01',

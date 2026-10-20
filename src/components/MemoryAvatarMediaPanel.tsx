@@ -26,7 +26,7 @@ function acceptable(file: File) {
       : /^(mp4|mov|webm)$/.test(extension) ? 'video' : null;
   return Boolean(kind && file.size > 0 && file.size <= ({ image: 20, audio: 30, video: 200 }[kind] * 1024 * 1024));
 }
-const actionClass = 'inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] text-[#d4c5a8] hover:bg-white/5 disabled:opacity-35';
+const actionClass = 'inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] text-foreground hover:bg-foreground/5 disabled:opacity-35';
 
 export function MemoryAvatarMediaPanel(props: Props) {
   return <PrivateMediaPanel key={JSON.stringify([props.ownerId, props.avatar.id, getStoredToken()])} {...props} />;
@@ -187,23 +187,23 @@ function PrivateMediaPanel({ avatar, ownerId, locale, disabled = false, active =
   };
 
   return <section aria-label={copy.title} className="space-y-4">
-    <p className="text-xs leading-6 text-white/50">{copy.hint}</p>
-    <div onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); select(Array.from(event.dataTransfer.files)); }} className="space-y-3 rounded-2xl border border-dashed border-[#c5baa2]/25 bg-white/[.02] p-4">
-      <label className="block text-xs text-white/60">{copy.caption}<textarea value={caption} maxLength={2000} rows={2} disabled={busy || disabled} onChange={event => setCaption(event.target.value)} placeholder={copy.captionPlaceholder} className="mt-2 w-full resize-y rounded-lg border border-white/10 bg-[#15191b] p-2 text-xs leading-5 text-white/80 outline-none" /></label>
+    <p className="text-xs leading-6 text-muted-foreground">{copy.hint}</p>
+    <div onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); select(Array.from(event.dataTransfer.files)); }} className="space-y-3 rounded-2xl border border-dashed border-border bg-background p-4">
+      <label className="block text-xs text-muted-foreground">{copy.caption}<textarea value={caption} maxLength={2000} rows={2} disabled={busy || disabled} onChange={event => setCaption(event.target.value)} placeholder={copy.captionPlaceholder} className="mt-2 w-full resize-y rounded-lg border border-border bg-background p-2 text-xs leading-5 text-foreground outline-none" /></label>
       <input ref={fileInput} aria-label={copy.upload} type="file" multiple accept={MEMORY_MEDIA_ACCEPT} disabled={busy || disabled} className="hidden" onChange={event => { select(Array.from(event.target.files || [])); event.target.value = ''; }} />
-      <button type="button" disabled={busy || disabled} onClick={() => fileInput.current?.click()} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#c5baa2]/15 p-3 text-xs font-medium text-[#dfd1b6] disabled:opacity-35"><Upload size={15} />{copy.upload}</button>
-      <p className="text-center text-[11px] text-white/35">{copy.drop}</p>
-      <p className="text-[11px] leading-5 text-white/35">{copy.limits}</p>
+      <button type="button" disabled={busy || disabled} onClick={() => fileInput.current?.click()} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#c5baa2]/15 p-3 text-xs font-medium text-foreground disabled:opacity-35"><Upload size={15} />{copy.upload}</button>
+      <p className="text-center text-[11px] text-muted-foreground">{copy.drop}</p>
+      <p className="text-[11px] leading-5 text-muted-foreground">{copy.limits}</p>
     </div>
     {items.length > 0 && <div aria-label={copy.queue} className="space-y-2">{items.map(item => {
       const percent = item.total ? Math.min(100, Math.floor(item.loaded / item.total * 100)) : undefined;
-      return <article key={item.id} className="rounded-xl border border-white/10 p-3">
-        <div className="flex items-start gap-2"><p className="min-w-0 flex-1 break-all text-xs text-white/75">{item.file.name}</p>
+      return <article key={item.id} className="rounded-xl border border-border p-3">
+        <div className="flex items-start gap-2"><p className="min-w-0 flex-1 break-all text-xs text-foreground">{item.file.name}</p>
           {item.state === 'uploading' ? <button type="button" aria-label={`${copy.cancelUpload}: ${item.file.name}`} className={actionClass} onClick={() => activeUpload.current?.id === item.id && activeUpload.current.controller.abort()}><X size={13} /></button>
             : <button type="button" disabled={busy} aria-label={`${copy.removeQueue}: ${item.file.name}`} className={actionClass} onClick={() => updateQueue(rows => rows.filter(row => row.id !== item.id))}><X size={13} /></button>}
         </div>
         {item.state === 'uploading' && <progress aria-label={`${copy.uploading}: ${item.file.name}`} max={100} value={percent} className="mt-2 h-1 w-full accent-[#c5baa2]" />}
-        <p role={['failed', 'invalid'].includes(item.state) ? 'alert' : 'status'} className={`mt-1 text-[11px] leading-5 ${['failed', 'invalid'].includes(item.state) ? 'text-amber-100/75' : 'text-white/45'}`}>
+        <p role={['failed', 'invalid'].includes(item.state) ? 'alert' : 'status'} className={`mt-1 text-[11px] leading-5 ${['failed', 'invalid'].includes(item.state) ? 'text-amber-100/75' : 'text-muted-foreground'}`}>
           {item.state === 'uploading' ? percent === 100 ? copy.confirming : `${copy.uploading}${percent === undefined ? '…' : ` ${percent}%`}` : item.state === 'saved' ? copy.uploaded : item.state === 'queued' ? copy.waiting : item.state === 'invalid' ? copy.invalidFile : item.errorCode === 'media_tool_unavailable' ? copy.toolUnavailable : copy.uploadFailed}
         </p>
         {['failed', 'cancelled'].includes(item.state) && <button type="button" disabled={busy || disabled} onClick={() => retryUpload(item.id)} className={actionClass}><RotateCcw size={12} />{copy.retry}</button>}
@@ -211,15 +211,15 @@ function PrivateMediaPanel({ avatar, ownerId, locale, disabled = false, active =
     })}</div>}
     {error && <div role="alert" className="rounded-xl bg-amber-300/5 p-3 text-xs leading-6 text-amber-100/75">{error}<button type="button" disabled={busy} onClick={() => void reload()} className={`${actionClass} mt-1`}><RotateCcw size={12} />{copy.reload}</button></div>}
     {notice && <p role="status" className="flex items-start gap-2 text-xs leading-6 text-emerald-100/70"><Check size={14} className="mt-1 shrink-0" />{notice}</p>}
-    {loading && <p role="status" className="flex items-center gap-2 text-xs text-white/45"><Loader2 size={14} className="animate-spin" />{copy.reload}</p>}
-    {ready && !media.length && <p className="rounded-xl border border-white/10 p-4 text-xs text-white/40">{copy.empty}</p>}
+    {loading && <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 size={14} className="animate-spin" />{copy.reload}</p>}
+    {ready && !media.length && <p className="rounded-xl border border-border p-4 text-xs text-muted-foreground">{copy.empty}</p>}
     {media.map(row => {
       const Icon = row.kind === 'image' ? Image : row.kind === 'video' ? Video : FileAudio;
       const selected = record.current.presentation?.mode === 'portrait' && record.current.presentation.mediaId === row.id;
       const selectable = (row.kind === 'image' && row.hasThumbnail) || (row.kind === 'video' && row.hasPoster);
-      return <article key={row.id} className="overflow-hidden rounded-2xl border border-white/10 p-3">
-        <div className="flex items-start gap-2"><Icon size={16} className="mt-0.5 shrink-0 text-[#c5baa2]" /><div className="min-w-0 flex-1"><h4 className="break-all text-xs leading-5 text-white/80">{row.title}</h4><p className="mt-1 text-[10px] text-white/35">{copy[row.kind]} · {(row.sizeBytes / 1024 / 1024).toFixed(1)} MB</p></div></div>
-        <p role="status" className="mt-2 text-[11px] leading-5 text-white/50">{copy[row.status]}</p>
+      return <article key={row.id} className="overflow-hidden rounded-2xl border border-border p-3">
+        <div className="flex items-start gap-2"><Icon size={16} className="mt-0.5 shrink-0 text-[#c5baa2]" /><div className="min-w-0 flex-1"><h4 className="break-all text-xs leading-5 text-foreground">{row.title}</h4><p className="mt-1 text-[10px] text-muted-foreground">{copy[row.kind]} · {(row.sizeBytes / 1024 / 1024).toFixed(1)} MB</p></div></div>
+        <p role="status" className="mt-2 text-[11px] leading-5 text-muted-foreground">{copy[row.status]}</p>
         <div className="mt-2 flex flex-wrap gap-1">
           <button type="button" className={actionClass} onClick={() => setExpanded(expanded === row.id ? null : row.id)}>{expanded === row.id ? copy.closePreview : copy.preview}</button>
           {selectable && <button type="button" disabled={busy || disabled || selected} onClick={() => portrait(row)} className={actionClass}>{selected && <Check size={12} />}{selected ? copy.selectedPortrait : copy.portrait}</button>}
@@ -227,13 +227,13 @@ function PrivateMediaPanel({ avatar, ownerId, locale, disabled = false, active =
             : row.status !== 'ready' && <button type="button" disabled={busy || disabled} onClick={() => process(row)} className={actionClass}>{row.status === 'stored' ? copy.process : copy.retryProcess}</button>}
         </div>
         {expanded === row.id && <div className="mt-3 space-y-3"><MemoryAvatarMediaPreview ownerId={ownerId} avatarId={avatar.id} media={row} locale={locale} enabled={active} />
-          {row.caption && <p className="whitespace-pre-wrap break-words text-xs leading-6 text-white/55">{row.caption}</p>}
-          <p className="text-[10px] leading-5 text-white/30">{copy.privatePreview}</p>
+          {row.caption && <p className="whitespace-pre-wrap break-words text-xs leading-6 text-muted-foreground">{row.caption}</p>}
+          <p className="text-[10px] leading-5 text-muted-foreground">{copy.privatePreview}</p>
           <button type="button" disabled={busy || disabled} onClick={() => remove(row)} className={`${actionClass} !text-rose-200/70`}><Trash2 size={12} />{confirmDelete === row.id ? copy.confirmRemove : copy.remove}</button>
         </div>}
       </article>;
     })}
-    <p className="text-[11px] leading-5 text-white/35">{copy.processHint}</p>
-    <p className="text-[11px] leading-5 text-white/35">{copy.portraitHint}</p>
+    <p className="text-[11px] leading-5 text-muted-foreground">{copy.processHint}</p>
+    <p className="text-[11px] leading-5 text-muted-foreground">{copy.portraitHint}</p>
   </section>;
 }

@@ -4,7 +4,6 @@ import { buildInteractionModeOverlay } from "../../../cognition/turn_flow";
 import { withDesktopExecutionReceipt } from "../../../desktop/execution_runtime";
 import { executionBoundaryPromptOverlay, restrictVisibleToolNamesForExecutionBoundary } from "../../../tools/remote_policy";
 import { buildLumiOperatingKernelPrompt } from "../../../cognition/operating_kernel";
-import { formatClientSelfPromptForTurn } from "../../../client/self_model";
 import { startConversationActionExecutionHeartbeat } from "../../../conversation/manager";
 import { buildDurableTaskDeterministicToolRecoveryCall, buildStructuredMediaDeterministicToolRecoveryCall } from "../../../cognition/deterministic_tool_recovery";
 import { coalesceToolExecutionRecords, taskReceiptsToRecords } from "../../../cognition/task_execution_ledger";
@@ -165,13 +164,12 @@ export async function prepareChatExecutionLeaseAndTools(context: NonNullable<Awa
       );
       context.collectRequestTerminalRecords = () => withDesktopExecutionReceipt(context.requestToolRecords, context.desktopExecutionTracker);
       const needsExecutionPrompt = context.toolSessionActive && context.toolSecurityContext.executionBoundary !== 'remote_restricted';
-      if (needsExecutionPrompt || (context.toolSecurityContext.executionBoundary !== 'remote_restricted' && context.turnFlow.conceptualCapabilityQuestion)) {
-        context.effectiveSystemPrompt += '\n\n' + formatClientSelfPromptForTurn(context.uid, context.visibleUserText, { domain: context.resolvedDomain, orgId: context.resolvedOrgId });
-      }
       console.log('[ChatHandler] tool gate:', context.executionDecision.allowToolUse ? 'authorized' : 'off', 'session:', context.toolSessionActive ? 'active' : 'conversation', 'operationMode:', context.operationMode, 'effective:', context.effectiveOperationMode, 'surface:', context.turnFlow.surface, 'clientActionOnly:', context.clientActionOnlyTurn, 'selfRepair:', context.selfRepairTurn, 'capabilityLane:', context.capabilitySelection.lane, 'trace:', context.intentTrace.summary, 'route:', context.toolRoute ? `${context.toolRoute.toolNames.length}/${context.toolRoute.totalAvailable} ${context.toolRoute.categories.join(',') || 'fallback'}` : 'none');
       if (context.turnAuthorization.isCurrent()) context.socket.emit('agent:intent_trace', context.intentTrace);
       if (context.toolRoute && context.turnAuthorization.isCurrent()) {
         context.socket.emit('agent:tool_route', {
+          requestId: context.requestId,
+          conversationId: context.conversationId,
           categories: context.toolRoute.categories,
           reasons: context.toolRoute.reasons,
           toolNames: context.toolRoute.toolNames,

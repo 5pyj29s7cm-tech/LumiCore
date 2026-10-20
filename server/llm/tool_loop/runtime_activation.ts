@@ -143,6 +143,8 @@ export function resolveModelVisibleToolNames(
   context: ToolContext | undefined,
   records: ToolExecutionRecord[],
   toolRegistry?: ToolRegistry,
+  primaryTask = '',
+  authorizedDeclarations: Array<{ function: { name: string } }> = [],
 ): string[] | undefined {
   const projection = context?.modelToolProjection;
   if (!projection) return undefined;
@@ -170,11 +172,18 @@ export function resolveModelVisibleToolNames(
   ));
   const keepDiscovery = initial.includes(discoveryToolName) && maxTools > 0;
   const ordinaryLimit = Math.max(0, maxTools - (keepDiscovery ? 1 : 0));
-  const visible = Array.from(new Set([
-    ...activatedRuntimeTools,
-    ...discovered,
-    ...remaining,
-  ])).slice(0, ordinaryLimit);
+  const candidates = Array.from(new Set([...activatedRuntimeTools, ...discovered, ...remaining]));
+  const authorized = new Set(authorizedDeclarations.map(tool => tool.function.name));
+  const required = projection.allowDynamicDiscovery && primaryTask && initial.some(name => authorized.has(name))
+    ? resolveRequiredToolNamesForModel(context, primaryTask,
+        Array.from(new Set([...candidates, ...(keepDiscovery ? [discoveryToolName] : []), ...authorized]))
+          .filter(name => authorized.has(name) && !dropped.has(name))
+          .map(name => ({ function: { name } })), records)
+        .filter(name => !keepDiscovery || name !== discoveryToolName)
+    : [];
+  const selected = new Set(Array.from(new Set([...required, ...candidates])).slice(0, ordinaryLimit));
+  const visible = [...required.filter(name => !candidates.includes(name)), ...candidates]
+    .filter(name => selected.has(name));
   if (keepDiscovery) visible.push(discoveryToolName);
   return visible;
 }

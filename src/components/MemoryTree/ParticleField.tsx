@@ -1,10 +1,9 @@
 import React, { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { TreeNode3D, BranchCurve3D } from './types';
+import { BranchCurve3D } from './types';
 
 interface ParticleFieldProps {
-  nodes: TreeNode3D[];
   curves: BranchCurve3D[];
   hue: number;
 }
@@ -47,7 +46,7 @@ const particleFragmentShader = /* glsl */ `
   }
 `;
 
-export function ParticleField({ nodes, curves, hue }: ParticleFieldProps) {
+export function ParticleField({ curves, hue }: ParticleFieldProps) {
   const staticRef = useRef<THREE.Points>(null);
   const flowRef = useRef<THREE.Points>(null);
   const ambientRef = useRef<THREE.Points>(null);

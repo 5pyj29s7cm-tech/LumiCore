@@ -17,7 +17,7 @@ import type { useChatMediaControls } from './use_chat_media_controls';
 import { CHAT_RENDER_LIMIT } from './shared';
 
 export function useChatUploadsAndView(previousBindings: ReturnType<typeof useChatMediaControls>) {
-  const { onReferenceArtifact, conversationAttachmentsRef, pendingAttachmentsRef, setPendingAttachments, isOpen, attachmentRequest, activeDomain, activeOrgId, setShowAttachmentMenu, messageInputRef, onAttachmentRequestConsumed, scopedFileUrl, setOptimizationProgress, draftTextRef, setDraftText, notifyKnowledgeUpdated, chatUploadsRef, setIsOptimizing, setAttachmentUploadFailures, chatViewWorkRef, t, attachmentUploadText, mediaSourceUploadTargetRef, mediaSourceUploading, mediaGenerationText, setMediaSourceUploading, setMediaSourceArtifacts, handleMediaSourceChange, setIsDraggingFiles, nativeDropHandledAtRef, pendingAttachmentKeys, fileKindLabel, openChatFile, isFounder, user, onClose, chatProgressLines, workflowStatus, isZh, isTyping, chatAccentTheme, searchQuery, searchDisplayMessages, messages, previewFile, setPreviewFile, openChatFileInSystem, layout, commandCenterView, resolvedAppearanceMode, prefersReducedMotion, isOfficeCommandCenter, mediaStudioMode, mediaVideoOptions, mediaVideoOptionsLoading, mediaGenerationStatus, mediaGenerationDetail, mediaGenerationArtifacts, libraryMediaArtifacts, knowledgeLoading, knowledgeFailed, refreshKnowledgeFiles, requestCloseCreativeStudio, availableMediaSourceArtifacts, mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio, isWorkChat, setChatSongOpen, chatSongOpen, chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, sendText, closeMediaGenerationStudio, setMediaGeneration, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, setShowVoicePicker, showVoicePicker, voices, selectedVoiceId, voicePickerRef, setSelectedVoiceId, callState, audioLevel, startVoiceSession, endVoiceSession, requestMeetingMode, agentName, operationModeMeta, OperationModeIcon, activeDomainDetail, activeDomainLabel, agentCategory, runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, conversationHistoryOpen, conversationHistorySelectorExpanded, setConversationHistorySelectorExpanded, handleConversationHistorySelectorBlur, conversationHistory, startNewTextConversation, isCreatingConversation, restoringConversationId, conversationHistoryListRef, handleConversationHistoryScroll, conversationHistoryLoading, conversationHistoryLoadingMore, orderedConversationHistory, attachmentConversationIdRef, restoreTextConversation, setConversationContextMenu, conversationHistoryHasMore, toggleConversationHistory, knowledgeStatusText, setCommandCenterPlannerOpen, commandCenterPlannerOpen, commandCenterPlannerText, setSearchQuery, setSearchResults, setSearchError, scrollRef, visibleSuggestions, searchError, isSearchingHistory, renderGeneratedFiles, handleCopyMessage, copiedId, conversationAttachments, clearConversationAttachmentContext, pendingAttachments, isOptimizing, attachmentUploadFailures, optimizationProgress, handleSendMessage, attachmentMenuRef, showAttachmentMenu, referenceableChatFiles, updateDraftText, toggleListening, isListening, conversationTransitionPending, hasDraftText, onOpenMemoryAvatar, onOpenKnowledge, chatFileSections, isElectron, activeCapabilities, conversationContextMenu, deletingConversationId, deleteConversationFromHistory } = previousBindings;
+  const { onReferenceArtifact, conversationAttachmentsRef, pendingAttachmentsRef, setPendingAttachments, isOpen, attachmentRequest, activeDomain, activeOrgId, setShowAttachmentMenu, messageInputRef, onAttachmentRequestConsumed, scopedFileUrl, setOptimizationProgress, draftTextRef, setDraftText, notifyKnowledgeUpdated, chatUploadsRef, setIsOptimizing, setAttachmentUploadFailures, chatViewWorkRef, t, attachmentUploadText, mediaSourceUploadTargetRef, mediaSourceUploading, mediaGenerationText, setMediaSourceUploading, setMediaSourceArtifacts, handleMediaSourceChange, setIsDraggingFiles, nativeDropHandledAtRef, pendingAttachmentKeys, fileKindLabel, openChatFile, isFounder, user, onClose, chatProgressLines, workflowStatus, isZh, isTyping, chatAccentTheme, searchQuery, searchDisplayMessages, messages, previewFile, setPreviewFile, openChatFileInSystem, layout, commandCenterView, resolvedAppearanceMode, prefersReducedMotion, isOfficeCommandCenter, mediaStudioMode, mediaVideoOptions, mediaVideoOptionsLoading, mediaGenerationStatus, mediaGenerationDetail, mediaGenerationArtifacts, libraryMediaArtifacts, knowledgeLoading, knowledgeFailed, refreshKnowledgeFiles, requestCloseCreativeStudio, availableMediaSourceArtifacts, mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio, isWorkChat, setChatSongOpen, chatSongOpen, chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, checkMediaGenerationStatus, sendText, closeMediaGenerationStudio, setMediaGeneration, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, setShowVoicePicker, showVoicePicker, voices, selectedVoiceId, voicePickerRef, setSelectedVoiceId, callState, audioLevel, startVoiceSession, endVoiceSession, requestMeetingMode, agentName, operationModeMeta, OperationModeIcon, activeDomainDetail, activeDomainLabel, agentCategory, runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, conversationHistoryOpen, conversationHistorySelectorExpanded, setConversationHistorySelectorExpanded, handleConversationHistorySelectorBlur, conversationHistory, startNewTextConversation, isCreatingConversation, restoringConversationId, conversationHistoryListRef, handleConversationHistoryScroll, conversationHistoryLoading, conversationHistoryLoadingMore, orderedConversationHistory, attachmentConversationIdRef, restoreTextConversation, setConversationContextMenu, conversationHistoryHasMore, toggleConversationHistory, knowledgeStatusText, setCommandCenterPlannerOpen, commandCenterPlannerOpen, commandCenterPlannerText, setSearchQuery, setSearchResults, setSearchError, scrollRef, visibleSuggestions, searchError, isSearchingHistory, renderGeneratedFiles, handleCopyMessage, copiedId, conversationAttachments, clearConversationAttachmentContext, pendingAttachments, isOptimizing, attachmentUploadFailures, optimizationProgress, handleSendMessage, attachmentMenuRef, showAttachmentMenu, referenceableChatFiles, updateDraftText, toggleListening, isListening, conversationTransitionPending, hasDraftText, onOpenMemoryAvatar, onOpenKnowledge, chatFileSections, isElectron, activeCapabilities, conversationContextMenu, deletingConversationId, deleteConversationFromHistory } = previousBindings;
 
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -138,6 +138,33 @@ export function useChatUploadsAndView(previousBindings: ReturnType<typeof useCha
   const uploadChatAttachments = useCallback(async (files: FileList | null) => {
     await runChatAttachmentUpload('files', Array.from(files || []));
   }, [runChatAttachmentUpload]);
+
+  useEffect(() => {
+    if (!isOpen || layout === 'creation' || mediaStudioMode) return;
+    const pasteIntoCommandInput = (event: ClipboardEvent) => {
+      const input = messageInputRef.current;
+      const active = document.activeElement;
+      if (!input || (active && active !== input && active !== document.body && active !== document.documentElement)) return;
+      const files = Array.from(event.clipboardData?.files || []);
+      if (!files.length) files.push(...Array.from(event.clipboardData?.items || [])
+        .map(item => item.kind === 'file' ? item.getAsFile() : null)
+        .filter((file): file is File => Boolean(file)));
+      if (files.length) {
+        event.preventDefault();
+        input.focus();
+        void runChatAttachmentUpload('files', files);
+        return;
+      }
+      if (active === input) return;
+      const text = event.clipboardData?.getData('text/plain') || '';
+      if (!text) return;
+      event.preventDefault();
+      setDraftText(`${input.value || ''}${text}`);
+      input.focus();
+    };
+    window.addEventListener('paste', pasteIntoCommandInput);
+    return () => window.removeEventListener('paste', pasteIntoCommandInput);
+  }, [isOpen, layout, mediaStudioMode, messageInputRef, runChatAttachmentUpload, setDraftText]);
 
   const uploadMediaSourceImage = useCallback(async (operation: MediaGenerationSourceOperation, slot: MediaGenerationSourceSlot, files: File[]) => {
     const file = files?.[0];
@@ -314,7 +341,7 @@ export function useChatUploadsAndView(previousBindings: ReturnType<typeof useCha
   };
 
   if (isFounder) {
-    return <FoundersSanctuary t={t} user={user} onBack={onClose} />;
+    return <FoundersSanctuary t={t} onBack={onClose} />;
   }
 
   const latestChatProgressLine = chatProgressLines[chatProgressLines.length - 1];
@@ -363,7 +390,7 @@ export function useChatUploadsAndView(previousBindings: ReturnType<typeof useCha
   const hiddenMessageCount = searchQuery.trim()
     ? 0
     : Math.max(0, messages.length - displayMessages.length);
-  return <AgentChatView {...{
+  return <AgentChatView desktopModeControl={previousBindings.desktopModeControl} {...{
     isOpen, previewFile, isZh, setPreviewFile, openChatFileInSystem, layout, commandCenterView,
     resolvedAppearanceMode, prefersReducedMotion, handleChatDragOver, handleChatDragLeave, handleChatDrop,
     chatAccentTheme, fileInputRef, uploadChatAttachments, uploadMediaSourceImage,
@@ -372,7 +399,7 @@ export function useChatUploadsAndView(previousBindings: ReturnType<typeof useCha
     refreshKnowledgeFiles, appendPendingAttachments, requestCloseCreativeStudio, availableMediaSourceArtifacts,
     mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio, handleMediaSourceChange,
     isWorkChat, setChatSongOpen, chatSongOpen, user, chatSongWorkbenchRef, knowledgeFiles,
-    generateMediaFromStudio, sendText, closeMediaGenerationStudio, setMediaGeneration, mediaGenerationText,
+    generateMediaFromStudio, checkMediaGenerationStatus, sendText, closeMediaGenerationStudio, setMediaGeneration, mediaGenerationText,
     cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady,
     markMediaGenerationArtifactFailed, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, t,
     isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, onClose, setShowVoicePicker, showVoicePicker,

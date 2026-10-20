@@ -66,11 +66,12 @@ export class ChatAttachmentUploads {
   finish(attempt: ChatUploadAttempt): void { if (this.active === attempt.token) this.active = null; }
 }
 
-/** One native listener per chat view, including asynchronous registration cleanup. */
+/** Visible document zones take priority over a chat mounted behind them. */
 export function listenForNativeChatFileDrop(
   setDragging: (active: boolean) => void,
   lastDrop: { current: number },
   importPaths: (paths: string[]) => Promise<void>,
+  target?: { current: HTMLElement | null },
 ): (() => void) | undefined {
   if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) return;
   let cancelled = false;
@@ -82,6 +83,15 @@ export function listenForNativeChatFileDrop(
       unlisten = await getCurrentWindow().onDragDropEvent(event => {
         if (cancelled) return;
         const payload = event?.payload;
+        if (payload && 'position' in payload) {
+          const scale = window.devicePixelRatio || 1;
+          const hit = document.elementFromPoint(payload.position.x / scale, payload.position.y / scale);
+          const owner = hit?.closest('[data-lumi-file-drop]');
+          if (target ? !target.current || owner !== target.current : owner) {
+            setDragging(false);
+            return;
+          }
+        } else if (target && payload?.type !== 'leave') return;
         if (payload?.type === 'drop') lastDrop.current = Date.now();
         setDragging(payload?.type === 'enter' || payload?.type === 'over');
         if (payload?.type === 'drop') {

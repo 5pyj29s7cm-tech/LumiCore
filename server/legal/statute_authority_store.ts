@@ -1,3 +1,4 @@
+import type { StatuteTextSnapshot } from '../regions/packs/cn/statute_provisions';
 import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
 
 
@@ -34,6 +35,8 @@ export interface StatuteAuthorityCheck {
   previousFingerprint?: string;
   reasons: string[];
   consecutiveFailures: number;
+  originalText?: StatuteTextSnapshot;
+  originalTextError?: string;
 }
 
 export interface StatuteAuthorityRefreshRun {

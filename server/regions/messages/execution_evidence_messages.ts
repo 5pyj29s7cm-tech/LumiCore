@@ -1,4 +1,5 @@
 export const CN_EXECUTION_EVIDENCE_MESSAGES = {
+  artifactRetrieved: '已取回已有文件，见附件。',
   researchPlanOnly: '已保存检索行动单，但还没有检索并核对具体案例，你要求的查找尚未完成。',
   playbackNotStarted: '这次还没执行到播放器操作，尚未开始或确认播放。',
   groundedModelIdentity: (model: string, provider: string, active: boolean) => `${active ? '本轮实际调用的是' : '当前聊天主模型配置为'} ${model}（${provider === 'relay' ? 'Lumi 官方 API' : provider}）。`,
@@ -20,6 +21,10 @@ export const CN_EXECUTION_EVIDENCE_MESSAGES = {
   formulaResultsHeading: '公式计算结果：',
   spreadsheetIncomplete: (missing: string[]) => `表格文件已保存，但${missing.map(key => ({ formulas: '可计算的公式', calculation: '公式计算结果', chart: '图表', grand_total_formula: '总计公式' }[key] || key)).join('、')}还未核实完成，这项任务尚未全部完成。`,
   imageGenerated: '图片已生成。',
+  mediaGenerationPending: '生成请求已提交，结果尚未取回。原任务已保留，可继续查询原任务状态；请勿重复生成。',
+  mediaRecovered: (video: boolean, size?: string, duration?: number, hasAudio?: boolean) => `原任务的${video ? '视频' : '图片'}已取回${video && duration ? `（${duration.toFixed(2)} 秒${size ? '、' + size : ''}）` : ''}。${video && hasAudio === true ? '已检测到音轨。' : video && hasAudio === false ? '文件不含音轨。' : ''}这里只确认原任务文件取回，内容质量尚未核验。`,
+  mediaRecoveryWholeRequestUnverified: '整体请求尚未核验。',
+  mediaRecoveryNextStep: '按当前请求核对其余步骤；不要重复生成已取回的文件。',
   mediaDeliverableMismatch: '已保留现有文件，但产物类型与请求不符，这项生成任务尚未完成，不会自动重复生成。',
   imageSettingsReview: '已保留现有图片，但图片数量或参数尚未满足请求，这项任务尚未全部完成。',
   videoDeliverableMismatch: (files: string[]) => `这次保存的是文档或图片素材${files.length ? '（' + files.join('、') + '）' : ''}，没有交付你要求的视频。视频任务尚未完成，已有文件会保留，不会自动重复生成。`,

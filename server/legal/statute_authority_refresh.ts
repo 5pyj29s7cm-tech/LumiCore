@@ -1,3 +1,4 @@
+import { statuteTextCopy, createStatuteTextSnapshot, extractReviewedStatuteHtml, type StatuteTextSnapshot, type ReviewedStatuteHtmlSource } from '../regions/packs/cn/statute_provisions';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -279,6 +280,90 @@ function changedReasons(
   return reasons;
 }
 
+async function fetchReviewedHtmlText(
+  observed: StatuteAuthorityObservedVersion, source: ReviewedStatuteHtmlSource,
+  articleMax: number, fetchImpl: typeof fetch, timeoutMs: number, fetchedAt: string,
+): Promise<StatuteTextSnapshot> {
+  if (source.url !== statuteTextCopy.saleContractHtml.url || source.recordId !== observed.recordId
+    || source.versionDate !== observed.versionDate || source.effectiveDate !== observed.effectiveDate
+    || source.articleMax !== articleMax
+    || normalizeTitle(source.sectionBoundary + source.sectionHeading) !== normalizeTitle(observed.title)) {
+    throw new Error('Reviewed official HTML source identity mismatch');
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(source.url, { redirect: 'error', signal: controller.signal,
+      headers: { Accept: 'text/html' } });
+    if (!response.ok || !response.body || !/text\/html/i.test(response.headers.get('content-type') || '')) {
+      throw new Error('Reviewed official HTML download failed');
+    }
+    const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const item = await reader.read(); if (item.done) break;
+        size += item.value.byteLength;
+        if (size > 2 * 1024 * 1024) throw new Error('Reviewed official HTML exceeds download limit');
+        chunks.push(item.value);
+      }
+    } finally { await reader.cancel().catch(() => undefined); }
+    const html = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+    return createStatuteTextSnapshot(extractReviewedStatuteHtml(html, source), articleMax, {
+      recordId: observed.recordId, versionDate: observed.versionDate, fetchedAt, sourceUrl: source.url,
+    });
+  } finally { clearTimeout(timer); }
+}
+
+async function fetchOriginalText(
+  observed: StatuteAuthorityObservedVersion, fetchImpl: typeof fetch,
+  timeoutMs: number, session: OfficialFetchSession, fetchedAt: string, expectedArticleMax?: number,
+  reviewedHtml?: ReviewedStatuteHtmlSource,
+): Promise<StatuteTextSnapshot> {
+  // Some official records have no outline. The already-reviewed catalog bound
+  // still requires every article and the final article to match the real text.
+  const articleMax = observed.articleMax ?? expectedArticleMax;
+  if (typeof articleMax !== 'number' || !Number.isInteger(articleMax) || articleMax < 1) throw new Error('Official article count unavailable');
+  if (reviewedHtml) return fetchReviewedHtmlText(observed, reviewedHtml, articleMax, fetchImpl, timeoutMs, fetchedAt);
+  if (!observed.wordPath) throw new Error('Official DOCX unavailable');
+  const download = await fetchJson(fetchImpl,
+    `${OFFICIAL_BASE_URL}/law-search/download/pc?format=docx&bbbs=${encodeURIComponent(observed.recordId)}&fileId=`,
+    {}, timeoutMs, session);
+  const url = new URL(download.data?.url || download.data?.urlIn);
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')
+    || !['flk.npc.gov.cn', 'flkoss.obs-bj2.cucloud.cn'].includes(url.hostname)
+    || decodeURIComponent(url.pathname).replace(/^\//, '') !== observed.wordPath.replace(/^\//, '')) {
+    throw new Error('Official text download location mismatch');
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(url.href, { redirect: 'error', signal: controller.signal });
+    if (!response.ok || !response.body) throw new Error('Official text download failed');
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const item = await reader.read();
+        if (item.done) break;
+        size += item.value.byteLength;
+        if (size > 8 * 1024 * 1024) throw new Error('Official text exceeds download limit');
+        chunks.push(item.value);
+      }
+    } finally { await reader.cancel().catch(() => undefined); }
+    const mammoth = (await import('mammoth')).default;
+    const document = await mammoth.extractRawText({ buffer: Buffer.concat(chunks) });
+    if (!normalizeTitle(document.value.slice(0, 2000)).includes(normalizeTitle(observed.title))) {
+      throw new Error('Official document title mismatch');
+    }
+    return createStatuteTextSnapshot(document.value, articleMax, {
+      recordId: observed.recordId, versionDate: observed.versionDate, fetchedAt,
+      sourceUrl: observed.sourceUrl,
+    });
+  } finally { clearTimeout(timer); }
+}
+
 async function checkOne(
   entry: StatuteVerificationCatalogEntry,
   previous: StatuteAuthorityCheck | undefined,
@@ -293,7 +378,22 @@ async function checkOne(
     const { observed, fingerprint } = await fetchObservedVersion(entry, fetchImpl, timeoutMs, session);
     const reasons = changedReasons(entry, observed, fingerprint, previous);
     const invalid = normalizeTitle(observed.title) !== normalizeTitle(entry.sourceTitle) || observed.effectivenessCode === null;
-    const verified = !invalid && reasons.length === 0;
+    let verified = !invalid && reasons.length === 0;
+    let originalText: StatuteTextSnapshot | undefined;
+    let originalTextError: string | undefined;
+    if (verified) {
+      try {
+        originalText = await fetchOriginalText(observed, fetchImpl, timeoutMs, session, checkedAt, entry.verification.articleMax, entry.verification.originalHtml);
+        if (previous?.originalText && previous.originalText.recordId === originalText.recordId
+          && previous.originalText.sha256 !== originalText.sha256) {
+          reasons.push(statuteTextCopy.changed);
+          verified = false;
+          // Keep the last accepted text as the comparison baseline. A second
+          // refresh must not silently approve the same unreviewed change.
+          originalText = previous.originalText;
+        }
+      } catch { originalText = previous?.originalText; originalTextError = statuteTextCopy.unavailable; }
+    } else originalText = previous?.originalText;
     return {
       title: entry.sourceTitle,
       status: invalid ? 'invalid' : verified ? 'verified' : 'changed',
@@ -309,6 +409,8 @@ async function checkOne(
       reviewAfter: verified ? addDays(now, reviewDays) : previous?.reviewAfter,
       reasons: invalid ? ['官方详情结构或效力字段无效', ...reasons] : reasons,
       consecutiveFailures: 0,
+      originalText,
+      originalTextError,
     };
   } catch (error: any) {
     return {
@@ -320,6 +422,8 @@ async function checkOne(
       expectedArticleMax: entry.verification.articleMax ?? null,
       expectedRecordId: entry.recordId,
       observed: previous?.observed,
+      originalText: previous?.originalText,
+      originalTextError: previous?.originalTextError,
       fingerprint: previous?.fingerprint,
       previousFingerprint: previous?.previousFingerprint,
       lastVerifiedAt: previous?.lastVerifiedAt,
@@ -333,7 +437,15 @@ async function checkOne(
 function archiveRefreshRun(result: StatuteAuthorityRefreshResult): string {
   const stamp = result.completedAt.replace(/[:.]/g, '-');
   const target = getDataPath(path.join('legal_authority_refresh', 'history', `${stamp}.json`));
-  fs.writeFileSync(target, JSON.stringify(result, null, 2), 'utf-8');
+  const summaries = (checks: StatuteAuthorityCheck[]) => checks.map(({ originalText, ...check }) => ({
+    ...check,
+    ...(originalText ? { originalText: {
+      recordId: originalText.recordId, versionDate: originalText.versionDate,
+      fetchedAt: originalText.fetchedAt, sourceUrl: originalText.sourceUrl, sha256: originalText.sha256,
+      articleCount: Object.keys(originalText.provisions).length,
+    } } : {}),
+  }));
+  fs.writeFileSync(target, JSON.stringify({ ...result, checks: summaries(result.checks), pendingReview: summaries(result.pendingReview) }, null, 2), 'utf-8');
   return target;
 }
 
@@ -428,7 +540,7 @@ export function formatStatuteAuthorityRefreshReport(
     `- 已检查：${checks.length}`,
     `- 权威版本一致：${verified.length}`,
     `- 待人工复核：${pending.length}`,
-    `- 本次不可用：${unavailable.length}`,
+    `- 本次不可用：${checks.filter(check => check.status === 'unavailable' || check.originalTextError).length}`,
     '',
     '## 待人工复核',
     ...(pending.length
@@ -436,12 +548,15 @@ export function formatStatuteAuthorityRefreshReport(
       : ['- 无']),
     '',
     '## 来源暂不可用',
-    ...(unavailable.length
-      ? unavailable.map(check => `- ${check.title}：${check.reasons.join('；')}（连续失败 ${check.consecutiveFailures} 次）`)
+    ...(unavailable.length || checks.some(check => check.originalTextError)
+      ? [
+        ...unavailable.map(check => `- ${check.title}：${check.reasons.join('；')}（连续失败 ${check.consecutiveFailures} 次）`),
+        ...checks.filter(check => check.originalTextError && check.status !== 'unavailable').map(check => `- ${check.title}：${check.originalTextError}`),
+      ]
       : ['- 无']),
     '',
     '## 规则',
-    '- 只访问国家法律法规数据库官方 HTTPS 域名。',
+    statuteTextCopy.domainRule,
     '- 官方版本、效力、日期、记录 ID、最后条号或稳定指纹变化时立即进入复核队列，不能自动放行正式文书。',
     '- 临时网络失败沿用最近一次仍在复核期限内的成功快照；期限届满后正式交付 gate 自动阻断。',
   ].join('\n');

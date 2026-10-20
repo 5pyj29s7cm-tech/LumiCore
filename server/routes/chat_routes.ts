@@ -1,3 +1,4 @@
+import { CN_PUBLIC_AGENT_EVENT_MESSAGES } from '../regions/messages/public_agent_event_messages';
 import { runLumiEntryTurn } from "../cognition/turn_execution";
 import { captureRequestAuthorization, captureConversationAuthorization, combineRequestAuthorizations } from "../conversation/lifecycle";
 import { resolveConversationForEntry } from "../conversation/entry_conversation";
@@ -83,11 +84,6 @@ function dateLikeToIso(value: unknown, fallback = Date.now()): string {
   return Number.isNaN(date.getTime()) ? new Date(fallback).toISOString() : date.toISOString();
 }
 
-function shouldArchiveLegalMeeting(purpose: unknown, legalCase: unknown, domain: string, orgId: string): boolean {
-  const isLegalMeeting = purpose === 'legal_consultation' || Boolean(legalCase && typeof legalCase === 'object');
-  return isLegalMeeting && domain === 'work' && Boolean(orgId);
-}
-
 function safeLegalScopeSegment(value: unknown, fallback = 'anonymous'): string {
   const normalized = String(value || '')
     .trim()
@@ -106,36 +102,6 @@ function resolveLegalCaseworkOrgId(input: {
     return String(input.explicitOrgId || input.userOrgId || 'default').trim() || 'default';
   }
   return `personal:${safeLegalScopeSegment(input.userId)}`;
-}
-
-function buildLegalMeetingMinutesArgs(input: {
-  transcript: string;
-  startedAt?: unknown;
-  endedAt?: unknown;
-  legalCase?: any;
-  orgId: string;
-  userId: string;
-}) {
-  const legalCase = input.legalCase && typeof input.legalCase === 'object' ? input.legalCase : {};
-  const caseName = String(
-    legalCase.title ||
-    legalCase.caseName ||
-    legalCase.caseNumber ||
-    `法律会议 ${dateLikeToIso(input.startedAt).slice(0, 10)}`,
-  ).trim();
-  return {
-    transcript: input.transcript,
-    meetingTime: dateLikeToIso(input.startedAt || input.endedAt),
-    orgId: input.orgId || 'default',
-    userId: input.userId,
-    caseId: String(legalCase.id || '').trim(),
-    caseName,
-    participants: String(legalCase.party || legalCase.participants || '').trim(),
-    caseType: String(legalCase.cause || legalCase.caseType || '').trim(),
-    court: String(legalCase.court || '').trim(),
-    stage: String(legalCase.stage || 'consultation').trim(),
-    persistCase: true,
-  };
 }
 
 const DIRECT_LEGAL_TOOL_ALLOWLIST = new Set([
@@ -560,7 +526,8 @@ function mountMeetingCompletionRoutes(router: Router, llm: SharedProviderGetters
     const requestScope = req.user ? resolveDomain(req.user) : { domain: 'personal' as const, orgId: '' };
     const domain = requestScope.domain;
     const orgId = requestScope.orgId;
-    const preferred = getUserPreferredLLMConfig(userId, { maxTokens: 1800, domain, orgId });
+    const requestId = randomUUID();
+    const preferred = getUserPreferredLLMConfig(userId, { maxTokens: 4096, domain, orgId, requestId, source: 'meeting-analyze' });
     const provider = preferred.provider;
     const model = preferred.model;
     if (reqProvider && reqProvider !== provider) {
@@ -602,8 +569,8 @@ function mountMeetingCompletionRoutes(router: Router, llm: SharedProviderGetters
           '7. Raw transcript highlights',
           'Add a short safety boundary: this assists lawyers and does not replace licensed legal judgment.',
           '',
-          `Started: ${started}`,
-          `Ended: ${ended}`,
+          `Session opened (wall clock, includes pauses): ${started}`,
+          `Session closed (wall clock, not audio duration): ${ended}`,
           '',
           'Case context:',
           ...(caseContext.length > 0 ? caseContext : ['No case context provided.']),
@@ -622,62 +589,32 @@ function mountMeetingCompletionRoutes(router: Router, llm: SharedProviderGetters
           '5. Follow-up suggestions',
           '6. Raw transcript highlights',
           '',
-          `Started: ${started}`,
-          `Ended: ${ended}`,
+          `Session opened (wall clock, includes pauses): ${started}`,
+          `Session closed (wall clock, not audio duration): ${ended}`,
           '',
           'Transcript:',
           transcript,
         ].join('\n');
 
-    const result = await makeLLMCall(
-      [{ role: 'user', content: prompt }],
-      [],
-      { provider, model, maxTokens: 1800, userId },
-      ...providerGetterArguments(llm),
-    );
-
-    const report = result.text || '';
-    recordTokenUsage(userId, provider, model, result.usage, `meeting_analyze_${Date.now()}`, 'meeting');
-    const usage = result.usage || null;
-    let legalCasework = '';
-    let legalCaseworkError = '';
-    if (shouldArchiveLegalMeeting(purpose, legalCase, domain, orgId)) {
-      try {
-        legalCasework = await executeToolCallOrThrow({
-          registry: toolRegistry,
-          name: 'legal_meeting_minutes_to_case',
-          arguments: buildLegalMeetingMinutesArgs({
-            transcript,
-            startedAt,
-            endedAt,
-            legalCase,
-            orgId,
-            userId,
-          }),
-          context: {
-            userId,
-            authenticated: true,
-            authRole: req.user!.role,
-            orgRole: req.user!.orgRole,
-            localExecution: false,
-            domain,
-            orgId,
-            llmGetters: llm,
-            source: 'meeting-analyze',
-          },
-        });
-      } catch (err: any) {
-        legalCaseworkError = err?.message || String(err);
-        console.warn('[Meeting] Legal meeting archive failed:', legalCaseworkError);
+    const request = createRequestAbortController(req, res);
+    try {
+      const result = await makeLLMCall(
+        [{ role: 'user', content: prompt }],
+        [],
+        { ...preferred, signal: request.signal },
+        ...providerGetterArguments(llm),
+      );
+      if (request.signal.aborted || res.destroyed) return;
+      const report = result.text || '';
+      recordTokenUsage(userId, provider, model, result.usage, requestId, 'meeting');
+      if (!report.trim() || ['length', 'max_tokens', 'MAX_TOKENS'].includes(result.finishReason || '')) {
+        return res.status(502).json({ error: language === 'zh' ? CN_PUBLIC_AGENT_EVENT_MESSAGES.meetingIncomplete : 'No complete meeting report was generated. Preserve the transcript before continuing.' });
       }
-    }
-    res.json({
-      report,
-      usage,
-      legalCasework,
-      legalCaseArchived: Boolean(legalCasework),
-      legalCaseworkError: legalCaseworkError || undefined,
-    });
+      res.json({ requestId, report, usage: result.usage || null });
+    } catch (error) {
+      if (request.signal.aborted || res.destroyed) return;
+      throw error;
+    } finally { request.dispose(); }
   }));
 }
 

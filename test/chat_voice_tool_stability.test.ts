@@ -100,19 +100,18 @@ describe('chat and voice tool-call stability', () => {
     expect(restChat).toContain('blocked: finalized.blocked');
   });
 
-  it('archives legal meeting analysis through the legal casework toolchain', () => {
-    const restChat = readImplementationSource(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
-
-    expect(restChat).toContain('buildLegalMeetingMinutesArgs');
-    expect(restChat).toContain('shouldArchiveLegalMeeting');
-    expect(restChat).toContain("return isLegalMeeting && domain === 'work' && Boolean(orgId)");
-    expect(restChat).toContain('const orgId = requestScope.orgId');
-    expect(restChat).toContain('executeToolCallOrThrow({');
-    expect(restChat).toContain("name: 'legal_meeting_minutes_to_case'");
-    expect(restChat).toContain('shouldArchiveLegalMeeting(purpose, legalCase, domain, orgId)');
-    expect(restChat).toContain("source: 'meeting-analyze'");
-    expect(restChat).toContain('legalCasework');
-    expect(restChat).toContain('legalCaseArchived');
+  it('keeps meeting analysis separate from automatic case writes', () => {
+    const restChat = readFileSync(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
+    const start = restChat.indexOf('router.post("/meeting/analyze"');
+    expect(start).toBeGreaterThan(0);
+    const end = restChat.indexOf('\n  router.', start + 12);
+    const route = restChat.slice(start, end < 0 ? undefined : end);
+    expect(route).toContain('formatMeetingTranscriptForAnalysis(notes)');
+    expect(route).toContain('createRequestAbortController(req, res)');
+    expect(route).toContain("['length', 'max_tokens', 'MAX_TOKENS']");
+    expect(route).toContain('const orgId = requestScope.orgId');
+    expect(route).not.toContain('executeToolCallOrThrow');
+    expect(route).not.toContain('legal_meeting_minutes_to_case');
   });
 
   it('keeps personal direct legal tools out of the shared default organization scope', () => {
@@ -128,17 +127,15 @@ describe('chat and voice tool-call stability', () => {
     expect(restChat).toContain("source: 'legal-contract-review'");
   });
 
-  it('binds legal meeting analysis to the current case and organization scope in the desktop client', () => {
-    const desktop = readImplementationSource(path.join(process.cwd(), 'src/components/DesktopUI.tsx'), 'utf8');
-
-    expect(desktop).toContain('const legalCaseId = legalCase?.id || getLegalConsultationCaseId()');
-    expect(desktop).toContain("const workLegalScope = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId)");
-    expect(desktop).toContain('id: legalCaseId');
-    expect(desktop).toContain("domain: workLegalScope ? 'work' : 'personal'");
-    expect(desktop).toContain('orgId: workLegalScope ? orgConnection?.orgId : undefined');
-    expect(desktop).toContain('if (data.legalCaseArchived && workLegalScope && legalCaseId && notesForAnalysis.length > 0)');
-    expect(desktop).toContain('lastLegalMeetingArchiveRef.current = archiveKey');
-    expect(desktop).toContain('setLegalConsultationCaseId(String(detail.legalCaseId))');
+  it('binds meeting history to its current owner and retains source notes separately from reports', () => {
+    const workflow = readFileSync(path.join(process.cwd(), 'src/components/desktop/useMeetingWorkflow.ts'), 'utf8');
+    expect(workflow).toContain('meetingIdentityRef');
+    expect(workflow).toContain('meetingStorageKeys');
+    expect(workflow).toContain('waitForMeetingRefinement');
+    expect(workflow).toContain('meetingReportGenerating');
+    expect(workflow).toContain('selectMeetingRecord');
+    expect(workflow).not.toContain('lastLegalMeetingArchiveRef');
+    expect(workflow).not.toContain('getLegalConsultationCaseId');
   });
 
   it('keeps voice tool execution visible and aligned with chat permission behavior', () => {
@@ -156,26 +153,19 @@ describe('chat and voice tool-call stability', () => {
 
   it('keeps personal and organization knowledge retrieval aligned across text and voice', () => {
     const root = process.cwd();
-    const chat = readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8');
-    const voice = readVoiceImplementationSource();
-    const messagingEntry = readImplementationSource(path.join(root, 'server/messaging/routes.ts'), 'utf8');
+    const chat = readFileSync(path.join(root, 'server/socket/chat/context_retrieval.ts'), 'utf8');
+    const voice = readFileSync(path.join(root, 'server/socket/voice/turn/prepare_voice_context_and_routing.ts'), 'utf8');
+    const common = readFileSync(path.join(root, 'server/knowledge/conversation_retrieval.ts'), 'utf8');
+    for (const source of [chat, voice]) expect(source).toContain('retrieveConversationKnowledge');
+    expect(common).toContain('searchKnowledgeBase');
+    expect(common).toContain("scope.domain === 'work'");
+    expect(common).toContain("getMember(scope.orgId, scope.userId)?.status !== 'active'");
+    expect(common).toContain('personal:');
+    expect(common).toContain('options.signal?.throwIfAborted()');
+    expect(common).not.toContain('PRODUCT_VARIANT');
     const messaging = readImplementationSource(path.join(root, 'server/regions/packs/cn/messaging_routes.ts'), 'utf8');
-
-    for (const source of [chat, voice]) {
-      expect(source).toContain('retrieveChunks');
-      expect(source).toContain('searchKnowledgeBase');
-      expect(source).toContain('ragKnowledge');
-
-      expect(source).toContain("domain === 'work'");
-    }
-    expect(readFileSync(path.join(root, 'server/socket/chat/prompt_context.ts'), 'utf8')).toContain('## Company Knowledge Base');
-    expect(voice).toContain('## Company Knowledge Base');
-    expect(voice).toContain('voiceScope.orgId');
-    expect(voice).toContain('cite article titles');
     expect(messaging).toContain('searchOrgKnowledge(msg.boundOrgId');
-    expect(messaging).toContain('OrgKB.createArticle(msg.boundOrgId!');
     expect(messaging).toContain('getMember(binding.orgId, binding.lumiUserId)');
-    expect(messagingEntry).toContain("../regions/packs/cn/messaging_routes");
   });
 
   it('keeps ordinary tools silent and records hard boundaries for one-time text confirmation', () => {

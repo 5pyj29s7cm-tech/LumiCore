@@ -170,13 +170,10 @@ export async function prepareVoiceExecutionAndPrompt(context: NonNullable<Awaite
     : '';
   const actionContinuationOverlay = context.actionContinuationBridge ? `\n\n${context.actionContinuationBridge}` : '';
   const pendingConfirmationOverlay = context.pendingConfirmationPrompt ? `\n\n${context.pendingConfirmationPrompt}` : '';
-  const organizationKnowledgeOverlay = context.voiceOrganizationKnowledge
-    ? `\n\n## Company Knowledge Base\n${context.voiceOrganizationKnowledge}\n\nUse this authorized organization knowledge when relevant and cite article titles when referencing it.`
-    : '';
   const voiceSystemPrompt = restrictSystemPromptForExecutionBoundary(
     context.fullPersonalityPrompt,
     context.toolSecurityContext.executionBoundary,
-  ) + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + actionContinuationOverlay + pendingConfirmationOverlay + clientSelfPrompt + context.topicContext + organizationKnowledgeOverlay + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
+  ) + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + actionContinuationOverlay + pendingConfirmationOverlay + clientSelfPrompt + context.topicContext + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
 
   const userLLMPrefs = getScopedPreferredLLM(context.session.userId, context.voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';

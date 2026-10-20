@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({ user: { uid: 'owner-a' }, api: vi.fn(), login:
 vi.mock('../src/contexts/AppContext', () => ({ useApp: () => ({ user: mocks.user, login: mocks.login }) }));
 vi.mock('../src/services/apiClient', () => ({ apiFetch: mocks.api }));
 vi.mock('sonner', () => ({ toast: { success: mocks.success, error: mocks.error } }));
-vi.mock('../src/components/MemoryAvatarCreate', () => ({ MemoryAvatarCreate: ({ onImport }: { onImport: () => void }) => <button onClick={onImport}>Import records</button> }));
+vi.mock('../src/components/MemoryAvatarCreate', () => ({ MemoryAvatarCreate: ({ onModeChange, mode, children }: { onModeChange: (mode: 'records') => void; mode: string; children: React.ReactNode }) => <><button onClick={() => onModeChange('records')}>Import records</button>{mode === 'records' && children}</> }));
 vi.mock('motion/react', () => ({ AnimatePresence: ({ children }: any) => children, motion: { div: ({ children, initial: _initial, animate: _animate, exit: _exit, transition: _transition, ...props }: any) => <div {...props}>{children}</div> } }));
 import { MemoryAvatarLab } from '../src/components/MemoryAvatarLab';
 
@@ -46,14 +46,14 @@ async function loadRecords(view: ReturnType<typeof lab>) {
 async function prepareCreate(view: ReturnType<typeof lab>) {
   await loadRecords(view);
   mocks.api.mockResolvedValueOnce(response(distilled));
-  fireEvent.click(screen.getByRole('button', { name: /Start Personality Distill/i }));
-  await screen.findByRole('button', { name: /^Create Sanctuary/i });
+  fireEvent.click(screen.getByRole('button', { name: /Extract person and memories/i }));
+  await screen.findByRole('button', { name: /^Create and enter/i });
 }
 
 it('preserves normal record creation and enters only after the confirmed response', async () => {
   const view = lab(); await prepareCreate(view);
   const gate = deferred<ReturnType<typeof response>>(); mocks.api.mockReturnValueOnce(gate.promise);
-  fireEvent.click(screen.getByRole('button', { name: /^Create Sanctuary/i }));
+  fireEvent.click(screen.getByRole('button', { name: /^Create and enter/i }));
   expect(view.entered).not.toHaveBeenCalled();
   await act(async () => { gate.resolve(response({ id: 'avatar-a', name: distilled.inferredName })); });
   expect(view.entered).toHaveBeenCalledWith({ id: 'avatar-a', name: distilled.inferredName });
@@ -62,14 +62,14 @@ it('preserves normal record creation and enters only after the confirmed respons
 it.each([false, true])('reuses the create identity after 503 unless the submitted fields change (edited=%s)', async edited => {
   const view = lab(); await prepareCreate(view);
   mocks.api.mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({ error: 'Save not confirmed' }) });
-  fireEvent.click(screen.getByRole('button', { name: /^Create Sanctuary/i }));
+  fireEvent.click(screen.getByRole('button', { name: /^Create and enter/i }));
   await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('Save not confirmed'));
   expect(view.entered).not.toHaveBeenCalled();
   const original = JSON.parse(mocks.api.mock.calls.at(-1)![1].body);
   expect(original.clientRequestId).toBeTruthy();
   if (edited) fireEvent.change(screen.getByDisplayValue(distilled.inferredName), { target: { value: 'Edited synthetic person' } });
   mocks.api.mockResolvedValueOnce(response({ id: 'avatar-a', name: distilled.inferredName }));
-  fireEvent.click(screen.getByRole('button', { name: /^Create Sanctuary/i }));
+  fireEvent.click(screen.getByRole('button', { name: /^Create and enter/i }));
   await waitFor(() => expect(view.entered).toHaveBeenCalledTimes(1));
   const retried = JSON.parse(mocks.api.mock.calls.at(-1)![1].body);
   expect(retried.clientRequestId === original.clientRequestId).toBe(!edited);
@@ -78,7 +78,7 @@ it.each([false, true])('reuses the create identity after 503 unless the submitte
 it.each(['unmount', 'owner-change'] as const)('ignores late record creation after %s and aborts the old request', async change => {
   const view = lab(); await prepareCreate(view);
   const gate = deferred<ReturnType<typeof response>>(); mocks.api.mockReturnValueOnce(gate.promise);
-  fireEvent.click(screen.getByRole('button', { name: /^Create Sanctuary/i }));
+  fireEvent.click(screen.getByRole('button', { name: /^Create and enter/i }));
   const signal = mocks.api.mock.calls.at(-1)![1].signal as AbortSignal;
   mocks.success.mockClear();
   if (change === 'unmount') view.unmount();
@@ -88,7 +88,7 @@ it.each(['unmount', 'owner-change'] as const)('ignores late record creation afte
   expect(view.entered).not.toHaveBeenCalled(); expect(mocks.success).not.toHaveBeenCalled();
   if (change === 'owner-change') {
     fireEvent.click(screen.getByRole('button', { name: 'Import records' }));
-    expect((screen.getByRole('button', { name: /Start Personality Distill/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /Extract person and memories/i }) as HTMLButtonElement).disabled).toBe(true);
   }
 });
 
@@ -104,12 +104,12 @@ it('does not upload an old recording if its FileReader completes after an accoun
 it('discards old distillation after an owner change and lets the new owner start with empty records', async () => {
   const view = lab(); await loadRecords(view);
   const gate = deferred<ReturnType<typeof response>>(); mocks.api.mockReturnValueOnce(gate.promise);
-  fireEvent.click(screen.getByRole('button', { name: /Start Personality Distill/i }));
+  fireEvent.click(screen.getByRole('button', { name: /Extract person and memories/i }));
   mocks.user = { uid: 'owner-b' }; view.rerender(<MemoryAvatarLab {...view.props} />);
   await act(async () => { gate.resolve(response(distilled)); });
   expect(screen.queryByText('Synthetic biography')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Import records' }));
-  expect((screen.getByRole('button', { name: /Start Personality Distill/i }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: /Extract person and memories/i }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 // Execute the production shell callbacks; avoid mounting unrelated desktop OS,

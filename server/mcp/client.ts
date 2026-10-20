@@ -183,8 +183,8 @@ export class MCPClientManager {
         }
       } catch (err: any) {
         console.warn(`[MCP] Failed to connect to ${serverName}: ${err.message}`);
+        this.health.recordStartupFailure(serverName, err);
         if (serverConfig.source === 'local') {
-          this.health.recordStartupFailure(serverName, err);
           console.warn(`[MCP] Local skill "${serverName}" failed to start. Keeping it enabled and marking health for repair.`);
         }
       }
@@ -295,7 +295,10 @@ export class MCPClientManager {
     const fullName = mcpRegistryToolName(safeServerName, safeToolName);
     const config = this.getConfig();
     const existingServer = this.connections.live.get(safeServerName);
-    const serverConfig = ownServerConfig(config, safeServerName) || existingServer?.config;
+    const configuredServer = ownServerConfig(config, safeServerName);
+    if (configuredServer?.enabled === false) throw new Error('MCP server "' + safeServerName + '" is disabled');
+    if (options.configuration && configuredServer && mcpServerConfigFingerprint(configuredServer) !== mcpServerConfigFingerprint(options.configuration)) throw new Error('MCP server "' + safeServerName + '" has a different managed configuration.');
+    const serverConfig = configuredServer || options.configuration || existingServer?.config;
     if (!serverConfig) throw new Error(`MCP server "${safeServerName}" is not configured`);
     if (serverConfig.enabled === false) throw new Error(`MCP server "${safeServerName}" is disabled`);
     assertMCPPackageRunnerPolicy(serverConfig);

@@ -371,8 +371,6 @@ Return ONLY valid JSON:
 function profileToPersonalityConfig(
   cognitive: CognitiveProfile,
   expression: ExpressionProfile,
-  behavioral: BehavioralProfile,
-  emotional: EmotionalProfile,
   targetName: string,
   relationshipType: string,
 ): PersonalityConfig {
@@ -612,7 +610,7 @@ export async function distillPersona(options: DistillOptions, llmGetters: LLMGet
   const { memories: seedMemories, evidenceMap } = await extractSeedMemories(transcript, inferredName, configuredGetters);
 
   // 6. Synthesize personality config
-  const personalityConfig = profileToPersonalityConfig(cognitive, expression, behavioral, emotional, inferredName, relationshipType);
+  const personalityConfig = profileToPersonalityConfig(cognitive, expression, inferredName, relationshipType);
 
   // 7. Generate narrative
   const narrative = await generateNarrative(cognitive, expression, behavioral, emotional, inferredName, relationshipType, seedMemories.length, configuredGetters);

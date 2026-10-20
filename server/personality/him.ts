@@ -169,28 +169,6 @@ export function himTick(
   return { initiative, curiosityBias, him };
 }
 
-/**
- * Get the best historical peak for prompting.
- * Returns the peak with highest connection+intimacy combination.
- */
-export function getBestPeak(him: HIMState): HIMPeak | null {
-  if (him.peakBuffer.length === 0) return null;
-  return stableTopK(him.peakBuffer, 1, p => p.connection + p.intimacy)[0];
-}
-
-/** Format a peak as a memory prompt hint */
-export function formatPeakForPrompt(peak: HIMPeak): string {
-  const date = new Date(peak.timestamp).toLocaleDateString('zh-CN', {
-    month: 'long', day: 'numeric',
-  });
-  let hint = `On ${date}, I felt deeply connected (connection ${peak.connection.toFixed(2)}, intimacy ${peak.intimacy.toFixed(2)}).`;
-  if (peak.topicHint) {
-    hint += ` We were discussing "${peak.topicHint}".`;
-  }
-  hint += ' This is a memory worth cherishing.';
-  return hint;
-}
-
 // ── Persistence ──
 
 export function loadHIMState(userId: string): HIMState {

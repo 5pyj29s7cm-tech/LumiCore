@@ -2,22 +2,23 @@
 
 import { type MeetingNote } from "./runtime_state";
 
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useState, useRef } from 'react';
+import { isTauriRuntime } from '@/services/apiBridge';
 
 import { toast } from 'sonner';
 
 import { useVoiceCall } from '@/hooks/useVoiceCall';
 import { useApp, type OperationMode } from '@/contexts/AppContext';
 
-import { archiveLegalMeetingToConsultationCase, isLegalCaseAccount, clearLegalConsultationCaseId, getLegalCaseLabel, getLegalConsultationCase, getLegalConsultationCaseId, setLegalConsultationCaseId } from '@/lib/legalCaseStore';
 
 import { formatUiMessage, uiMessage } from "../../i18n/uiMessages";
 import { desktopWorkflowCopy } from "../../i18n/locales/desktopWorkflows";
 
 type useMeetingWorkflowInput = {
-meetingStartedAt: number;
+meetingStartedAt: number | null;
 legalMeetingCaseTitle: string;
 meetingReport: string;
+meetingReportGenerating: boolean;
 meetingNotes: MeetingNote[];
 formatMeetingNoteForExport: (note: MeetingNote) => string;
 lang: "en" | "zh";
@@ -28,9 +29,6 @@ setMeetingReportGenerating: React.Dispatch<React.SetStateAction<boolean>>;
 workDomain: "personal" | "work";
 orgConnection: ReturnType<typeof useApp>["orgConnection"];
 aiConfig: ReturnType<typeof useApp>["aiConfig"];
-lastLegalMeetingArchiveRef: React.RefObject<string>;
-setLegalMeetingCaseTitle: React.Dispatch<React.SetStateAction<string>>;
-user: any;
 waitForMeetingRefinement: (identity: { scope: string; meetingId: string; refinementId: string; }) => Promise<MeetingNote[]>;
 stopMeetingAudio: (options?: { refineTranscript?: boolean; refinementId?: string; }) => void;
 setMeetingNotesOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -43,15 +41,31 @@ callState: ReturnType<typeof useVoiceCall>["callState"];
 setOperationMode: (mode: OperationMode) => void;
 meetingPaused: boolean;
 renewMeetingIdentity: () => void;
-setMeetingNotes: React.Dispatch<React.SetStateAction<MeetingNote[]>>;
-setMeetingSpeakerCount: React.Dispatch<React.SetStateAction<number>>;
-setMeetingStartedAt: React.Dispatch<React.SetStateAction<number>>;
-lastMeetingTranscriptRef: React.RefObject<{ text: string; at: number; speakerKey: string; }>;
+createMeetingRecord: (caseInfo?: { id: string; title: string }) => boolean;
+selectMeetingRecord: (id: string) => boolean;
+importMeetingRecords: (text: string) => boolean;
+meetingHistoryReadOnly: boolean;
+meetingRecordId: string;
+meetingNotesOpen: boolean;
 setPendingOperationMode: React.Dispatch<React.SetStateAction<OperationMode | null>>;
 pendingOperationMode: OperationMode | null;
-resetMeetingCapture: (startedAt?: number) => void;
 };
-export function useMeetingWorkflow({ meetingStartedAt, legalMeetingCaseTitle, meetingReport, meetingNotes, formatMeetingNoteForExport, lang, meetingIdentityRef, setMeetingReport, meetingStorageKeys, setMeetingReportGenerating, workDomain, orgConnection, aiConfig, lastLegalMeetingArchiveRef, setLegalMeetingCaseTitle, user, waitForMeetingRefinement, stopMeetingAudio, setMeetingNotesOpen, operationMode, endCall, setMeetingPaused, meetingVoiceActiveRef, meetingStartAttemptRef, callState, setOperationMode, meetingPaused, renewMeetingIdentity, setMeetingNotes, setMeetingSpeakerCount, setMeetingStartedAt, lastMeetingTranscriptRef, setPendingOperationMode, pendingOperationMode, resetMeetingCapture }: useMeetingWorkflowInput) {
+export function useMeetingWorkflow({ meetingStartedAt, legalMeetingCaseTitle, meetingReport, meetingReportGenerating, meetingNotes, formatMeetingNoteForExport, lang, meetingIdentityRef, setMeetingReport, meetingStorageKeys, setMeetingReportGenerating, workDomain, orgConnection, aiConfig, waitForMeetingRefinement, stopMeetingAudio, setMeetingNotesOpen, operationMode, endCall, setMeetingPaused, meetingVoiceActiveRef, meetingStartAttemptRef, callState, setOperationMode, meetingPaused, renewMeetingIdentity, createMeetingRecord, selectMeetingRecord, importMeetingRecords, meetingHistoryReadOnly, meetingRecordId, meetingNotesOpen, setPendingOperationMode, pendingOperationMode }: useMeetingWorkflowInput) {
+  const copy = desktopWorkflowCopy(lang).meetingWorkspace;
+  const [meetingReportError, setMeetingReportError] = useState('');
+  const analysisAttempt = useRef<{identity: typeof meetingIdentityRef.current; controller: AbortController} | null>(null);
+  useEffect(() => {
+    const cancel = () => { analysisAttempt.current?.controller.abort(); analysisAttempt.current = null; };
+    cancel(); setMeetingReportError('');
+    return cancel;
+  }, [meetingRecordId, meetingIdentityRef.current.scope]);
+  const [meetingExport, setMeetingExport] = useState<{ scope: string; meetingId: string; path: string } | null>(null);
+  const [meetingExportBusy, setMeetingExportBusy] = useState(false);
+  const [meetingExportError, setMeetingExportError] = useState('');
+  const exportAttempt = useRef<object | null>(null);
+  const exportIdentity = meetingIdentityRef.current;
+  const meetingExportPath = meetingExport?.scope === exportIdentity.scope && meetingExport.meetingId === exportIdentity.meetingId ? meetingExport.path : '';
+  useEffect(() => { exportAttempt.current = null; setMeetingExportBusy(false); setMeetingExportError(''); }, [meetingStorageKeys.identity, exportIdentity.scope, exportIdentity.meetingId]);
 
   const formatMeetingTime = useCallback((value: number) => {
     return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -62,108 +76,38 @@ export function useMeetingWorkflow({ meetingStartedAt, legalMeetingCaseTitle, me
     const lines = [
       `# Lumi Meeting Notes`,
       '',
-      `Started: ${started.toLocaleString()}`,
+      `Session opened (includes pauses): ${started.toLocaleString()}`,
       ...(legalMeetingCaseTitle ? [`Case: ${legalMeetingCaseTitle}`] : []),
       '',
       ...(meetingReport ? ['## Lumi Report', '', meetingReport, ''] : []),
       '## Transcript',
       '',
-      ...meetingNotes.map(note => `- [${formatMeetingTime(note.time)}] ${formatMeetingNoteForExport(note)}`),
+      ...[...meetingNotes].sort((a, b) => a.time - b.time).map(note => `- [${formatMeetingTime(note.time)}] ${formatMeetingNoteForExport(note)}`),
       '',
     ];
     return lines.join('\n');
   }, [formatMeetingNoteForExport, formatMeetingTime, legalMeetingCaseTitle, meetingNotes, meetingReport, meetingStartedAt]);
 
-  const buildFallbackMeetingReport = useCallback((notesOverride?: MeetingNote[]) => {
-    const notesForReport = notesOverride || meetingNotes;
-    const started = meetingStartedAt ? new Date(meetingStartedAt).toLocaleString() : new Date().toLocaleString();
-    const legalCase = getLegalConsultationCase();
-    const legalCaseTitle = legalCase ? getLegalCaseLabel(legalCase) : legalMeetingCaseTitle;
-    const actionHints = notesForReport
-      .filter(note => /(todo|action|next|follow|owner|deadline|需要|安排|确认|推进|负责|下周|明天|今天|完成|决定|风险|问题|证据|材料|开庭|上诉|法院|法官)/i.test(note.text))
-      .slice(-8)
-      .map(note => `- [${formatMeetingTime(note.time)}] ${formatMeetingNoteForExport(note)}`);
-    if (legalCaseTitle) {
-      return [
-        uiMessage('desktop-ui.lumi-legal-consultation-memo.10af7cc379', (lang === 'zh') ? 'zh' : 'en'),
-        '',
-        `${uiMessage('desktop-ui.case.8a53cf13fb', (lang === 'zh') ? 'zh' : 'en')}: ${legalCaseTitle}`,
-        `${uiMessage('desktop-ui.started.364ae4adf2', (lang === 'zh') ? 'zh' : 'en')}: ${started}`,
-        `${uiMessage('desktop-ui.transcript-items.8cb25feb7a', (lang === 'zh') ? 'zh' : 'en')}: ${notesForReport.length}`,
-        '',
-        `## ${uiMessage('desktop-ui.consultation-summary.5f868bd7fc', (lang === 'zh') ? 'zh' : 'en')}`,
-        notesForReport.length > 0
-          ? (formatUiMessage('desktop-ui.captured-value0-transcript-items-llm.bcf7f95e8c', { value0: notesForReport.length }, (lang === 'zh') ? 'zh' : 'en'))
-          : (uiMessage('desktop-ui.no-transcript-was-captured-for.97f574a507', (lang === 'zh') ? 'zh' : 'en')),
-        '',
-        `## ${uiMessage('desktop-ui.fact-summary.9a77b99032', (lang === 'zh') ? 'zh' : 'en')}`,
-        ...(notesForReport.slice(-6).map(note => `- ${formatMeetingNoteForExport(note)}`)),
-        ...(notesForReport.length === 0 ? [`- ${uiMessage('desktop-ui.no-fact-summary-yet.d293f70162', (lang === 'zh') ? 'zh' : 'en')}`] : []),
-        '',
-        `## ${uiMessage('desktop-ui.issues.f9911a3802', (lang === 'zh') ? 'zh' : 'en')}`,
-        `- ${uiMessage('desktop-ui.counsel-should-confirm-issues-against.7df3dafccd', (lang === 'zh') ? 'zh' : 'en')}`,
-        '',
-        `## ${uiMessage('desktop-ui.missing-materials.ad6cf1dcaa', (lang === 'zh') ? 'zh' : 'en')}`,
-        ...(actionHints.length > 0 ? actionHints : [`- ${uiMessage('desktop-ui.no-clear-missing-materials-detected.b86e0b077d', (lang === 'zh') ? 'zh' : 'en')}`]),
-        '',
-        `## ${uiMessage('desktop-ui.next-steps.cfcab769f5', (lang === 'zh') ? 'zh' : 'en')}`,
-        `- ${uiMessage('desktop-ui.review-the-transcript-and-add.1176eea1c1', (lang === 'zh') ? 'zh' : 'en')}`,
-        '',
-        `## ${uiMessage('desktop-ui.safety-boundary.0f86bb1e83', (lang === 'zh') ? 'zh' : 'en')}`,
-        `- ${uiMessage('desktop-ui.this-memo-assists-legal-analysis.678ef98abe', (lang === 'zh') ? 'zh' : 'en')}`,
-      ].join('\n');
-    }
-    return [
-      uiMessage('desktop-ui.lumi-meeting-report.8f1af8ddfd', (lang === 'zh') ? 'zh' : 'en'),
-      '',
-      `${uiMessage('desktop-ui.started.364ae4adf2', (lang === 'zh') ? 'zh' : 'en')}: ${started}`,
-      `${uiMessage('desktop-ui.transcript-items.8cb25feb7a', (lang === 'zh') ? 'zh' : 'en')}: ${notesForReport.length}`,
-      '',
-      `## ${uiMessage('desktop-ui.summary.6a1255c05e', (lang === 'zh') ? 'zh' : 'en')}`,
-      notesForReport.length > 0
-        ? (formatUiMessage('desktop-ui.captured-value0-transcript-items-llm.2d05f10a79', { value0: notesForReport.length }, (lang === 'zh') ? 'zh' : 'en'))
-        : (uiMessage('desktop-ui.no-transcript-was-captured-for.2e5c4be8f2', (lang === 'zh') ? 'zh' : 'en')),
-      '',
-      `## ${uiMessage('desktop-ui.action-decision-signals.c44c197db8', (lang === 'zh') ? 'zh' : 'en')}`,
-      ...(actionHints.length > 0 ? actionHints : [`- ${uiMessage('desktop-ui.no-clear-action-or-decision.0c5b66381b', (lang === 'zh') ? 'zh' : 'en')}`]),
-      '',
-      `## ${uiMessage('desktop-ui.suggestion.2ed069fe41', (lang === 'zh') ? 'zh' : 'en')}`,
-      `- ${uiMessage('desktop-ui.review-the-transcript-manually-and.78769e1374', (lang === 'zh') ? 'zh' : 'en')}`,
-    ].join('\n');
-  }, [formatMeetingNoteForExport, formatMeetingTime, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt]);
-
   const analyzeMeetingNotes = useCallback(async (endedAt = Date.now(), notesOverride?: MeetingNote[], identity = meetingIdentityRef.current) => {
-    const isCurrent = () => meetingIdentityRef.current === identity;
-    if (!isCurrent()) return "";
+    if (meetingIdentityRef.current !== identity || analysisAttempt.current) return "";
     const notesForAnalysis = notesOverride || meetingNotes;
+    setMeetingReportError('');
     if (notesForAnalysis.length === 0) {
-      const fallback = buildFallbackMeetingReport(notesForAnalysis);
-      setMeetingReport(fallback);
-      localStorage.setItem(meetingStorageKeys.report, fallback);
-      toast.info(uiMessage('desktop-ui.no-transcript-captured-generated-an.b6e7d4d221', (lang === 'zh') ? 'zh' : 'en'));
-      return fallback;
+      setMeetingReportGenerating(false);
+      setMeetingReport('');
+      setMeetingReportError(copy.noTranscript);
+      toast.info(copy.noTranscript);
+      return '';
     }
 
+    const attempt = { identity, controller: new AbortController() };
+    analysisAttempt.current = attempt;
+    const isCurrent = () => analysisAttempt.current === attempt && !attempt.controller.signal.aborted && meetingIdentityRef.current === identity;
     setMeetingReportGenerating(true);
     try {
-      const legalCase = getLegalConsultationCase();
-      const legalCaseId = legalCase?.id || getLegalConsultationCaseId();
-      const workLegalScope = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
-      const legalCaseTitle = legalCase ? getLegalCaseLabel(legalCase) : legalMeetingCaseTitle;
-      const legalCaseForAnalysis = legalCaseTitle ? {
-        id: legalCaseId,
-        title: legalCase?.title || legalCaseTitle,
-        caseNumber: legalCase?.caseNumber || '',
-        party: legalCase?.party || '',
-        cause: legalCase?.cause || '',
-        court: legalCase?.court || '',
-        judge: legalCase?.judge || '',
-        stage: legalCase?.stage || '',
-        notes: legalCase?.notes || '',
-        domain: workDomain,
-        orgId: workLegalScope ? orgConnection?.orgId : '',
-      } : null;
+      const workScope = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
       const res = await fetch('/api/meeting/analyze', {
+        signal: attempt.controller.signal,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -174,113 +118,35 @@ export function useMeetingWorkflow({ meetingStartedAt, legalMeetingCaseTitle, me
           startedAt: meetingStartedAt,
           endedAt,
           language: lang,
-          purpose: legalCaseForAnalysis ? 'legal_consultation' : 'meeting',
-          domain: workLegalScope ? 'work' : 'personal',
-          orgId: workLegalScope ? orgConnection?.orgId : undefined,
-          legalCase: legalCaseForAnalysis || undefined,
+          purpose: 'meeting',
+          domain: workScope ? 'work' : 'personal',
+          orgId: workScope ? orgConnection?.orgId : undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!isCurrent()) return '';
       if (!res.ok) throw new Error(data.error || 'Failed to analyze meeting');
-      const report = String(data.report || '').trim() || buildFallbackMeetingReport(notesForAnalysis);
+      const report = String(data.report || '').trim();
+      if (!report) throw new Error('No report returned');
       setMeetingReport(report);
-      localStorage.setItem(meetingStorageKeys.report, report);
-      if (data.legalCaseArchived && workLegalScope && legalCaseId && notesForAnalysis.length > 0) {
-        const lastNote = notesForAnalysis[notesForAnalysis.length - 1];
-        const archiveKey = `${legalCaseId}:${meetingStartedAt || ''}:${lastNote?.id || notesForAnalysis.length}`;
-        lastLegalMeetingArchiveRef.current = archiveKey;
-        clearLegalConsultationCaseId();
-        setLegalMeetingCaseTitle('');
-        window.dispatchEvent(new CustomEvent('lumi:org-legal-cases-changed'));
-      }
       toast.success(uiMessage('desktop-ui.lumi-generated-the-meeting-report.ebfd03daff', (lang === 'zh') ? 'zh' : 'en'));
       return report;
     } catch (err: any) {
       if (!isCurrent()) return '';
-      const fallback = buildFallbackMeetingReport(notesForAnalysis);
-      setMeetingReport(fallback);
-      localStorage.setItem(meetingStorageKeys.report, fallback);
-      toast.error(err?.message || (uiMessage('desktop-ui.meeting-analysis-failed-generated-a.2106efcb98', (lang === 'zh') ? 'zh' : 'en')));
-      return fallback;
+      const message = copy.analysisIncomplete(notesForAnalysis.length);
+      setMeetingReport('');
+      setMeetingReportError(message);
+      toast.error(message);
+      return '';
     } finally {
-      if (isCurrent()) setMeetingReportGenerating(false);
+      const current = isCurrent();
+      if (analysisAttempt.current === attempt) analysisAttempt.current = null;
+      if (current) setMeetingReportGenerating(false);
     }
-  }, [aiConfig?.model, aiConfig?.provider, buildFallbackMeetingReport, lang, lastLegalMeetingArchiveRef, legalMeetingCaseTitle, meetingIdentityRef, meetingNotes, meetingStartedAt, meetingStorageKeys.report, orgConnection?.connected, orgConnection?.orgId, setLegalMeetingCaseTitle, setMeetingReport, setMeetingReportGenerating, workDomain]);
-
-  const archiveLegalMeetingReport = useCallback(async (report: string, endedAt: number, notesOverride?: MeetingNote[]) => {
-    if (!isLegalCaseAccount(user?.uid)) return;
-    const notesForArchive = notesOverride || meetingNotes;
-    const consultationCaseId = getLegalConsultationCaseId();
-    if (!consultationCaseId || notesForArchive.length === 0) return;
-    const lastNote = notesForArchive[notesForArchive.length - 1];
-    const archiveKey = `${consultationCaseId}:${meetingStartedAt || ''}:${lastNote?.id || notesForArchive.length}`;
-    if (lastLegalMeetingArchiveRef.current === archiveKey) return;
-
-    if (workDomain === 'work' && orgConnection?.connected) {
-      const started = meetingStartedAt ? new Date(meetingStartedAt) : new Date(endedAt);
-      const meetingCopy = desktopWorkflowCopy(lang).legalMeeting;
-      const transcript = notesForArchive
-        .map(note => `- [${formatMeetingTime(note.time)}] ${formatMeetingNoteForExport(note)}`)
-        .join('\n');
-      const content = [
-        `# ${meetingCopy.title} ${started.toLocaleString()}`,
-        '',
-        `## ${meetingCopy.lumiSummary}`,
-        '',
-        report,
-        '',
-        `## ${meetingCopy.rawTranscript}`,
-        '',
-        transcript,
-        '',
-        `## ${meetingCopy.safetyBoundary}`,
-        '',
-        meetingCopy.boundaryText,
-      ].join('\n');
-      try {
-        const res = await fetch(`/api/org/legal/cases/${encodeURIComponent(consultationCaseId)}/materials`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            type: 'consultation',
-            title: `${meetingCopy.title} ${started.toLocaleString()}`,
-            content,
-            source: 'meeting',
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'Failed to archive consultation');
-        if (!isLegalCaseAccount(user?.uid)) return;
-        lastLegalMeetingArchiveRef.current = archiveKey;
-        clearLegalConsultationCaseId();
-        setLegalMeetingCaseTitle('');
-        window.dispatchEvent(new CustomEvent('lumi:org-legal-cases-changed'));
-        toast.success(uiMessage('desktop-ui.consultation-archived-to-organization-case.0f5a7a5269', (lang === 'zh') ? 'zh' : 'en'));
-        return;
-      } catch (err: any) {
-        toast.error(err?.message || (uiMessage('desktop-ui.failed-to-archive-consultation-to.7fac8fb2e5', (lang === 'zh') ? 'zh' : 'en')));
-        return;
-      }
-    }
-
-    const archived = archiveLegalMeetingToConsultationCase({
-      report,
-      notes: notesForArchive,
-      startedAt: meetingStartedAt,
-      endedAt,
-    });
-    if (!archived) {
-      toast.error(uiMessage('desktop-ui.failed-to-archive-consultation-to.3a4ddc3b05', (lang === 'zh') ? 'zh' : 'en'));
-      return;
-    }
-    lastLegalMeetingArchiveRef.current = archiveKey;
-    setLegalMeetingCaseTitle('');
-    toast.success(formatUiMessage('desktop-ui.consultation-archived-to-case-value0.213430958c', { value0: getLegalCaseLabel(archived.caseFile) }, (lang === 'zh') ? 'zh' : 'en'));
-  }, [user?.uid, meetingNotes, meetingStartedAt, lastLegalMeetingArchiveRef, workDomain, orgConnection?.connected, setLegalMeetingCaseTitle, lang, formatMeetingTime, formatMeetingNoteForExport]);
+  }, [aiConfig?.model, aiConfig?.provider, copy, lang, meetingIdentityRef, meetingNotes, meetingStartedAt, orgConnection?.connected, orgConnection?.orgId, setMeetingReport, setMeetingReportGenerating, workDomain]);
 
   const endMeetingAndReport = useCallback(async () => {
+    if (meetingHistoryReadOnly || (meetingReport && operationMode !== 'meeting')) return;
     const identity = { ...meetingIdentityRef.current, refinementId: crypto.randomUUID() };
     meetingIdentityRef.current = identity;
     const endedAt = Date.now();
@@ -290,10 +156,8 @@ export function useMeetingWorkflow({ meetingStartedAt, legalMeetingCaseTitle, me
     setMeetingNotesOpen(true);
     const refinedNotes = await refinementPromise;
     if (meetingIdentityRef.current !== identity) return;
-    const report = await analyzeMeetingNotes(endedAt, refinedNotes || undefined, identity);
-    if (meetingIdentityRef.current !== identity) return;
-    await archiveLegalMeetingReport(report, endedAt, refinedNotes || undefined);
-  }, [analyzeMeetingNotes, archiveLegalMeetingReport, meetingIdentityRef, setMeetingNotesOpen, setMeetingReportGenerating, stopMeetingAudio, waitForMeetingRefinement]);
+    await analyzeMeetingNotes(endedAt, refinedNotes || undefined, identity);
+  }, [analyzeMeetingNotes, meetingHistoryReadOnly, meetingIdentityRef, meetingReport, operationMode, setMeetingNotesOpen, setMeetingReportGenerating, stopMeetingAudio, waitForMeetingRefinement]);
 
   const endVoiceCallFromUI = useCallback(() => {
     if (operationMode === 'meeting') {
@@ -312,20 +176,22 @@ export function useMeetingWorkflow({ meetingStartedAt, legalMeetingCaseTitle, me
   }, [callState, endCall, lang, meetingStartAttemptRef, meetingVoiceActiveRef, setMeetingPaused]);
 
   const resumeMeetingCapture = useCallback(() => {
+    if (meetingIdentityRef.current.refinementId) renewMeetingIdentity();
     meetingStartAttemptRef.current = 0;
     setMeetingPaused(false);
     if (operationMode !== 'meeting') setOperationMode('meeting');
     setMeetingNotesOpen(true);
     toast.success(uiMessage('desktop-ui.meeting-capture-resumed.1fe9ed28f8', (lang === 'zh') ? 'zh' : 'en'));
-  }, [lang, meetingStartAttemptRef, operationMode, setMeetingNotesOpen, setMeetingPaused, setOperationMode]);
+  }, [lang, meetingIdentityRef, renewMeetingIdentity, meetingStartAttemptRef, operationMode, setMeetingNotesOpen, setMeetingPaused, setOperationMode]);
 
   const toggleMeetingCapturePaused = useCallback(() => {
-    if (meetingPaused) {
+    if (meetingHistoryReadOnly) return;
+    if (meetingPaused || operationMode !== 'meeting') {
       resumeMeetingCapture();
       return;
     }
     pauseMeetingCapture();
-  }, [meetingPaused, pauseMeetingCapture, resumeMeetingCapture]);
+  }, [meetingHistoryReadOnly, meetingPaused, operationMode, pauseMeetingCapture, resumeMeetingCapture]);
 
   const copyMeetingNotes = useCallback(async () => {
     if (meetingNotes.length === 0) {
@@ -340,38 +206,75 @@ export function useMeetingWorkflow({ meetingStartedAt, legalMeetingCaseTitle, me
     }
   }, [buildMeetingMarkdown, lang, meetingNotes.length]);
 
-  const downloadMeetingNotes = useCallback(() => {
-    if (meetingNotes.length === 0) {
-      toast.info(uiMessage('desktop-ui.no-meeting-notes-yet.8b36e2125c', (lang === 'zh') ? 'zh' : 'en'));
-      return;
-    }
-    const blob = new Blob([buildMeetingMarkdown()], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
+  const downloadMeetingNotes = useCallback(async () => {
+    if (!meetingNotes.length || exportAttempt.current) return;
+    const identity = { ...meetingIdentityRef.current };
+    const attempt = {};
+    exportAttempt.current = attempt;
+    const isCurrent = () => exportAttempt.current === attempt && meetingIdentityRef.current.scope === identity.scope && meetingIdentityRef.current.meetingId === identity.meetingId;
+    setMeetingExportBusy(true); setMeetingExportError('');
+    const content = buildMeetingMarkdown();
     const stamp = new Date(meetingStartedAt || Date.now()).toISOString().replace(/[:.]/g, '-');
-    anchor.href = url;
-    anchor.download = `lumi-meeting-${stamp}.md`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-    toast.success(uiMessage('desktop-ui.meeting-notes-exported.27f3f8fb53', (lang === 'zh') ? 'zh' : 'en'));
-  }, [buildMeetingMarkdown, lang, meetingNotes.length, meetingStartedAt]);
+    const fileName = 'lumi-meeting-' + stamp + '-' + crypto.randomUUID().slice(0, 8) + '.md';
+    try {
+      if (isTauriRuntime()) {
+        const { downloadDir, join } = await import('@tauri-apps/api/path');
+        const { invoke } = await import('@tauri-apps/api/core');
+        const path = await join(await downloadDir(), fileName);
+        if (!isCurrent()) return;
+        const result = await invoke<{ success: boolean; path: string; readBackMatched: boolean }>('write_text_file', { path, content, encoding: 'utf-8', overwritePolicy: 'fail_if_exists' });
+        if (!result.success || !result.readBackMatched || !result.path) throw new Error(copy.exportFailed);
+        if (isCurrent()) { setMeetingExport({ ...identity, path: result.path }); toast.success(copy.saved); }
+      } else {
+        const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }));
+        const anchor = document.createElement('a');
+        try { anchor.href = url; anchor.download = fileName; document.body.appendChild(anchor); anchor.click(); }
+        finally { anchor.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000); }
+        if (isCurrent()) toast.info(copy.browserDownload);
+      }
+    } catch {
+      if (isCurrent()) { setMeetingExportError(copy.exportFailed); toast.error(copy.exportFailed); }
+    } finally {
+      if (isCurrent()) { exportAttempt.current = null; setMeetingExportBusy(false); }
+    }
+  }, [buildMeetingMarkdown, copy, meetingIdentityRef, meetingNotes.length, meetingStartedAt]);
+
+  const openMeetingExport = useCallback(async (folder = false) => {
+    if (!meetingExportPath) return;
+    const identity = { ...meetingIdentityRef.current };
+    setMeetingExportError('');
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const { dirname } = await import('@tauri-apps/api/path');
+      const target = folder ? await dirname(meetingExportPath) : meetingExportPath;
+      if (meetingIdentityRef.current.scope !== identity.scope || meetingIdentityRef.current.meetingId !== identity.meetingId) return;
+      const result = await invoke<{ success: boolean }>('open_item', { target });
+      if (!result.success) throw new Error(copy.openFailed);
+    } catch {
+      if (meetingIdentityRef.current.scope === identity.scope && meetingIdentityRef.current.meetingId === identity.meetingId) setMeetingExportError(copy.openFailed);
+    }
+  }, [copy, meetingExportPath, meetingIdentityRef]);
 
   const clearMeetingNotes = useCallback(() => {
-    renewMeetingIdentity();
-    const now = Date.now();
-    setMeetingNotes([]);
-    setMeetingSpeakerCount(0);
-    setMeetingReport('');
-    setMeetingStartedAt(now);
-    localStorage.setItem(meetingStorageKeys.notes, '[]');
-    localStorage.removeItem(meetingStorageKeys.report);
-    localStorage.setItem(meetingStorageKeys.startedAt, String(now));
-    lastMeetingTranscriptRef.current = { text: '', at: 0, speakerKey: '' };
-    lastLegalMeetingArchiveRef.current = '';
-    toast.success(uiMessage('desktop-ui.meeting-notes-cleared.935a6beea8', (lang === 'zh') ? 'zh' : 'en'));
-  }, [lang, lastLegalMeetingArchiveRef, lastMeetingTranscriptRef, meetingStorageKeys.notes, meetingStorageKeys.report, meetingStorageKeys.startedAt, renewMeetingIdentity, setMeetingNotes, setMeetingReport, setMeetingSpeakerCount, setMeetingStartedAt]);
+    if (meetingReportGenerating || meetingExportBusy || (operationMode === 'meeting' && !meetingPaused)) return;
+    if (!window.confirm(copy.newConfirm) || !createMeetingRecord()) return;
+    pauseMeetingCapture();
+  }, [copy.newConfirm, createMeetingRecord, meetingExportBusy, meetingPaused, meetingReportGenerating, operationMode, pauseMeetingCapture]);
+
+  const selectMeetingHistoryRecord = useCallback((id: string) => {
+    if (meetingReportGenerating || meetingExportBusy || (operationMode === 'meeting' && !meetingPaused)) return;
+    if (selectMeetingRecord(id)) { pauseMeetingCapture(); setMeetingNotesOpen(true); }
+  }, [meetingExportBusy, meetingPaused, meetingReportGenerating, operationMode, pauseMeetingCapture, selectMeetingRecord, setMeetingNotesOpen]);
+
+  const importMeetingHistoryFile = useCallback(async (file: File) => {
+    if (meetingReportGenerating || meetingExportBusy || (operationMode === 'meeting' && !meetingPaused)) return;
+    const identity = meetingIdentityRef.current;
+    try {
+      const text = await file.text();
+      if (meetingIdentityRef.current !== identity) return;
+      if (importMeetingRecords(text)) toast.success(copy.historyImported);
+    } catch { if (meetingIdentityRef.current === identity) toast.error(copy.historyImportFailed); }
+  }, [copy.historyImportFailed, copy.historyImported, importMeetingRecords, meetingExportBusy, meetingIdentityRef, meetingPaused, meetingReportGenerating, operationMode]);
 
   const requestOperationModeChange = useCallback((nextMode: OperationMode) => {
     if (nextMode === operationMode) return;
@@ -384,36 +287,38 @@ export function useMeetingWorkflow({ meetingStartedAt, legalMeetingCaseTitle, me
 
   const confirmOperationModeChange = useCallback(() => {
     if (!pendingOperationMode) return;
+    if (pendingOperationMode === 'meeting' && operationMode !== 'meeting' && callState !== 'idle') endCall();
     setOperationMode(pendingOperationMode);
     if (pendingOperationMode === 'meeting') {
-      if (meetingIdentityRef.current.refinementId) resetMeetingCapture();
-      setMeetingPaused(false);
+      setMeetingPaused(true);
       setMeetingNotesOpen(true);
     }
     setPendingOperationMode(null);
-  }, [meetingIdentityRef, pendingOperationMode, resetMeetingCapture, setMeetingNotesOpen, setMeetingPaused, setOperationMode, setPendingOperationMode]);
+  }, [callState, endCall, operationMode, pendingOperationMode, setMeetingNotesOpen, setMeetingPaused, setOperationMode, setPendingOperationMode]);
 
   type MeetingModeRequestDetail = {
     confirmed?: boolean;
     resetNotes?: boolean;
-    legalCaseId?: string;
-    legalCaseTitle?: string;
     respond?: (payload?: unknown) => void;
     reject?: (message: string) => void;
   };
 
-  const openMeetingMode = useCallback((detail: MeetingModeRequestDetail = {}) => {
+  const openMeetingMode = useCallback(async (detail: MeetingModeRequestDetail = {}) => {
     try {
-      if (detail.resetNotes || meetingIdentityRef.current.refinementId) resetMeetingCapture();
-      if (detail.legalCaseId) setLegalConsultationCaseId(String(detail.legalCaseId));
-      if (detail.legalCaseTitle) setLegalMeetingCaseTitle(String(detail.legalCaseTitle));
-      else if (!getLegalConsultationCaseId()) setLegalMeetingCaseTitle('');
-
+      let readOnlyView = meetingHistoryReadOnly;
+      if (detail.resetNotes) {
+        if (operationMode === 'meeting' && !meetingPaused) throw new Error(copy.finishBeforeNew);
+        if (!createMeetingRecord()) throw new Error(copy.historyUpdateFailed);
+        readOnlyView = false;
+      }
       if (detail.confirmed) {
-        setMeetingPaused(false);
+        if (operationMode !== 'meeting') {
+          if (callState !== 'idle') endCall();
+          setMeetingPaused(true);
+        }
         setOperationMode('meeting');
         setMeetingNotesOpen(true);
-        detail.respond?.({ ok: true, action: 'start_meeting_mode', mode: 'meeting' });
+        detail.respond?.({ ok: true, action: 'start_meeting_mode', mode: 'meeting', status: readOnlyView ? 'history' : 'ready' });
         return;
       }
 
@@ -427,7 +332,7 @@ export function useMeetingWorkflow({ meetingStartedAt, legalMeetingCaseTitle, me
     } catch (err: any) {
       detail.reject?.(err?.message || String(err));
     }
-  }, [meetingIdentityRef, operationMode, requestOperationModeChange, resetMeetingCapture, setLegalMeetingCaseTitle, setMeetingNotesOpen, setMeetingPaused, setOperationMode]);
+  }, [callState, copy.finishBeforeNew, copy.historyUpdateFailed, createMeetingRecord, endCall, meetingHistoryReadOnly, meetingPaused, operationMode, requestOperationModeChange, setMeetingNotesOpen, setMeetingPaused, setOperationMode]);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -442,7 +347,7 @@ export function useMeetingWorkflow({ meetingStartedAt, legalMeetingCaseTitle, me
       setMeetingNotesOpen(true);
       return;
     }
-    requestOperationModeChange('meeting');
-  }, [operationMode, requestOperationModeChange, setMeetingNotesOpen]);
-return { endMeetingAndReport, endVoiceCallFromUI, openMeetingModeWithConfirm, copyMeetingNotes, downloadMeetingNotes, formatMeetingTime, toggleMeetingCapturePaused, clearMeetingNotes, confirmOperationModeChange };
+    openMeetingMode({ confirmed: true });
+  }, [openMeetingMode, operationMode, setMeetingNotesOpen]);
+return { meetingExportPath, meetingExportBusy, meetingExportError, openMeetingExport, endMeetingAndReport, endVoiceCallFromUI, openMeetingModeWithConfirm, copyMeetingNotes, downloadMeetingNotes, formatMeetingTime, toggleMeetingCapturePaused, clearMeetingNotes, selectMeetingHistoryRecord, importMeetingHistoryFile, meetingReportError, confirmOperationModeChange };
 }

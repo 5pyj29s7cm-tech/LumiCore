@@ -1,5 +1,4 @@
 import { readDocumentText, walkSourceFiles } from './host_documents';
-export { extractRtfText } from './host_documents';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';

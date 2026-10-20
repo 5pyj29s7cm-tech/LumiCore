@@ -9,7 +9,7 @@ export function normalizeConversationActionState(
   value: Partial<ConversationActionContinuationState> | null | undefined,
 ): ConversationActionContinuationState | null {
   if (!value || typeof value !== 'object') return null;
-  const goal = compact(value.goal, 700);
+  const goal = String(value.goal || '').trim();
   if (!goal) return null;
   const statusValue = compact(value.status, 40) as ConversationTaskStatus;
   const status: ConversationTaskStatus = (CONVERSATION_TASK_STATUSES as readonly string[]).includes(statusValue)
@@ -39,7 +39,7 @@ export function normalizeConversationActionState(
     supersededTaskId: compact(value.supersededTaskId, 180) || undefined,
     revision: Math.max(0, Math.trunc(Number(value.revision) || 0)),
     goal,
-    latestInstruction: compact(value.latestInstruction || goal, 700),
+    latestInstruction: String(value.latestInstruction || goal).trim(),
     latestInstructionRef: compact(value.latestInstructionRef, 180) || undefined,
     appTarget: compact(value.appTarget, 160),
     sourcePaths: Array.from(new Set(Array.isArray(value.sourcePaths) ? value.sourcePaths : []))

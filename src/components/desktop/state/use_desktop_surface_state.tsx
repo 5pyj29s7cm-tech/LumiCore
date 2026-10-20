@@ -52,7 +52,7 @@ export function useDesktopSurfaceState({
   const personalScale = useTransform(cameraZ, [0, -1000], [1, 0.4]);
   const personalOpacity = useTransform(cameraZ, [0, -400], [1, 0]);
   const { isTauri } = usePlatform();
-  const { selectedVoiceId, unreadCount, notifications, addNotification, orgConnection, workDomain, switchDomain, operationMode, setOperationMode, aiConfig, resolvedAppearanceMode } = useApp();
+  const { selectedVoiceId, unreadCount, notifications, addNotification, orgConnection, workDomain, switchDomain, operationMode, setOperationMode, desktopExecutionPreference, setDesktopExecutionPreference, aiConfig, resolvedAppearanceMode } = useApp();
   const petPreferenceScopeKey = workDomain === 'work'
     ? `org_${orgConnection?.orgId || 'pending'}`
     : `personal_${user?.uid || 'local'}`;
@@ -236,7 +236,6 @@ export function useDesktopSurfaceState({
     workspace: WallpaperWorkspace;
   } | null>(null);
   const viewport = useViewportSize();
-  const [wallpaperWorkPromptVisible, setWallpaperWorkPromptVisible] = useState(false);
   const [wallpaper, setWallpaper] = useState<string>(() => localStorage.getItem('lumi_wallpaper_type') || 'celestial');
   const [wallpaperUrl, setWallpaperUrl] = useState<string>(() => localStorage.getItem('lumi_wallpaper_url') || '');
   const wallpaperInputRef = React.useRef<HTMLInputElement>(null);
@@ -314,7 +313,6 @@ export function useDesktopSurfaceState({
 
   useEffect(() => {
     isWallpaperModeRef.current = isWallpaperMode;
-    if (isWallpaperMode) setWallpaperWorkPromptVisible(false);
   }, [isWallpaperMode]);
 
   const syncWallpaperModeView = useCallback((
@@ -340,9 +338,6 @@ export function useDesktopSurfaceState({
     }
   }, [inferWallpaperWorkspace, isWallpaperWorkbench, syncWallpaperModeView]);
 
-  useEffect(() => {
-    if (chatOpen) setWallpaperWorkPromptVisible(false);
-  }, [chatOpen]);
 
   const dismissUtilitySurfaces = useCallback((keep?: 'command-center' | 'knowledge' | 'memory-avatar') => {
     if (keep !== 'command-center') {
@@ -445,7 +440,7 @@ export function useDesktopSurfaceState({
     aiConfig, knowledgeRefreshSequenceRef, setKnowledgeRuntimeState, setOrganizationWorkspaceView, windowCommand,
     setVolume, wallpaperAutomationTimerRef, wallpaperPresentationRef, inferWallpaperWorkspace, wallpaperWorkspaceRef,
     isWallpaperModeRef, syncWallpaperModeView, wallpaperNativeTransitionDepthRef, isDesktopWidgetMode,
-    wallpaperBeforeAutomationRef, addNotification, t, isWallpaperMode, setWallpaperWorkPromptVisible,
+    wallpaperBeforeAutomationRef, addNotification, t, isWallpaperMode, desktopExecutionPreference, setDesktopExecutionPreference,
     triggerPetReaction, petPrefsSavingRef, setSelectedPet, petStorageKeys, setEquippedAccessories, sanctuaryOpen,
     memoryLabOpen, closeKnowledgeBase, isWallpaperWorkbench, isSearchOpen, setTime, canCustomizeLumiAppearance,
     savePetPrefsToServer, equippedAccessories, setPersonalizationSection, openKnowledgeBase, setNexusReturnTarget,
@@ -455,8 +450,7 @@ export function useDesktopSurfaceState({
     minimizedWindows, wallpaperPresentation, wallpaperWorkspace, selectedPet, petReaction, resolvedAppearanceMode,
     desktopChrome, isCompactDesktopLayout, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef,
     personalScale, personalOpacity, syncRate, setSyncRate, unreadCount, time, isCompactWindowMode,
-    dockPositionClassName, onLogin, launchExternalCapability, notifications, wallpaperWorkPromptVisible,
-    askComputerProfileQuestion, setCreationRequestId, setLang, personalizationSection, petPreferenceScopeKey,
+    dockPositionClassName, onLogin, launchExternalCapability, notifications, askComputerProfileQuestion, setCreationRequestId, setLang, personalizationSection, petPreferenceScopeKey,
     renderTabContent, knowledgeLoaded, chatLoaded, setCommandCenterView, chatPrefill, creationRequestId,
     chatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent
   } as const;

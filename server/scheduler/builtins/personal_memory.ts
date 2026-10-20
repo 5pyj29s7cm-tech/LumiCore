@@ -240,11 +240,13 @@ Output ONLY the greeting — no preamble, no labels.`;
     cron: 'evening_8pm',
     lastRun: null,
     executionClass: 'proactive_delivery',
-    handler: async () => {
+    handler: async run => {
+      const signal = run?.signal || new AbortController().signal;
       const userIds = getAllUserIds();
       const messages: ScheduledDelivery[] = [];
 
       for (const userId of userIds) {
+        signal.throwIfAborted();
         try {
           const pending = getDueReminders({ userId, domain: 'personal', orgId: '' });
           const recentMemories = queryMemories({ userId, limit: 3, minConfidence: 0.4, domain: 'personal', orgId: '' });
@@ -268,18 +270,21 @@ Output ONLY the reflection — no preamble, no labels.`;
             const result = await makeLLMCall(
               [{ role: 'user', content: eveningPrompt }],
               [],
-              getUserPreferredLLMConfig(userId, { maxTokens: 100, source: 'scheduler_evening_wrapup' }),
+              { ...getUserPreferredLLMConfig(userId, { maxTokens: 100, source: 'scheduler_evening_wrapup' }), signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) },
               ...providerGetterArguments(getters),
             );
+            signal.throwIfAborted();
             const llmReflection = result.text?.trim();
             if (llmReflection && llmReflection.length > 3) {
               messages.push({ userId, message: llmReflection, domain: 'personal', modelGenerated: true });
             }
           } catch {
+            signal.throwIfAborted();
             // Simple fallback
             messages.push({ userId, message: `晚间回顾 — ${contextParts.join(' - ')}`, domain: 'personal' });
           }
         } catch (err: any) {
+          signal.throwIfAborted();
           console.warn(`[EveningWrapup] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }

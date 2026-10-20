@@ -85,7 +85,7 @@ export async function finalizeMessagingResponseForDelivery(input: LumiResponseDe
 
 export type MessagingDesktopLifecycle = Pick<DesktopRelayOptions, 'taskId' | 'requestId' | 'signal' | 'onLateResult'>;
 export type MessagingDesktopRelay = ((toolName: string, args: Record<string, any>) => Promise<string>)
-  & Partial<Pick<DesktopRelay, 'releaseControlLease'>>;
+  & Partial<Pick<DesktopRelay, 'releaseControlLease' | 'getControlPauseReason'>>;
 
 export interface MessagingRouteOptions {
   onMessage?: MessageHandler;

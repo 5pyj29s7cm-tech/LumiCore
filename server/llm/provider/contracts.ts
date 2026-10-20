@@ -38,6 +38,7 @@ export interface LLMCallConfig {
   responseFormat?: LLMResponseFormat;
   /** Per-call opt-out for supported DeepSeek thinking APIs; never a saved preference. */
   thinkingMode?: 'disabled';
+  reasoningEffort?: 'low' | 'high' | 'max';
   signal?: AbortSignal;
   /** Provider-independent lifecycle deadlines for one model attempt. */
   attemptTimeouts?: Partial<ModelAttemptTimeouts>;
@@ -70,13 +71,7 @@ export interface LLMCallConfig {
    * without leaking or concatenating a partial first-candidate sentence.
    */
   bufferStreamUntilCandidateSuccess?: boolean;
-  /**
-   * Opt in to SSE for the official relay.  The currently deployed official
-   * gateway accepts the OpenAI-compatible request but its SSE parser is
-   * unreliable, so the safe/default transport is a single non-stream call.
-   * This escape hatch is intentionally per-call and is not user-controlled
-   * through chat text.
-   */
+  /** Aggregate the existing SSE transport for a long buffered call; never inferred from chat text. */
   relayStreaming?: boolean;
 }
 

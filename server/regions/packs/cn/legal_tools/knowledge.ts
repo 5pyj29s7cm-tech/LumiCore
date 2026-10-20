@@ -7,7 +7,7 @@ import fs from "fs";
 import { refreshAuthoritativeStatuteSources, formatStatuteAuthorityRefreshReport } from "../../../../legal/statute_authority_refresh";
 import { loadStatuteAuthorityRefreshState } from "../../../../legal/statute_authority_store";
 import { encodeToolResult } from "../../../../tools/result_envelope";
-import { legalWorkspaceId, textArg, listArg, LEGAL_MATERIAL_EXTENSIONS, LEGAL_IMAGE_EXTENSIONS } from "./context";
+import { legalTemporalOptions, legalWorkspaceId, textArg, listArg, LEGAL_MATERIAL_EXTENSIONS, LEGAL_IMAGE_EXTENSIONS } from "./context";
 import { normalizeMaterialArticleType, buildImportedMaterialContent, materialCategory, normalizeTagsFromArgs, collectMaterialFiles } from "./documents";
 
 // ── legal_search_case ───────────────────────────────────────────────────
@@ -213,11 +213,11 @@ ${skippedLines}
 `;
 }
 
-// ── legal_verify_citation ───────────────────────────────────────────────
-
 function formatCitationVerificationResult(check: CitationCheck): string {
   const verificationLabel = check.verificationStatus === 'verified'
-    ? '权威快照有效'
+    ? '具体引用已对照权威原文（案件适用仍待复核）'
+    : check.verificationStatus === 'metadata_only' ? '仅核验版本，具体条文未核验，正式交付阻断'
+    : check.verificationStatus === 'text_mismatch' ? '引文与权威原文不符，正式交付阻断'
     : check.verificationStatus === 'changed'
       ? '权威记录已变化，正式交付阻断'
     : check.verificationStatus === 'expired'
@@ -233,12 +233,13 @@ function formatCitationVerificationResult(check: CitationCheck): string {
     check.citation,
     `  类型: ${check.type === 'statute' ? '法条引用' : '案例引用'}`,
     `  存在: ${check.exists ? '是' : '否'}`,
-    `  有效: ${check.isEffective === null ? '尚未确认' : check.isEffective ? '现行有效' : '已废止'}`,
+    `  版本效力: ${check.isEffective === null ? '尚未确认' : check.isEffective ? '本次核验版本有效；本案适用另行复核' : '已废止/不在有效区间'}`,
     `  核验状态: ${verificationLabel}`,
     check.authorityRefreshStatus ? `  自动巡检: ${check.authorityRefreshStatus}` : '',
     check.verifiedAt ? `  核验日期: ${check.verifiedAt}` : '',
     check.reviewAfter ? `  复核期限: ${check.reviewAfter}` : '',
     `  ${check.detail}`,
+    check.sourceText ? `  条文原文: ${check.sourceText}` : '',
     `  来源: ${check.source || 'N/A'}`,
     check.sourceUrl ? `  官方链接: ${check.sourceUrl}` : '',
   ].filter(Boolean).join('\n');
@@ -250,13 +251,13 @@ export async function verifyCitationHandler(args: Record<string, any>, context?:
   const orgId = legalWorkspaceId(args, context);
 
   if (text) {
-    const checks = verifyMultipleCitations(text, orgId);
+    const checks = verifyMultipleCitations(text, orgId, { ...legalTemporalOptions(args), actorUserId: context?.userId });
     if (checks.length === 0) return '未在文本中检测到法条引用（《XX法》格式）或案号引用。';
     return checks.map(formatCitationVerificationResult).join('\n\n');
   }
 
   if (citation) {
-    const check = verifyCitation(citation, orgId);
+    const check = verifyCitation(citation, orgId, { ...legalTemporalOptions(args), quotedText: textArg(args, 'quotedText') || undefined, actorUserId: context?.userId });
     return formatCitationVerificationResult(check);
   }
 

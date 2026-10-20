@@ -11,6 +11,22 @@ import { hydrateConversationActionState, compactRolloverText } from "./action_st
 import { isolateConversationSummaryForUse, isStandaloneGuardOutput } from "./summary_state";
 import { cancelManagerActionTurns, finalizeConversationActionRequestInDb } from "./action_execution_runtime";
 
+/** Exact read-only completion inputs; this never hydrates, admits or replays a task. */
+export function getConversationCompletionSnapshot(input: { userId?: string; conversationId?: string; taskId?: string; requestId?: string; domain?: string; orgId?: string }) {
+  if (!input.userId || !input.conversationId || !input.taskId || !input.requestId) return null;
+  const db = readDatabaseTables(["conversationActionTasks","interactions","conversationActionReceipts","conversationActionTurns"]);
+  const task = (db.conversationActionTasks || []).find(row => row.id === input.taskId && row.userId === input.userId
+    && row.conversationId === input.conversationId && (row.domain || 'personal') === (input.domain || 'personal') && (row.orgId || '') === (input.orgId || ''));
+  if (!task) return null;
+  const root = (db.interactions || []).find(row => row.id === task.rootUserMessageId && row.userId === task.userId && row.conversationId === task.conversationId && row.role === 'user');
+  const turns = (db.conversationActionTurns || []).filter(row => row.taskId === task.id && row.userId === task.userId && row.conversationId === task.conversationId
+    && (row.domain || 'personal') === (task.domain || 'personal') && (row.orgId || '') === (task.orgId || ''));
+  const currentTurn = turns.find(row => row.requestId === input.requestId && ['accepted','leased'].includes(row.status));
+  const receipts = (db.conversationActionReceipts || []).filter(row => row.taskId === task.id && row.conversationId === task.conversationId
+    && turns.some(turn => turn.id === row.turnRowId && turn.requestId === row.requestId));
+  return { task, root, currentTurn, turns, receipts };
+}
+
 export function getConversationFocusThreads(input: {
   userId: string;
   domain?: string;
@@ -72,12 +88,13 @@ export function getConversationForScope(
   userId: string,
   domain?: string,
   orgId?: string,
+  query = '',
 ): Conversation | null {
   const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   const conversation = (db.conversations || []).find((item: Conversation) => item.id === conversationId);
   if (!conversation || conversation.userId !== userId) return null;
   if (!conversationMatchesScope(conversation, domain, orgId)) return null;
-  hydrateConversationActionState(db, conversation);
+  hydrateConversationActionState(db, conversation, query);
   isolateConversationSummaryForUse(conversation);
   commitDatabaseTables(db);
   return conversation;

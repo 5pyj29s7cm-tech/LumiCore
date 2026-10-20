@@ -3,6 +3,8 @@ import { ToolRegistry } from '../registry';
 import { analyzeScreen } from '../../llm/adapter';
 import { DEFAULT_VISION_MODELS, getUserPreferredVision, type VisionProvider } from '../../llm/vision_preferences';
 import { getDataPath } from '../../config/data_path';
+import { listOfficialApiModels } from '../../llm/official_api';
+import { requireNotStrict } from '../../config/privacy';
 import {
   arbitrateCadVisualVerification,
   buildCadGeometryVerificationSvg,
@@ -237,7 +239,7 @@ async function ocrScreen(args: Record<string, any>, context?: any): Promise<stri
 
   const model = getUserPreferredVision(context?.userId || 'anonymous').model || DEFAULT_VISION_MODELS[provider];
   try {
-    const description = await analyzeScreen(base64, query, { provider, model, userId: context?.userId || 'anonymous', signal: context?.executionSignal }, ...providerGetterArguments(g));
+    const description = await analyzeScreen(base64, query, { provider, model, userId: context?.userId || 'anonymous', signal: context?.executionSignal, dataRoutingPolicy: context?.dataRoutingPolicy }, ...providerGetterArguments(g));
     // Reading an error message is a successful observation. Keep the tool's
     // outcome separate from arbitrary words in the observed page content.
     return JSON.stringify({ status: 'observed', description, provider, model });
@@ -262,7 +264,7 @@ async function ocrRegion(args: Record<string, any>, context?: any): Promise<stri
 
   const model = getUserPreferredVision(context?.userId || 'anonymous').model || DEFAULT_VISION_MODELS[provider];
   try {
-    const description = await analyzeScreen(base64, query, { provider, model, userId: context?.userId || 'anonymous' }, ...providerGetterArguments(g));
+    const description = await analyzeScreen(base64, query, { provider, model, userId: context?.userId || 'anonymous', signal: context?.executionSignal, dataRoutingPolicy: context?.dataRoutingPolicy }, ...providerGetterArguments(g));
     return JSON.stringify({ status: 'observed', description, provider, model });
   } catch (err: any) {
     return JSON.stringify({ format: 'screenshot_base64', data: base64, error: err.message });
@@ -273,8 +275,17 @@ export async function ocrImageFile(args: Record<string, any>, context?: any): Pr
   const imagePath = resolveReadableImagePath(args.imagePath || args.path || args.filePath);
   const query = args.query || args.prompt || 'Analyze this image in detail. If it is a drawing, extract dimensions, layout, labels, and any structure that can guide a CAD draft.';
 
+  context?.executionSignal?.throwIfAborted();
+  const requestedModel = typeof args.model === 'string' ? args.model.trim() : '';
+  if (args.model !== undefined && (!requestedModel || requestedModel.length > 200)) throw new Error('model must be a nonempty model ID of at most 200 characters.');
   const g = context?.llmGetters || {};
   const provider = resolveVisionProvider(args, context);
+  if (requestedModel) {
+    requireNotStrict('OCR model selection');
+    if (provider !== 'relay' || context?.dataRoutingPolicy === 'local_only') throw new Error('An explicit OCR model requires the configured official cloud provider and cloud-allowed processing.');
+    const catalog = await listOfficialApiModels({ signal: context?.executionSignal });
+    if (!catalog.byRole.vision?.includes(requestedModel)) throw new Error('The requested model is not an admitted visual model of the configured provider.');
+  }
   if (!provider) {
     return JSON.stringify({
       path: imagePath,
@@ -287,13 +298,14 @@ export async function ocrImageFile(args: Record<string, any>, context?: any): Pr
   const buffer = await sharp(imagePath)
     .rotate()
     .resize({ width: 1800, height: 1800, fit: 'inside', withoutEnlargement: true })
-    .jpeg({ quality: 85 })
+    .png()
     .toBuffer();
   const base64 = buffer.toString('base64');
-  const model = getUserPreferredVision(context?.userId || 'anonymous').model || DEFAULT_VISION_MODELS[provider];
+  const model = requestedModel || getUserPreferredVision(context?.userId || 'anonymous').model || DEFAULT_VISION_MODELS[provider];
   try {
-    const imagePayload = JSON.stringify({ image_base64: base64, format: 'jpeg', width: meta.width || null, height: meta.height || null });
-    const description = await analyzeScreen(imagePayload, query, { provider, model, userId: context?.userId || 'anonymous' }, ...providerGetterArguments(g));
+    const imagePayload = JSON.stringify({ image_base64: base64, format: 'png', width: meta.width || null, height: meta.height || null });
+    const description = await analyzeScreen(imagePayload, query, { provider, model, userId: context?.userId || 'anonymous', signal: context?.executionSignal, dataRoutingPolicy: context?.dataRoutingPolicy,
+      noImplicitFailover: !!requestedModel, source: context?.source, requestId: context?.requestId, conversationId: context?.conversationId }, ...providerGetterArguments(g));
     return JSON.stringify({
       path: imagePath,
       width: meta.width || null,
@@ -1131,6 +1143,7 @@ export function registerOCRTools(registry: ToolRegistry): void {
         imagePath: { type: 'string', description: 'Absolute or home-relative local image path.' },
         path: { type: 'string', description: 'Alias for imagePath.' },
         query: { type: 'string', description: 'What to extract from the image.' },
+        model: { type: 'string', minLength: 1, maxLength: 200, description: 'Optional exact model ID admitted by the configured official visual-model catalog for this call only. Omit to keep the user visual preference. Does not change provider or saved settings; no silent model fallback.' },
       },
       required: [],
     },

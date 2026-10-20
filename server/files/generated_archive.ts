@@ -1,3 +1,4 @@
+import { normalizePathIdentity } from '../../shared/file_identity';
 import { setImmediate as yieldArchiveRows } from 'node:timers/promises';
 import { runSerializedMutation } from '../persistence/durable_scope_mutation';
 import fs from 'node:fs';
@@ -8,11 +9,12 @@ import { readDatabaseTables, querySQL, withDatabaseSqlWriteLock } from '../../db
 import { getDataPath, resolveMigratedDataFile } from '../config/data_path';
 import { ensurePrivateRuntimeDirectory } from '../config/runtime_file_security';
 import { generatedKnowledgeDirectory } from './knowledge_directory';
-import { collectChatArtifacts } from '../conversation/chat_artifacts';
+import { collectTechnicalChatArtifacts, artifactContentSnapshot, publicArtifactSnapshotDelivery, captureArchivedArtifactDisclosureEvidence, capturePublicArtifactEvidenceSnapshot, isObservedArchivedArtifactEvidence, type PublicArtifactEvidenceSnapshot, type PublicArtifactContext, type ArchivedArtifactDisclosureEvidence } from '../conversation/chat_artifacts';
 import { parseNestedJson } from '../tools/receipt_payload';
 import type { ToolContext, ToolExecutionRecord } from '../tools/types';
 import { getMember, getOrgById } from '../org/db';
 import { isTestLearningSource, isTestMemory } from '../memory/provenance';
+import { sameArtifactPath, artifactPathFromRecord, isArtifactProducerRecord } from '../tools/artifact_evidence';
 import { chatArtifactKind } from '../../shared/chat_artifacts';
 
 export type GeneratedArchiveScope = { userId: string; domain: 'personal' | 'work'; orgId?: string };
@@ -21,6 +23,8 @@ export interface GeneratedArchiveEntry {
   userId: string; domain: 'personal' | 'work'; orgId: string;
   sourcePath: string; sourceSize: number; sourceMtimeMs: number; sourceConversationId: string;
   sourceTaskId: string; sourceRequestId: string; sourceTool: string; createdAt: string; deletedAt?: string;
+  /** Server-private, same immutable file version; never projected as public metadata. */
+  sourceDisclosureEvidence?: ArchivedArtifactDisclosureEvidence;
 }
 function key(scope: GeneratedArchiveScope) { return createHash('sha256').update(JSON.stringify([scope.domain, scope.domain === 'work' ? scope.orgId : scope.userId])).digest('hex'); }
 function indexPath(scope: GeneratedArchiveScope) { return path.join(ensurePrivateRuntimeDirectory(getDataPath('generated-library')), `${key(scope)}.json`); }
@@ -136,7 +140,7 @@ function rememberArchiveList(cacheKey: string, cached: ArchiveList): void {
   let used = [...archiveLists.values()].reduce((sum, item) => sum + item.bytes, 0);
   for (const [id, item] of archiveLists) { if (used <= ARCHIVE_LIST_BUDGET && archiveLists.size <= 8) break; archiveLists.delete(id); used -= item.bytes; }
 }
-export async function listGeneratedArchive(scope: GeneratedArchiveScope, filename?: string): Promise<GeneratedArchiveEntry[]> {
+async function listStoredGeneratedArchive(scope: GeneratedArchiveScope, filename?: string): Promise<GeneratedArchiveEntry[]> {
   const revision = await ensureArchiveImported(scope), dir = generatedKnowledgeDirectory(scope);
   if (filename !== undefined) return (await readIndex(scope, ' AND deletedAt IS NULL AND filename=?', [filename]))
     .filter(entry => fs.existsSync(path.join(dir, entry.filename))).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -185,14 +189,32 @@ export async function mutateGeneratedArchiveFile(scope: GeneratedArchiveScope, f
 export async function archiveGeneratedOutputs(records: ToolExecutionRecord[], context: ToolContext): Promise<GeneratedArchiveEntry[]> {
   if (!context.userId || isTestLearningSource(context.source)) return [];
   const scope: GeneratedArchiveScope = { userId: context.userId, domain: context.domain === 'work' ? 'work' : 'personal', orgId: context.domain === 'work' ? context.orgId || '' : '' };
-  const artifacts = records.flatMap(record => collectChatArtifacts([record], context.conversationId).map(artifact => ({ artifact, record })));
-  if (!artifacts.length) return [];
+  const artifacts = records.flatMap(record => collectTechnicalChatArtifacts([record], context.conversationId).map(artifact => ({ artifact, record })));
+  const readbacks = records.filter(record => record.name === 'read_file' && record.adapterStarted === true && record.terminalVerification?.status === 'verified');
+  if (!artifacts.length && !readbacks.length) return [];
   const run = async () => {
     const assertAuthorized = scopeAuthorization(scope); assertAuthorized();
     const dir = generatedKnowledgeDirectory(scope); noLinks(dir);
     await ensureArchiveImported(scope);
     const saved: GeneratedArchiveEntry[] = [], changed = new Map<string, GeneratedArchiveEntry>();
-    try { for (const { artifact, record } of artifacts) {
+    const evidenceSnapshot = capturePublicArtifactEvidenceSnapshot();
+    const storedByTarget = new Map<string, GeneratedArchiveEntry[]>();
+    if (readbacks.length) for (const entry of await listStoredGeneratedArchive(scope)) {
+      const key = normalizePathIdentity(entry.sourcePath), entries = storedByTarget.get(key) || []; entries.push(entry); storedByTarget.set(key, entries);
+    }
+    try {
+      for (const readback of readbacks) {
+        // The existing payload gains its independent exact-version receipt once; later versions cannot replace it.
+        const entries = storedByTarget.get(normalizePathIdentity(artifactPathFromRecord(readback))) || [];
+        for (const entry of entries) if (!entry.deletedAt && entry.sourceTaskId === readback.taskId && entry.sourceRequestId === readback.requestId
+          && entry.sourceDisclosureEvidence && !entry.sourceDisclosureEvidence.readbackId) {
+          const proof = captureArchivedArtifactDisclosureEvidence(readback,
+            { userId: context.userId, conversationId: entry.sourceConversationId, taskId: entry.sourceTaskId, requestId: entry.sourceRequestId },
+            entry.sha256, entry.sourcePath, entry.sourceDisclosureEvidence, evidenceSnapshot);
+          if (proof?.readbackId) changed.set(entry.id, { ...entry, sourceDisclosureEvidence: proof });
+        }
+      }
+      for (const { artifact, record } of artifacts) {
       const source = resolveMigratedDataFile(artifact.path); noLinks(source);
       // A library item reused as an input/output is already a persistent copy.
       if (path.dirname(source) === dir && (await readIndex(scope, ' AND filename=? AND deletedAt IS NULL', [path.basename(source)])).length) continue;
@@ -225,6 +247,8 @@ export async function archiveGeneratedOutputs(records: ToolExecutionRecord[], co
           sourceConversationId: context.conversationId || '', sourceTaskId: record.taskId || context.taskId || '',
           sourceRequestId: record.requestId || context.requestId || '', sourceTool: record.name, createdAt: new Date().toISOString() };
         if (prior) entry.createdAt = prior.createdAt;
+        entry.sourceDisclosureEvidence = prior?.sourceDisclosureEvidence || captureArchivedArtifactDisclosureEvidence(record,
+          { userId: context.userId, conversationId: context.conversationId, taskId: context.taskId, requestId: context.requestId }, sha256, source, undefined, evidenceSnapshot, path.join(dir, filename));
         changed.set(id, entry);
         saved.push(entry);
       } finally { await fsp.unlink(temporary).catch(() => {}); }
@@ -277,4 +301,100 @@ export async function reconcileGeneratedArchive(scope: GeneratedArchiveScope) {
   })();
   reconciliations.set(queueKey, operation);
   try { return await operation; } finally { reconciliations.delete(queueKey); }
+}
+
+/** Recompute disclosure from immutable entry identity and its real snapshot; never mutate the archive index. */
+export async function listGeneratedArchiveProjection(scope: GeneratedArchiveScope, filename?: string) {
+  const stored = await listStoredGeneratedArchive(scope, filename);
+  const dir = generatedKnowledgeDirectory(scope);
+  const withheldNames = new Set<string>();
+  let evidenceSnapshot: PublicArtifactEvidenceSnapshot | undefined;
+  const entries = stored.filter(entry => {
+    if (!entry.sourceTaskId || !entry.sourceRequestId) return true;
+    const context = { userId: entry.userId, domain: entry.domain, orgId: entry.orgId, conversationId: entry.sourceConversationId, taskId: entry.sourceTaskId, requestId: entry.sourceRequestId };
+    const observed = isObservedArchivedArtifactEvidence(entry.sourceDisclosureEvidence) && entry.sourceDisclosureEvidence.sha256 === entry.sha256
+      && entry.sourceDisclosureEvidence.taskId === entry.sourceTaskId && entry.sourceDisclosureEvidence.requestId === entry.sourceRequestId;
+    if (!observed) {
+      evidenceSnapshot ||= capturePublicArtifactEvidenceSnapshot();
+      // Missing legacy proof alone is not a reason to hide an ordinary old file.
+      if (!evidenceSnapshot.scopeEvidence(context).versions.some(version => sameArtifactPath(version.path, entry.sourcePath) && version.privateReferences.length)) return true;
+    }
+    const snapshot = observed ? undefined : artifactContentSnapshot(path.join(dir, entry.filename), entry.sourceDisclosureEvidence?.privateIds);
+    const projection = publicArtifactSnapshotDelivery(snapshot, entry.sourcePath, context, entry.sha256, entry.sourceDisclosureEvidence, evidenceSnapshot, observed);
+    if (projection.deliveryBlocked) { withheldNames.add(entry.filename); return false; }
+    return true;
+  });
+  return { entries: entries.map(({ sourceDisclosureEvidence: _private, ...entry }) => entry), withheldNames };
+}
+export async function listGeneratedArchive(scope: GeneratedArchiveScope, filename?: string): Promise<GeneratedArchiveEntry[]> {
+  return (await listGeneratedArchiveProjection(scope, filename)).entries;
+}
+export async function assertGeneratedArchiveFilePublic(scope: GeneratedArchiveScope, filename: string): Promise<void> {
+  let evidenceSnapshot: PublicArtifactEvidenceSnapshot | undefined;
+  for (const entry of await listStoredGeneratedArchive(scope, filename)) {
+    if (!entry.sourceTaskId || !entry.sourceRequestId) continue;
+    if (!isObservedArchivedArtifactEvidence(entry.sourceDisclosureEvidence)) evidenceSnapshot ||= capturePublicArtifactEvidenceSnapshot();
+    const snapshot = artifactContentSnapshot(path.join(generatedKnowledgeDirectory(scope), entry.filename), entry.sourceDisclosureEvidence?.privateIds, true);
+    const delivery = publicArtifactSnapshotDelivery(snapshot, entry.sourcePath,
+      { userId: entry.userId, domain: entry.domain, orgId: entry.orgId, conversationId: entry.sourceConversationId, taskId: entry.sourceTaskId, requestId: entry.sourceRequestId },
+      entry.sha256, entry.sourceDisclosureEvidence, evidenceSnapshot);
+    if (delivery.deliveryBlocked) throw Object.assign(new Error('This generated file is not available for public delivery.'), { status: 403 });
+  }
+}
+
+/** Generated-path downloads must not regain a polluted archived version after conversation deletion. */
+export async function assertGeneratedSourceFilePublic(scope: GeneratedArchiveScope, file: string): Promise<void> {
+  const stored = (await listStoredGeneratedArchive(scope)).filter(entry => sameArtifactPath(entry.sourcePath, file));
+  const evidenceSnapshot = capturePublicArtifactEvidenceSnapshot();
+  const evidence = evidenceSnapshot.scopeEvidence(scope);
+  const ids = [...evidence.privateIds, ...stored.flatMap(entry => entry.sourceDisclosureEvidence?.privateIds || [])];
+  const snapshot = artifactContentSnapshot(file, ids);
+  if (!snapshot) return;
+  const reject = () => { throw Object.assign(new Error('This generated file is not available for public delivery.'), { status: 403 }); };
+  if (publicArtifactSnapshotDelivery(snapshot, file, scope, undefined, undefined, evidenceSnapshot).deliveryBlocked) reject();
+  for (const entry of stored.filter(entry => entry.sha256 === snapshot.sha256 && isObservedArchivedArtifactEvidence(entry.sourceDisclosureEvidence))) {
+    if (publicArtifactSnapshotDelivery(snapshot, entry.sourcePath,
+      { userId: entry.userId, conversationId: entry.sourceConversationId, taskId: entry.sourceTaskId, requestId: entry.sourceRequestId },
+      entry.sha256, entry.sourceDisclosureEvidence, evidenceSnapshot).deliveryBlocked) reject();
+  }
+}
+
+/** Persist only final-scope exact observations of the already copied version.
+ * No file is copied or regenerated, and no native readback is inferred. */
+export async function observeFinalArchivedOutputIdentities(records: ToolExecutionRecord[], context: PublicArtifactContext,
+  snapshot = capturePublicArtifactEvidenceSnapshot(records, context)): Promise<void> {
+  if (!context.taskId || !context.requestId || !records.length) return;
+  const task = snapshot.tasks.get(context.taskId);
+  if (!task || !snapshot.hasAcceptedTurn(task.id, context.requestId, context)) return;
+  const matched = snapshot.resolve(records, context);
+  const outputs = matched.selected.filter(isArtifactProducerRecord).flatMap(producer => collectTechnicalChatArtifacts([producer], context.conversationId)
+    .map(artifact => ({ producer, source: resolveMigratedDataFile(artifact.path) })));
+  if (!outputs.length) return;
+  const scope: GeneratedArchiveScope = { userId: task.userId, domain: task.domain === 'work' ? 'work' : 'personal', orgId: task.orgId || '' };
+  await runSerializedMutation('generated-archive:' + key(scope), async () => {
+    const assertAuthorized = scopeAuthorization(scope); assertAuthorized();
+    await ensureArchiveImported(scope);
+    const changed = new Map<string, GeneratedArchiveEntry>();
+    for (const source of new Set(outputs.map(output => output.source))) {
+      for (const entry of await readIndex(scope, ' AND sourcePath=? AND deletedAt IS NULL', [source])) {
+        if (entry.sourceTaskId !== context.taskId || entry.sourceRequestId !== context.requestId) continue;
+        const producer = outputs.find(output => sameArtifactPath(output.source, entry.sourcePath)
+          && (!entry.sourceDisclosureEvidence || entry.sourceDisclosureEvidence.producerId === output.producer.id))?.producer;
+        if (!producer) continue;
+        const file = path.join(generatedKnowledgeDirectory(scope), entry.filename); noLinks(file);
+        let evidence = captureArchivedArtifactDisclosureEvidence(producer, { ...scope, conversationId: entry.sourceConversationId, taskId: entry.sourceTaskId, requestId: entry.sourceRequestId },
+          entry.sha256, entry.sourcePath, entry.sourceDisclosureEvidence, snapshot, file);
+        const producerIndex = matched.selected.indexOf(producer);
+        const nextProducer = matched.selected.findIndex((record, index) => index > producerIndex && isArtifactProducerRecord(record)
+          && collectTechnicalChatArtifacts([record], context.conversationId).some(artifact => sameArtifactPath(artifact.path, entry.sourcePath)));
+        for (const readback of matched.selected.slice(producerIndex + 1, nextProducer < 0 ? undefined : nextProducer)) {
+          if (readback.name !== 'read_file' || !sameArtifactPath(artifactPathFromRecord(readback), entry.sourcePath)) continue;
+          evidence = captureArchivedArtifactDisclosureEvidence(readback, { ...scope, conversationId: entry.sourceConversationId, taskId: entry.sourceTaskId, requestId: entry.sourceRequestId },
+            entry.sha256, entry.sourcePath, evidence, snapshot);
+        }
+        if (evidence && JSON.stringify(evidence) !== JSON.stringify(entry.sourceDisclosureEvidence)) changed.set(entry.id, { ...entry, sourceDisclosureEvidence: evidence });
+      }
+    }
+    if (changed.size) await saveEntries(scope, [...changed.values()], assertAuthorized);
+  });
 }

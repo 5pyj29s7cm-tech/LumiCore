@@ -9,6 +9,7 @@ export interface ToolLifecyclePayload {
   result?: string;
   error?: string;
   artifactReceipt?: MediaArtifactReceipt;
+  phase?: NonNullable<ToolExecutionRecord['envelope']>['status'];
 }
 
 /** Observe every receipt; only the current turn may publish non-desktop lifecycle events. */
@@ -37,6 +38,7 @@ export function createToolLifecycleCallbacks(input: {
         correlationId: correlationId(record.id), name: record.name, arguments: record.arguments,
         result: record.error && !input.includeFailedResult ? undefined : input.formatResult(record.result),
         error: record.error, artifactReceipt: input.artifactReceipt?.(record),
+        ...(record.envelope ? { phase: record.envelope.status } : {}),
       });
     },
   };

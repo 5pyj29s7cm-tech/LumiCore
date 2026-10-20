@@ -1,4 +1,4 @@
-import type { ParsedToolCall, ToolExecutionRecord } from '../tools/types';
+import type { ParsedToolCall } from '../tools/types';
 import type { ToolRegistry } from '../tools/registry';
 
 type PlannedToolCall = ParsedToolCall & { id: string };
@@ -66,15 +66,6 @@ export function normalizePlannedToolScope(
     }
   }
   return normalized;
-}
-
-/** Attach an auditable, generic evidence envelope to a terminal receipt. */
-export function buildToolEvidenceRecord(
-  registry: ToolRegistry,
-  toolName: string,
-  args: Record<string, any>,
-): ToolExecutionRecord['evidence'] | undefined {
-  return registry.buildEvidenceRecord(toolName, args);
 }
 
 export const GENERIC_TOOL_PLANNING_PROMPT = [

@@ -543,12 +543,7 @@ async function applyOfficialModelConfiguration(
   const planned = new Map<LumiModelRole, ReturnType<typeof selectOfficialRoleModel>>();
   for (const role of LUMI_MODEL_ROLES) {
     if (!LUMI_OFFICIAL_ROLE_CAPABILITIES[role]) continue;
-    const roleModels = catalog.byRole[role] || [];
-    const availableModels = role === 'image_to_video'
-      ? roleModels.filter(modelId => /(?:^|[\/_-])i2v(?:[\/_-]|$)|image[-_]?to[-_]?video/i.test(modelId))
-      : role === 'video_generation'
-        ? roleModels.filter(modelId => !/(?:^|[\/_-])i2v(?:[\/_-]|$)|image[-_]?to[-_]?video/i.test(modelId))
-        : roleModels;
+    const availableModels = catalog.byRole[role] || [];
     const selection = selectOfficialRoleModel(role, availableModels, officialModelForRole(uid, role, userSelectedRoles.has(role)), {
       explicitSelection: explicitRoles.has(role),
     });
@@ -825,7 +820,7 @@ export async function testLumiModelConfiguration(
           selectionMode: preference.selectionMode,
           fallbackCandidates: preference.fallbackCandidates,
           allowCloudFallback: preference.allowCloudFallback,
-          maxTokens: 8,
+          maxTokens: 64, thinkingMode: 'disabled',
         },
         ...providerGetterArguments(llm, "primary"),
       );

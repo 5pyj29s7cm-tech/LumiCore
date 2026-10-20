@@ -1,6 +1,6 @@
 import type { TaskTargetEvidenceRecord, EvidenceCandidate, SupportedAuthoringApplication } from './contracts';
 import { compact, objectValue, firstString, primaryTaskText, capsuleTaskText, parseTaskTargetJson, normalizedIdentity, unique } from './values';
-import { ACTIVE_WINDOW_TOOLS, WINDOW_KEYS, APPLICATION_KEYS, WPS_RE, FILE_NAME_RE, TARGET_NAME_KEYS, TARGET_PATH_KEYS, RUNNING_PROCESS_TOOLS, DOCUMENT_INTERFACE_RE, DISCOVERY_TOOLS } from './recognition';
+import { ACTIVE_WINDOW_TOOLS, WINDOW_KEYS, APPLICATION_KEYS, WPS_RE, TARGET_NAME_KEYS, TARGET_PATH_KEYS, RUNNING_PROCESS_TOOLS, DOCUMENT_INTERFACE_RE, DISCOVERY_TOOLS } from './recognition';
 import { displayableFileName, concreteTargetPath, directoryWithin, targetReferenceMatches, fileName } from './paths';
 import { isAllowedTaskSearchDirectory, isUnconfirmedRuntimeCandidate, isStandardUserDirectory } from './search_scope';
 
@@ -23,7 +23,7 @@ export function activeWindowCandidate(record: TaskTargetEvidenceRecord): Evidenc
   const applicationValue = firstString(payload, APPLICATION_KEYS, 160);
   const signature = `${applicationValue} ${window}`;
   const application = WPS_RE.test(signature) ? 'WPS' : compact(applicationValue, 160);
-  const object = displayableFileName(window.match(FILE_NAME_RE)?.[1] || firstString(payload, TARGET_NAME_KEYS, 220));
+  const object = displayableFileName(window.split(/\s+[-—–|]\s+/u)[0] || firstString(payload, TARGET_NAME_KEYS, 220));
   const pathValue = firstString(payload, TARGET_PATH_KEYS, 500);
   const candidatePath = displayableFileName(pathValue) ? pathValue : '';
   const label = object || displayableFileName(candidatePath);
@@ -110,7 +110,7 @@ export function runningAuthoringWindowCandidates(
     for (const rawTitle of titles) {
       if (typeof rawTitle !== 'string') continue;
       const window = compact(rawTitle, 300);
-      const object = displayableFileName(window.match(FILE_NAME_RE)?.[1]);
+      const object = displayableFileName(window.split(/\s+[-—–|]\s+/u)[0]);
       if (!window || !object) continue;
       const identity = normalizedIdentity(`${application}|${object}`);
       if (!identity || seen.has(identity)) continue;

@@ -5,6 +5,7 @@ import type { ToolPolicy } from '../personality/types';
 import type { ToolExecutionIdentity, ToolExecutionRecord } from '../tools/types';
 import { EXECUTION_IDENTITY_FIELDS, toolExecutionIdentity } from '../tools/execution_identity';
 import { isArtifactReaderRecord } from '../tools/artifact_evidence';
+import { inspectPersistedToolExecutionReceipt } from '../tools/persisted_execution_receipt';
 import {
   buildActionEvidenceContract,
   hasCoreActionEvidence,
@@ -12,7 +13,7 @@ import {
 } from './action_contract';
 import type { TaskCapsuleV1 } from '../conversation/task_capsule';
 import {
-  toolRecordTerminalPayload,
+  toolRecordTerminalPayload, toolRecordTerminalText,
 } from '../tools/receipt_payload';
 
 /** Merge repeated deliveries of one call, preserving distinct observations. */
@@ -118,6 +119,8 @@ export interface ConversationTaskReceipt extends ToolExecutionIdentity {
   result: string;
   /** Exact machine receipt used by capability verification, bounded for persistence. */
   receipt?: unknown;
+  adapterStarted?: true;
+  envelope?: ToolExecutionRecord['envelope'];
   /** Exact persisted model call that selected this tool, when model-routed. */
   modelRoutingReceiptId?: string;
   executionOrigin?: ToolExecutionRecord['executionOrigin'];
@@ -258,6 +261,19 @@ function cloneTerminalVerification(
   };
 }
 
+function taskReceiptEnvelope(value: Partial<ToolExecutionRecord> & { scopeConflict?: true; receiptScopeConflict?: true }): ToolExecutionRecord['envelope'] {
+  if (value.scopeConflict || value.receiptScopeConflict) return undefined;
+  const inspection = inspectPersistedToolExecutionReceipt({
+    ...value, toolName: value.name, outcome: value.envelope?.status,
+    targetIdentity: value.envelope?.targetIdentity,
+  });
+  if (!inspection.valid || !inspection.envelope) return undefined;
+  // The structured receipt already stores the payload; retain its original
+  // canonical identity without copying another full document into the capsule.
+  const { result: _result, ...metadata } = inspection.envelope;
+  return stableValue(metadata) as ToolExecutionRecord['envelope'];
+}
+
 export function normalizeConversationTaskReceipt(value: unknown): ConversationTaskReceipt | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const candidate = value as Record<string, any>;
@@ -276,6 +292,8 @@ export function normalizeConversationTaskReceipt(value: unknown): ConversationTa
       : {},
     result: persistableToolResult(name, candidate.result),
     ...(candidate.receipt !== undefined ? { receipt: stableValue(candidate.receipt) } : {}),
+    ...(candidate.adapterStarted === true ? { adapterStarted: true as const } : {}),
+    ...(candidate.envelope ? { envelope: taskReceiptEnvelope(candidate) } : {}),
     ...(compact(candidate.modelRoutingReceiptId, 180)
       ? { modelRoutingReceiptId: compact(candidate.modelRoutingReceiptId, 180) }
       : {}),
@@ -412,7 +430,7 @@ export function snapshotTaskPolicy(policy?: ToolPolicy | null): ConversationTask
   return {
     allowedTools,
     requireConfirmation: Array.from(new Set(policy.requireConfirmation || [])).filter(Boolean).slice(0, 160),
-    forbiddenTools: Array.from(new Set(policy.forbiddenTools || [])).filter(Boolean).slice(0, 160),
+    forbiddenTools: Array.from(new Set(policy.forbiddenTools || [])).filter(Boolean),
     maxIterations: Math.max(1, Math.min(Number(policy.maxIterations) || 5, 40)),
   };
 }
@@ -483,6 +501,8 @@ export function recordsToTaskReceipts(
         : textReadbackMetadata
           ? { receipt: stableValue(textReadbackMetadata) }
         : {}),
+    ...(record.adapterStarted === true ? { adapterStarted: true as const } : {}),
+    ...(record.envelope ? { envelope: taskReceiptEnvelope(record) } : {}),
     ...(compact(record.modelRoutingReceiptId, 180)
       ? { modelRoutingReceiptId: compact(record.modelRoutingReceiptId, 180) }
       : {}),
@@ -538,7 +558,9 @@ export function taskReceiptsToRecords(receipts: ConversationTaskReceipt[] = []):
     ...(receipt.scopeConflict ? { receiptScopeConflict: true } : {}),
     name: receipt.name,
     arguments: receipt.arguments || {},
-    result: receipt.result || '',
+    result: receipt.name === 'knowledge_file_stats' ? toolRecordTerminalText(receipt) : receipt.result || '',
+    ...(receipt.adapterStarted === true ? { adapterStarted: true } : {}),
+    ...(receipt.envelope ? { envelope: receipt.envelope } : {}),
     ...(receipt.receipt !== undefined ? { receipt: stableValue(receipt.receipt) } : {}),
     ...(receipt.modelRoutingReceiptId
       ? { modelRoutingReceiptId: receipt.modelRoutingReceiptId }

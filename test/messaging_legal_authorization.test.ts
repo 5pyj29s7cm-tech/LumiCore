@@ -37,8 +37,8 @@ describe('legal notice shortcut authorization', () => {
     let finish!: (value: string) => void;
     execution.call.mockImplementation(() => new Promise<string>(resolve => { finish = resolve; }));
     const controller = new AbortController();
-    const running = handleRemoteLegalNoticeIntake(message, { executionSignal: controller.signal, isCancelled: () => false });
-    expect(execution.call).toHaveBeenCalledOnce();
+    const running = handleRemoteLegalNoticeIntake(message, { domain: 'work', orgId: message.boundOrgId, onAdapterStart: async () => undefined, executionSignal: controller.signal, isCancelled: () => false });
+    await vi.waitFor(() => expect(execution.call).toHaveBeenCalledOnce());
     const context = execution.call.mock.calls[0][0].context;
     expect(context.executionSignal).toBe(controller.signal);
     expect(context.isCancelled()).toBe(false);

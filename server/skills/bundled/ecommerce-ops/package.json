@@ -1,6 +1,6 @@
 {
   "name": "lumi-skill-ecommerce-ops",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "E-commerce operations pack for product listings, order profit, inventory, settlement, campaign ROI, after-sales risk, privacy-safe review ingestion and insights, and combined operating snapshots.",
   "type": "module",
   "main": "index.ts",

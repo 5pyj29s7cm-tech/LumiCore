@@ -16,6 +16,17 @@ function expectCustomerReadableGuard(text: string): void {
 }
 
 describe('completion guard desktop action handling', () => {
+  it('uses the current read contract before generic promise-tool lists', () => {
+    const input = { task: '查看 Lumi 客户端当前界面状态，介绍当前页面和各个分区。只读取客户端状态，不做桌面控制，也不切换页面。',
+      response: '我先读取客户端状态，再介绍当前界面。当前客户端在个人主页。', requestId: 'client-observation', taskId: 'client-task' };
+    const record = { name: 'client_get_state', arguments: {}, requestId: input.requestId, taskId: input.taskId,
+      result: '{"state":{"activeTab":"home"}}', terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'returned current state' } };
+    expect(guardCompletionClaims({ ...input, toolCalls: [record] })).toMatchObject({ blocked: false, text: input.response });
+    expect(guardCompletionClaims({ ...input, toolCalls: [] }).blocked).toBe(true);
+    expect(guardCompletionClaims({ ...input, toolCalls: [{ ...record, name: 'client_health_check' }] }).blocked).toBe(true);
+    expect(guardCompletionClaims({ ...input, toolCalls: [{ ...record, requestId: 'stale' }] }).blocked).toBe(true);
+  });
+
   it('does not mistake a source-access instruction inside verified legal research for an open claim', () => {
     const task = '律师版实机验收·法条与类案：基于案件ID case-001，只使用可核验来源输出结果；禁止凭模型记忆编造法条，不要登录外部网站。';
     const response = '法条候选来自本地权威快照。未配置来源只能由律师打开授权网页人工核验；本轮未自动登录任何外部网站。任务回执状态：已验证。';
@@ -559,7 +570,8 @@ describe('completion guard generic execution claims', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain(expectedDetail);
+    expect(result.text).toMatch(/not complete|not started|not verified/i);
+    expect(result.text).not.toContain(expectedDetail);
     expect(result.text).not.toContain('desktop_active_window');
     expectCustomerReadableGuard(result.text);
   });

@@ -369,7 +369,8 @@ describe('accepted action-turn durability fence', () => {
     const execute = confirmedOwner.indexOf('executeToolCall({');
     expect(durableConsume).toBeGreaterThanOrEqual(0);
     expect(execute).toBeGreaterThan(durableConsume);
-    expect(confirmedOwner).toContain('preflight: () => consumed');
+    expect(confirmedOwner).toContain('preflight: () => !consumed');
+    expect(confirmedOwner).toContain("? { allowed: false, arguments: exactArgs, reason: 'The one-time confirmation expired before execution.' }");
     expect(confirmedOwner).toContain("executionOrigin: 'confirmed_action_resume'");
     const routing = source.indexOf('await runLumiEntryTurn<void>({', flush);
     const core = fs.readFileSync(path.resolve('server/cognition/turn_execution.ts'), 'utf8');

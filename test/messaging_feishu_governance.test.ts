@@ -27,20 +27,20 @@ let baseUrl = '';
 
 it('bounds private ingress history without evicting an active limit and reclaims expired buckets', () => {
   resetMessagingIngressPolicyForTest();
-  const first = incoming({ chatType: 'private', chatId: 'bounded-0' });
+  const first = incoming({ chatType: 'private', chatId: 'bounded-0', timestamp: new Date(1_000).toISOString() });
   for (let i = 0; i < 20; i++) expect(evaluateMessagingIngress(first, 1000).allowed).toBe(true);
-  for (let i = 1; i < 4096; i++) expect(evaluateMessagingIngress(incoming({ chatType: 'private', chatId: `bounded-${i}` }), 1000).allowed).toBe(true);
-  expect(evaluateMessagingIngress(incoming({ chatType: 'private', chatId: 'overflow' }), 1000).allowed).toBe(false);
+  for (let i = 1; i < 4096; i++) expect(evaluateMessagingIngress(incoming({ chatType: 'private', chatId: `bounded-${i}`, timestamp: new Date(1_000).toISOString() }), 1000).allowed).toBe(true);
+  expect(evaluateMessagingIngress(incoming({ chatType: 'private', chatId: 'overflow', timestamp: new Date(1_000).toISOString() }), 1000).allowed).toBe(false);
   expect(evaluateMessagingIngress(first, 1000).allowed).toBe(false);
-  expect(evaluateMessagingIngress(incoming({ chatType: 'private', chatId: 'next-day' }), 86_401_000).allowed).toBe(true);
-  expect(evaluateMessagingIngress(first, 86_401_000).allowed).toBe(true);
+  expect(evaluateMessagingIngress(incoming({ chatType: 'private', chatId: 'next-day', timestamp: new Date(86_401_000).toISOString() }), 86_401_000).allowed).toBe(true);
+  expect(evaluateMessagingIngress({ ...first, timestamp: new Date(86_401_000).toISOString() }, 86_401_000).allowed).toBe(true);
 });
 
 it('keeps delimiter-containing chat and user identities separate', () => {
   resetMessagingIngressPolicyForTest();
-  const first = incoming({ chatType: 'private', chatId: 'a:b', userId: 'c' });
+  const first = incoming({ chatType: 'private', chatId: 'a:b', userId: 'c', timestamp: new Date(1_000).toISOString() });
   for (let i = 0; i < 20; i++) evaluateMessagingIngress(first, 1000);
-  expect(evaluateMessagingIngress(incoming({ chatType: 'private', chatId: 'a', userId: 'b:c' }), 1000).allowed).toBe(true);
+  expect(evaluateMessagingIngress(incoming({ chatType: 'private', chatId: 'a', userId: 'b:c', timestamp: new Date(1_000).toISOString() }), 1000).allowed).toBe(true);
 });
 
 function incoming(partial: Partial<IncomingMessage> = {}): IncomingMessage {
@@ -145,13 +145,13 @@ describe('Feishu group governance and delivery safety', () => {
       reason: 'group_not_mentioned',
     });
     for (let index = 0; index < 10; index += 1) {
-      expect(evaluateMessagingIngress(incoming(), 1_000)).toMatchObject({ allowed: true });
+      expect(evaluateMessagingIngress(incoming({ timestamp: new Date(1_000).toISOString() }), 1_000)).toMatchObject({ allowed: true });
     }
-    expect(evaluateMessagingIngress(incoming(), 1_000)).toMatchObject({
+    expect(evaluateMessagingIngress(incoming({ timestamp: new Date(1_000).toISOString() }), 1_000)).toMatchObject({
       allowed: false,
       reason: 'rate_limited',
     });
-    expect(evaluateMessagingIngress(incoming({ chatId: 'oc-unapproved' }), 1_000)).toMatchObject({
+    expect(evaluateMessagingIngress(incoming({ chatId: 'oc-unapproved', timestamp: new Date(1_000).toISOString() }), 1_000)).toMatchObject({
       allowed: false,
       reason: 'group_not_authorized',
     });
@@ -223,7 +223,7 @@ describe('Feishu group governance and delivery safety', () => {
     await expect(adapter.replyMessage('om-unknown-reply', 'same immutable reply'))
       .rejects.toThrow(/automatic resend was stopped/i);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(String(fetchMock.mock.calls[1][0])).toContain('uuid=');
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).uuid).toEqual(expect.any(String));
   });
 
   it('requires exact confirmation and an immutable idempotency key for manual external sends', async () => {
@@ -291,3 +291,5 @@ describe('Feishu group governance and delivery safety', () => {
     expect(changedPayload.status).toBe(409);
   });
 });
+
+it.each([['not-a-date','invalid_message_timestamp'],[new Date(1_061_001).toISOString(),'invalid_message_timestamp'],[new Date(399_999).toISOString(),'message_expired']])('rejects unusable event freshness %s', (timestamp,reason)=>{resetMessagingIngressPolicyForTest();expect(evaluateMessagingIngress(incoming({chatType:'private',timestamp}),1_000_000)).toMatchObject({allowed:false,reason});});

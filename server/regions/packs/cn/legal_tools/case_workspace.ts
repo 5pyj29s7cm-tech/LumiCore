@@ -2,9 +2,9 @@ import path from "path";
 import { legalWrite } from "../../../../legal/execution";
 import fs from "fs";
 import * as LegalCases from "../../../../org/legal_cases";
-import { textArg, roleLabel, listArg, inferDisputeFocuses, buildSearchQueries, legalWorkspaceId, resolveWritableOutputDir, ensureLegalDeliveryRoot } from "./context";
-import { buildEvidenceReviewRows, LEGAL_CASE_SEARCH_ORDER, normalizeLegalCaseStage, workspaceMaterialInputs, makeWorkspaceWorkflowCase, workspaceMaterialIndexRows, formatLegalWorkflowRows, formatLegalWorkflowActionQueue, formatStandardLegalCaseworkSequence, formatEvidenceReviewRows, formatEvidenceGapList } from "./case_workflow";
-import { evaluateCurrentLawGate, legalReasoningGateStatus, formatCitationList } from "./citations";
+import { legalTemporalOptions, textArg, roleLabel, listArg, inferDisputeFocuses, buildSearchQueries, legalWorkspaceId, resolveWritableOutputDir, ensureLegalDeliveryRoot } from "./context";
+import { buildEvidenceReviewRows, LEGAL_CASE_SEARCH_ORDER, normalizeLegalCaseStage, workspaceMaterialInputs, makeWorkspaceWorkflowCase, workspaceMaterialIndexRows, formatLegalWorkflowRows, formatLegalWorkflowActionQueue, formatEvidenceReviewRows, formatEvidenceGapList } from "./case_workflow";
+import { ownCaseNumbersFromArgs, evaluateCurrentLawGate, legalReasoningGateStatus, formatCitationList } from "./citations";
 
 function buildLegalReasoningMatrixMarkdown(args: Record<string, any>, orgId?: string): string {
   const caseName = textArg(args, 'caseName') || '未命名案件';
@@ -21,7 +21,7 @@ function buildLegalReasoningMatrixMarkdown(args: Record<string, any>, orgId?: st
     legalAuthorities,
     textArg(args, 'content'),
     textArg(args, 'documentText'),
-  ].filter(Boolean).join('\n'), orgId);
+  ].filter(Boolean).join('\n'), orgId, ownCaseNumbersFromArgs(args), textArg(args, 'factDate'), legalTemporalOptions(args));
   const gateStatus = legalReasoningGateStatus(lawGate);
   const searchOrder = LEGAL_CASE_SEARCH_ORDER.join(' > ');
   const majorRows = issues.map(issue =>
@@ -108,7 +108,7 @@ export async function reasoningMatrixHandler(args: Record<string, any>, context?
     textArg(args, 'legalAuthorities'),
     textArg(args, 'content'),
     textArg(args, 'documentText'),
-  ].filter(Boolean).join('\n'), orgId);
+  ].filter(Boolean).join('\n'), orgId, ownCaseNumbersFromArgs(args), textArg(args, 'factDate'), legalTemporalOptions(args));
 
   let reasoningPath = '';
   if (writeFiles) {
@@ -185,7 +185,7 @@ export async function caseWorkspaceHandler(args: Record<string, any>, context?: 
     textArg(args, 'content'),
     textArg(args, 'documentText'),
     facts,
-  ].filter(Boolean).join('\n'), orgId);
+  ].filter(Boolean).join('\n'), orgId, ownCaseNumbersFromArgs(args), textArg(args, 'factDate'), legalTemporalOptions(args));
 
   let caseFile: LegalCases.OrgLegalCaseFile | null = null;
   if (persist) {
@@ -219,7 +219,6 @@ export async function caseWorkspaceHandler(args: Record<string, any>, context?: 
     caseFile = LegalCases.getCase(orgId, caseFile.id, userId) || caseFile;
   }
 
-  const caseIdLine = caseFile ? `- 案件ID：${caseFile.id}` : '- 案件ID：未持久化（persistCase=false）';
   const workflowCase = caseFile || makeWorkspaceWorkflowCase(args, {
     orgId,
     caseName,
@@ -239,16 +238,15 @@ export async function caseWorkspaceHandler(args: Record<string, any>, context?: 
       : '',
   });
   const workflowNext = workflow.nextStep
-    ? `${workflow.nextStep.label}：${workflow.nextStep.nextStep}（推荐 ${workflow.nextStep.tool}）`
+    ? `${workflow.nextStep.label}：${workflow.nextStep.nextStep}`
     : '闭环已完成，进入持续复核和归档。';
   const materialRows = workspaceMaterialIndexRows(caseFile?.materials || []);
   const evidenceReviewRows = buildEvidenceReviewRows({ ...args, caseType, facts, evidence });
 
-  return `# ${caseName} 案件工作台
+  return `# ${caseFile?.title || caseName} 案件工作台
 
 ## 一、案件空间
-${caseIdLine}
-- 组织：${orgId}
+- 案件现有材料：${caseFile ? `共 ${caseFile.materials.length} 份` : '尚未入案'}
 - 阶段：${stage}
 - 我方身份：${role}
 - 案由/类型：${caseType}
@@ -262,13 +260,11 @@ ${caseIdLine}
 - 待补项：${workflow.missingCount}
 - 下一动作：${workflowNext}
 
-| 模块 | 状态 | 判断依据 | 下一步 | 推荐工具 |
-| --- | --- | --- | --- | --- |
+| 模块 | 状态 | 判断依据 | 下一步 |
+| --- | --- | --- | --- |
 ${formatLegalWorkflowRows(workflow.steps)}
 
 ${formatLegalWorkflowActionQueue(workflow)}
-
-${formatStandardLegalCaseworkSequence()}
 
 ## 三、材料索引
 | 序号 | 类型 | 标题 | 来源 | 归档时间 |
@@ -297,15 +293,7 @@ ${formatEvidenceGapList(evidenceReviewRows)}
 ## 八、推荐检索词
 ${queries.map((query, index) => `${index + 1}. ${query}`).join('\n')}
 
-## 九、下一步工具链
-1. legal_case_reasoning_matrix：展开三段论法律分析底稿，作为后续文书和策略的核心基础。
-2. legal_extract_dispute_focus：提炼争议焦点、待证事实和质证点。
-3. legal_external_research_plan：生成外部检索行动单和来源登记字段。
-4. legal_generate_litigation_packet：按原告/被告生成诉讼文书包草稿。
-5. legal_prepare_filing_handoff：生成法院在线服务平台字段映射和上传清单。
-6. legal_finalize_delivery_package：生成正式交付包；未通过现行有效法律硬门槛时自动阻断。
-
-## 十、边界
+## 九、边界
 - Lumi 可以归集材料、生成草稿、打开授权网页登录、记录来源和生成交付包。
 - 自动立案、签名、盖章、缴费、确认送达、撤回、和解承诺、最终法律意见必须由律师或当事人确认。
 `;
@@ -371,7 +359,7 @@ export async function caseWorkflowStatusHandler(args: Record<string, any>, conte
     caseFile?.notes || '',
     ...(caseFile?.materials || []).map(material => material.content || ''),
   ].filter(Boolean).join('\n');
-  const lawGate = evaluateCurrentLawGate(gateText, orgId);
+  const lawGate = evaluateCurrentLawGate(gateText, orgId, ownCaseNumbersFromArgs(args), textArg(args, 'factDate'), legalTemporalOptions(args));
   const workflow = LegalCases.evaluateCaseWorkflow(workflowCase, {
     currentLawGate: lawGate.statuteChecks.length === 0 ? 'none' : lawGate.passed ? 'passed' : 'blocked',
     currentLawBlockingSummary: lawGate.blockingStatutes.length
@@ -379,14 +367,13 @@ export async function caseWorkflowStatusHandler(args: Record<string, any>, conte
       : '',
   });
   const next = workflow.nextStep
-    ? `${workflow.nextStep.label}：${workflow.nextStep.nextStep}（推荐 ${workflow.nextStep.tool}）`
+    ? `${workflow.nextStep.label}：${workflow.nextStep.nextStep}`
     : '闭环已完成，进入持续复核和归档。';
   const title = caseFile?.title || caseName || '未命名案件';
 
   return `# ${title} 案件闭环状态
 
-- 案件ID：${caseFile?.id || '未持久化/未匹配'}
-- 组织：${orgId}
+- 案件现有材料：${caseFile ? `共 ${caseFile.materials.length} 份` : '尚未入案'}
 - 完成度：${workflow.doneCount}/${workflow.steps.length}（${workflow.completionRatio}%）
 - 阻断项：${workflow.blockedCount}
 - 待补项：${workflow.missingCount}
@@ -394,13 +381,11 @@ export async function caseWorkflowStatusHandler(args: Record<string, any>, conte
 - 可进入正式交付：${workflow.readyForFormalDelivery ? '是' : '否'}
 - 下一动作：${next}
 
-| 模块 | 状态 | 判断依据 | 下一步 | 推荐工具 |
-| --- | --- | --- | --- | --- |
+| 模块 | 状态 | 判断依据 | 下一步 |
+| --- | --- | --- | --- |
 ${formatLegalWorkflowRows(workflow.steps)}
 
 ${formatLegalWorkflowActionQueue(workflow)}
-
-${formatStandardLegalCaseworkSequence()}
 
 ## 边界
 - 本状态用于办案推进和工具选择，不替代律师对事实、证据、法源和程序风险的最终判断。

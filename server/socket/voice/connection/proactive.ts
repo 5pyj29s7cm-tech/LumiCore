@@ -252,13 +252,14 @@ export function registerVoiceProactiveOutput(runtime: VoiceConnectionRuntime) {
       const recentGreetings = queryMemories({
         userId,
         query: 'greeting',
+        includeOperationalTraces: true,
         limit: 8,
         minConfidence: 0.5,
         domain: session.domain,
         orgId: session.orgId,
       });
       const greetingTexts = recentGreetings
-        .filter(m => m.content.includes('[Greeting]') || m.keywords.includes('greeting'))
+        .filter(m => m.sourceInteractionId?.startsWith('greeting_'))
         .map(m => m.content.replace(/^\[Greeting\]\s*/, '').slice(0, 80));
       if (greetingTexts.length > 0) {
         dedupContext = `\nRecently used greetings (DO NOT repeat these — be completely fresh):\n${greetingTexts.map(g => `- "${g}"`).join('\n')}`;
@@ -349,7 +350,7 @@ export function registerVoiceProactiveOutput(runtime: VoiceConnectionRuntime) {
         confidence: 1.0,
         sourceInteractionId: `greeting_${Date.now()}`,
         agentId: undefined,
-      } as any, { tier: 'episodic', perspective: 'shared_memory', importance: 0.2, domain: session.domain, orgId: session.orgId, source: 'voice' });
+      } as any, { tier: 'episodic', perspective: 'lumi_self', importance: 0.2, domain: session.domain, orgId: session.orgId, source: 'voice' });
       logger.info(`[Greeting] LLM-generated for ${userId} (${spokenGreeting.length} chars)`);
     } catch (err: any) {
       if (!authorization.isCurrent() || controller.signal.aborted) return;

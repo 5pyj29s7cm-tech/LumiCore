@@ -1,6 +1,6 @@
 {
   "name": "lumi-skill-pdftools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "PDF tools: merge multiple PDFs and extract document metadata",
   "type": "module",
   "main": "index.ts",

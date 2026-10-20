@@ -1,6 +1,7 @@
 import { formatCnToolFailureDetail } from './voice_fast_path_messages';
 
 export const CN_MESSAGING_MESSAGES = {
+  executionCheckRejected: "本步执行校验未通过，已停止处理。请重新确认目标。",
   textSendAction: '\u5fae\u4fe1\u6587\u5b57\u53d1\u9001',
   fileSendAction: '\u5fae\u4fe1\u6587\u4ef6\u6295\u9012',
   unverifiedDelivery: '\u6211\u4e0d\u4f1a\u628a\u672a\u786e\u8ba4\u7684\u6587\u5b57\u6216\u6587\u4ef6\u6295\u9012\u8bf4\u6210\u5df2\u5b8c\u6210\uff1b\u9700\u8981\u4ee5\u901a\u9053\u56de\u6267\u6216\u53ef\u89c1\u53d1\u9001\u8bc1\u636e\u9a8c\u6536\u3002',

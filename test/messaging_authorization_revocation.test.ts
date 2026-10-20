@@ -1,3 +1,5 @@
+import * as preparation from '../server/regions/packs/cn/messaging_turn/execution_preparation';
+import type { MessagingRouteOptions } from '../server/regions/packs/cn/messaging_finalization';
 import { consumeFixtureBindingCode } from './messaging_binding_fixture';
 import './helpers';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -67,6 +69,29 @@ beforeEach(() => {
 });
 afterEach(async () => { await flushDBOrThrow(); vi.unstubAllGlobals(); });
 
+
+const actualPrepare = preparation.prepareMessagingExecution;
+const observedOptions = new WeakMap<MessagingRouteOptions, NonNullable<MessagingRouteOptions['onMessage']>>();
+const observedRequests = new Map<string, { message: IncomingMessage; observe: NonNullable<MessagingRouteOptions['onMessage']> }>();
+function observedMessagingOptions(options: MessagingRouteOptions): MessagingRouteOptions {
+  const observe = options.onMessage;
+  if (!observe) throw new Error('An observation fixture is required');
+  const configured = { ...options, onMessage: undefined };
+  observedOptions.set(configured, observe);
+  vi.spyOn(preparation, 'prepareMessagingExecution').mockImplementation(async input => {
+    const result = await actualPrepare(input); const observer = input.options && observedOptions.get(input.options);
+    if (observer) observedRequests.set(input.requestId, { message: input.msg, observe: observer });
+    return result;
+  });
+  model.call.mockImplementation(async (_messages, _tools, config) => {
+    const accepted = observedRequests.get(config.requestId);
+    if (!accepted) throw new Error('No real accepted request was observed');
+    const reply = await accepted.observe(accepted.message);
+    return { text: reply?.text || '', toolCalls: [], usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+  });
+  return configured;
+}
+
 describe('remote message authorization remains bound to its accepted identity', () => {
   it.each(['binding', 'membership', 'membership_replaced', 'replacement'] as const)('stops before memory, execution and delivery after %s revocation during attachment work', async reason => {
     const gate = deferred<IncomingMessage>();
@@ -77,7 +102,7 @@ describe('remote message authorization remains bound to its accepted identity', 
     const onMessage = vi.fn(async () => ({ platform: 'feishu' as const, text: 'synthetic reply' }));
     const reply = vi.fn(async () => 'reply-id');
     expect(routes.dispatchIncomingMessage(message, { enrich: async value => { captured = value; return gate.promise; }, reply },
-      { queryMemories: memoryRead, personalityRegistry, onMessage })).toBe(true);
+      observedMessagingOptions({ queryMemories: memoryRead, personalityRegistry, onMessage }))).toBe(true);
     await waitFor(() => Boolean(captured));
     if (reason === 'binding') bindings.deleteBindingForUser(userId, binding.id, orgId, 'work');
     else if (reason === 'membership') org.removeMember(orgId, userId);
@@ -101,7 +126,7 @@ describe('remote message authorization remains bound to its accepted identity', 
     expect(fetch).not.toHaveBeenCalled();
     if (replacementUser) {
       message = { ...message, messageId: `${message.messageId}-new-binding` };
-      routes.dispatchIncomingMessage(message, { enrich: async value => value, reply }, { queryMemories: memoryRead, personalityRegistry, onMessage });
+      routes.dispatchIncomingMessage(message, { enrich: async value => value, reply }, observedMessagingOptions({ queryMemories: memoryRead, personalityRegistry, onMessage }));
       await waitFor(done);
       expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ boundUserId: replacementUser, boundOrgId: orgId }));
       expect(reply).toHaveBeenCalledOnce();
@@ -113,7 +138,7 @@ describe('remote message authorization remains bound to its accepted identity', 
     const memoryRead = vi.fn(queryMemories);
     const onMessage = vi.fn(async () => ({ platform: 'feishu' as const, text: 'synthetic reply' }));
     const reply = vi.fn(async () => 'reply-id');
-    routes.dispatchIncomingMessage(message, { enrich: async value => value, reply }, { queryMemories: memoryRead, personalityRegistry, onMessage });
+    routes.dispatchIncomingMessage(message, { enrich: async value => value, reply }, observedMessagingOptions({ queryMemories: memoryRead, personalityRegistry, onMessage }));
     await waitFor(done);
     expect(memoryRead.mock.results[0].value).toEqual(expect.arrayContaining([expect.objectContaining({ id: `secret-${sequence}` })]));
     expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ boundUserId: userId, boundOrgId: orgId }));
@@ -124,7 +149,7 @@ describe('remote message authorization remains bound to its accepted identity', 
     const gate = deferred<{ platform: 'feishu'; text: string }>();
     const onMessage = vi.fn(() => gate.promise);
     const reply = vi.fn(async () => 'reply-id');
-    routes.dispatchIncomingMessage(message, { enrich: async value => value, reply }, { personalityRegistry, onMessage });
+    routes.dispatchIncomingMessage(message, { enrich: async value => value, reply }, observedMessagingOptions({ personalityRegistry, onMessage }));
     await waitFor(() => onMessage.mock.calls.length === 1);
     bindings.deleteBindingForUser(userId, binding.id, orgId, 'work');
     gate.resolve({ platform: 'feishu', text: 'must never be delivered' });
@@ -176,11 +201,11 @@ describe('remote message authorization remains bound to its accepted identity', 
     let captured: IncomingMessage | undefined;
     const onMessage = vi.fn(async () => ({ platform: 'feishu' as const, text: 'must stop' }));
     const reply = vi.fn(async () => 'reply-id');
-    routes.dispatchIncomingMessage(message, { enrich: async value => { captured = value; return gate.promise; }, reply }, { onMessage });
+    routes.dispatchIncomingMessage(message, { enrich: async value => { captured = value; return gate.promise; }, reply }, observedMessagingOptions({ onMessage }));
     await waitFor(() => Boolean(captured));
     let drained = false;
     const draining = routes.stopMessagingIngressAndDrain().then(() => { drained = true; });
-    expect(() => routes.dispatchIncomingMessage({ ...message, messageId: 'after-close' }, { enrich: async value => value, reply }, { onMessage })).toThrow(/ingress is stopping/);
+    expect(() => routes.dispatchIncomingMessage({ ...message, messageId: 'after-close' }, { enrich: async value => value, reply }, observedMessagingOptions({ onMessage }))).toThrow(/ingress is stopping/);
     await new Promise(resolve => setTimeout(resolve, 10));
     expect(drained).toBe(false);
     gate.resolve(captured!);

@@ -5,6 +5,8 @@ import type { prepareChatPriorTaskQuery } from './phases/prepare_chat_prior_task
 
 import { buildTaskTargetAnchorProjection } from "../../conversation/task_target_anchor";
 
+import { formatClientSelfPromptForTurn } from "../../client/self_model";
+
 import { toolRegistry } from "../../tools/registry";
 
 import type { LumiExecutionPipeline, BuildLumiExecutionPipelineInput } from "../../cognition/execution_pipeline";
@@ -36,7 +38,6 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
       };
       const personalityOptions = {
         memories: context.relevantMemories.length > 0 ? context.relevantMemories : undefined,
-        ragKnowledge: context.ragChunks.length > 0 ? context.ragChunks : undefined,
         emotionalState: context.emotionalState,
         userId: context.uid,
         userText: context.text,
@@ -64,6 +65,9 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
         systemInstruction,
         context.toolSecurityContext.executionBoundary,
       );
+      if (!context.isMemoryAvatar && context.toolSecurityContext.executionBoundary !== 'remote_restricted') {
+        effectiveSystemPrompt += '\n\n' + formatClientSelfPromptForTurn(context.uid, context.visibleUserText, { domain: context.resolvedDomain, orgId: context.resolvedOrgId });
+      }
       if (context.conversationId) {
         const summaryContext = getConversationSummary(context.conversationId);
         if (summaryContext) {
@@ -92,9 +96,6 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
       if (context.pendingConfirmationPrompt) {
         effectiveSystemPrompt += `\n\n${context.pendingConfirmationPrompt}`;
       }
-      if (context.chatContextBridge) {
-        effectiveSystemPrompt += '\n\n' + context.chatContextBridge;
-      }
       if (context.actionContinuationBridge) {
         effectiveSystemPrompt += '\n\n' + context.actionContinuationBridge;
       }
@@ -102,7 +103,7 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
         context.visibleUserText || context.text,
         context.mediaRoutingEnvelope,
       ].filter(Boolean).join('\n\n');
-      const continuationContext = [context.chatContextBridge, context.actionContinuationBridge, context.pendingConfirmationPrompt]
+      const continuationContext = [context.actionContinuationBridge, context.pendingConfirmationPrompt]
         .filter(Boolean)
         .join('\n\n');
       const executionTaskText = [
@@ -168,11 +169,6 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
         });
       }
 
-      // Inject company knowledge base context when in work domain
-      if (context.kbContext) {
-        effectiveSystemPrompt += `\n\n## Company Knowledge Base\n${context.kbContext}\n\nUse the above company knowledge to inform your response. Cite article titles when referencing company policy.`;
-      }
-
       // Inject profession context — adapt language and expertise to user's trade
       try {
         const professionOverlay = context.resolvedDomain === 'personal' ? buildProfessionOverlay() : null;
@@ -191,6 +187,7 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
           effectiveSystemPrompt += '\n\nYou know these people personally. Use this information to provide relevant, contextual responses when the user asks about them.';
         }
       } catch {}
-return { turnFlow, executionPipeline, personality, effectiveSystemPrompt, executionTaskText, completionTaskText };
+return { turnFlow, executionPipeline, personality, effectiveSystemPrompt, executionTaskText, completionTaskText,
+  knowledgeContext: [context.ragChunks.join('\n\n'), context.kbContext].filter(Boolean).join('\n\n') };
       } };
 }

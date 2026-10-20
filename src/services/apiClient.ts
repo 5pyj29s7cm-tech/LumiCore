@@ -1,7 +1,5 @@
 import { getBackendOrigin } from './apiBridge';
 
-const LOCAL_BACKEND_ORIGIN = 'http://127.0.0.1:3000';
-
 export function apiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path;
   const normalized = path.startsWith('/') ? path : `/${path}`;
@@ -43,8 +41,14 @@ function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
   });
 }
 
+function isBackend(url: string): boolean {
+  try { return new URL(url).origin === getBackendOrigin(); } catch { return false; }
+}
+
 function isLocalBackend(url: string): boolean {
-  try { return new URL(url).origin === LOCAL_BACKEND_ORIGIN; } catch { return false; }
+  try {
+    return isBackend(url) && ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(url).hostname);
+  } catch { return false; }
 }
 
 function shouldRetryLocalBackend(url: string, error: unknown): boolean {
@@ -55,10 +59,11 @@ function shouldRetryLocalBackend(url: string, error: unknown): boolean {
 
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const url = apiUrl(path);
+  const backendRequest = isBackend(url);
   const request: RequestInit = {
-    credentials: 'include',
+    credentials: backendRequest ? 'include' : 'same-origin',
     ...init,
-    headers: withAuthHeaders(init.headers),
+    headers: backendRequest ? withAuthHeaders(init.headers) : init.headers,
   };
   // A failed response does not prove that a write failed. Retrying POST/PUT/
   // DELETE can repeat a completed action, so only safe reads retry startup.

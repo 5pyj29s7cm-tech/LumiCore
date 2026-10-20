@@ -1,9 +1,9 @@
-import { withLegalExecution, assertLegalExecutionActive } from '../../../../legal/execution';
+import { withLegalExecution, assertLegalExecutionActive, legalExecutionWrites } from '../../../../legal/execution';
 import * as LegalCases from "../../../../org/legal_cases";
-import * as EDB from "../../../../org/db";
 import path from "path";
 import fs from "fs";
 import { encodeToolResult } from "../../../../tools/result_envelope";
+import { createHash } from "crypto";
 import { type CapabilityOperation, type CapabilityRisk, type CapabilitySideEffect, type ToolDefinition } from "../../../../tools/types";
 import { capabilityContract, capabilityEvidence } from "../../../../tools/capability_contracts";
 import { expandLocalPath, textArg, legalWorkspaceId } from "./context";
@@ -16,28 +16,6 @@ interface LegalReceiptProfile {
   requireArtifacts?: boolean | ((args: Record<string, any>) => boolean);
   requireArticleMutation?: boolean;
   classify?: (content: string, args: Record<string, any>) => { ok: boolean; status: string };
-}
-
-function legalCaseSnapshot(orgId: string, userId?: string): Map<string, string> {
-  return new Map(LegalCases.listCases(orgId, '', 200, userId).map(caseFile => [
-    caseFile.id,
-    JSON.stringify({
-      updatedAt: caseFile.updatedAt,
-      title: caseFile.title,
-      stage: caseFile.stage,
-      materials: caseFile.materials.map(material => [material.id, material.createdAt, material.localPath]),
-    }),
-  ]));
-}
-
-function changedLegalCaseIds(before: Map<string, string>, after: Map<string, string>): string[] {
-  return Array.from(after.entries())
-    .filter(([id, fingerprint]) => before.get(id) !== fingerprint)
-    .map(([id]) => id);
-}
-
-function legalArticleIds(orgId: string): Set<string> {
-  return new Set(EDB.listKbArticles(orgId).map(article => article.id));
 }
 
 function existingLegalOutputPaths(content: string): string[] {
@@ -71,13 +49,15 @@ export function withLegalReceipt(handler: LegalToolHandler, profile: LegalReceip
   return async (args, context) => {
     const orgId = legalWorkspaceId(args, context);
     const userId = textArg(args, 'userId') || context?.userId || 'system';
-    const beforeCases = legalCaseSnapshot(orgId, userId);
-    const beforeArticles = legalArticleIds(orgId);
     const content = await handler(args, context);
-    const afterCases = legalCaseSnapshot(orgId, userId);
-    const afterArticles = legalArticleIds(orgId);
-    const changedCaseIds = changedLegalCaseIds(beforeCases, afterCases);
-    const articleIds = Array.from(afterArticles).filter(id => !beforeArticles.has(id));
+    const writes = legalExecutionWrites(orgId, userId);
+    const changedCaseIds = [...writes.cases.keys()];
+    const articleIds = [...writes.articles];
+    const materialSources = changedCaseIds.flatMap(caseId => (LegalCases.getCase(orgId, caseId, userId)?.materials || [])
+      .filter(material => writes.cases.get(caseId)?.has(material.id))
+      .map(material => ({ caseId, materialId: material.id, sourceDigest: createHash('sha256').update(JSON.stringify([
+        material.source, material.title, material.content, material.fileName || '', material.localPath || '',
+      ])).digest('hex') })));
     const artifacts = existingLegalOutputPaths(content);
     const classified = profile.classify?.(content, args)
       || (legalInputBlocked(content) ? { ok: false, status: 'blocked' } : { ok: true, status: profile.status });
@@ -99,6 +79,7 @@ export function withLegalReceipt(handler: LegalToolHandler, profile: LegalReceip
       status: classified.status,
       persisted: changedCaseIds.length > 0 || articleIds.length > 0,
       changedCaseIds,
+      materialSources,
       articleIds,
       artifacts,
       content,
@@ -176,4 +157,26 @@ export const CASE_ARCHIVE_FIELDS = {
   persistCase: booleanField('是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭'),
   orgId: stringField('组织 ID，默认上下文 orgId 或 default'),
   userId: stringField('操作用户 ID，默认上下文 userId 或 system'),
+};
+
+/** Review inputs, never proof of applicability without an authoritative exact-text match. */
+export const LEGAL_TEMPORAL_FIELDS = {
+  factDate: stringField('案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。'),
+  procedureDate: stringField('相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。'),
+  temporalReviews: {
+    type: 'array',
+    description: '与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。',
+    items: {
+      type: 'object',
+      properties: {
+        citation: stringField('本案拟适用的法条引用'),
+        referenceDate: stringField('与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点'),
+        scope: { type: 'string', enum: ['fact', 'procedure'], description: '对应实体事实或程序行为' },
+        authorityCitation: stringField('说明时间效力规则的权威条文引用'),
+        authorityQuote: stringField('该权威条文的连续原文摘录'),
+        applicability: stringField('本案适用及例外的待复核说明；不是程序自动认定'),
+      },
+      required: ['citation', 'referenceDate', 'scope', 'authorityCitation', 'authorityQuote', 'applicability'],
+    },
+  },
 };

@@ -1,0 +1,151 @@
+{
+  "source": {
+    "runtime": "379f52e53a80e5a12b28f947e85f4227c4bc67780d3be660c4f95ef540bb7afc",
+    "requestId": "chat-song-starlight-4db69592-b29d-4f0a-b20d-6149f0554a89",
+    "actual": "source-video-native-chat/execution canonical messages + turn.json; same owned4lineQA, not full120soriginalproject"
+  },
+  "taskText": "请现在使用Lumi程序内的官方视频生成功能制作下述原创演唱短片。使用aliyun/wan3.0-video，时长15秒，1080x1920，关闭提示词扩写（prompt_extend=false），保持当前已保存模型配置。不要操作外部桌面或音乐网站，不要交付脚本、文档或TTS录音来代替视频。此次只提交一次视频生成；失败或结果不符时保留真实回执和已有文件，不要再次生成。完成后告诉我实际保存文件与任务标识。后续歌曲核词和卡点不在本步执行。\n\n制作一段15秒的原创中文双人卡通对唱音乐视频，主题《星光归途》。两位完全虚构的原创卡通朋友，角色A是戴蓝色围巾的短发旅人，角色B是戴橙色围巾的卷发旅人，声线可清楚区分。深蓝夜色、柔和星光、远方暖色灯光，人物形象前后一致。画面中不生成任何文字、标题、字幕、标志或聊天气泡；后续由程序按原字排版。必须原生生成清晰、有旋律的中文人声演唱和轻柔流行伴奏，A、B依次接唱，不是对白、朗读、TTS、哼唱、提示音或仅乐器。全片只演唱以下四句，每句恰好一次，原文原顺序，不改字、不漏字、不加字、不重复，不唱角色标签，不额外唱标题、副歌或旁白。可以有短暂无词前奏和尾奏，让四句完整唱完且结尾自然：\nA：星光照归路\nB：微风听我唱\nA：心事变旋律\nB：一起到远方\n请交付带真实演唱音轨的可播放视频成片，不以脚本、文档或无声动画代替。",
+  "requestId": "chat-song-starlight-4db69592-b29d-4f0a-b20d-6149f0554a89",
+  "taskId": "task_56ee007a-6fab-4033-b951-da2d3b3b54a6",
+  "record": {
+    "id": "deterministic_media_0_mvc22nwb",
+    "resolutionId": "resolution:chat-song-starlight-4db69592-b29d-4f0a-b20d-6149f0554a89",
+    "taskId": "task_56ee007a-6fab-4033-b951-da2d3b3b54a6",
+    "requestId": "chat-song-starlight-4db69592-b29d-4f0a-b20d-6149f0554a89",
+    "turnRowId": "action_turn_026aa9493980f3967d63e87c2cf7ef52",
+    "turnId": "chat-song-starlight-4db69592-b29d-4f0a-b20d-6149f0554a89",
+    "executionOrigin": "deterministic_route",
+    "name": "generate_video",
+    "arguments": {
+      "operation": "text_to_video",
+      "prompt": "请现在使用Lumi程序内的官方视频生成功能制作下述原创演唱短片。使用aliyun/wan3.0-video，时长15秒，1080x1920，关闭提示词扩写（prompt_extend=false），保持当前已保存模型配置。不要操作外部桌面或音乐网站，不要交付脚本、文档或TTS录音来代替视频。此次只提交一次视频生成；失败或结果不符时保留真实回执和已有文件，不要再次生成。完成后告诉我实际保存文件与任务标识。后续歌曲核词和卡点不在本步执行。\n\n制作一段15秒的原创中文双人卡通对唱音乐视频，主题《星光归途》。两位完全虚构的原创卡通朋友，角色A是戴蓝色围巾的短发旅人，角色B是戴橙色围巾的卷发旅人，声线可清楚区分。深蓝夜色、柔和星光、远方暖色灯光，人物形象前后一致。画面中不生成任何文字、标题、字幕、标志或聊天气泡；后续由程序按原字排版。必须原生生成清晰、有旋律的中文人声演唱和轻柔流行伴奏，A、B依次接唱，不是对白、朗读、TTS、哼唱、提示音或仅乐器。全片只演唱以下四句，每句恰好一次，原文原顺序，不改字、不漏字、不加字、不重复，不唱角色标签，不额外唱标题、副歌或旁白。可以有短暂无词前奏和尾奏，让四句完整唱完且结尾自然：\nA：星光照归路\nB：微风听我唱\nA：心事变旋律\nB：一起到远方\n请交付带真实演唱音轨的可播放视频成片，不以脚本、文档或无声动画代替。",
+      "size": "1080x1920",
+      "duration": 15,
+      "hasSource": false,
+      "hasReference": false
+    },
+    "result": "{\"ok\":false,\"success\":false,\"status\":\"unknown\",\"verified\":false,\"verificationStatus\":\"unverified\",\"provider\":\"relay\",\"model\":\"aliyun/wan3.0-video\",\"taskId\":\"4978b257-2cb2-4eec-b180-f502673b3949\",\"recoveryId\":\"bee39cdb8f6cc96ef860c582915098e8febf5283135c370f1f80c77743057115\",\"recoveryTool\":\"get_video_generation_status\",\"automaticResubmissionBlocked\":true,\"reason\":\"The original task was retained; status or artifact retrieval did not complete.\"}",
+    "evidence": {
+      "capability": "media.video.generate",
+      "operation": "create",
+      "assurance": "verified",
+      "scope": [],
+      "limitations": [
+        "The receipt proves container/video-sample structure and persistence, not codec decoding or subjective video quality."
+      ]
+    },
+    "capability": {
+      "capabilityId": "media.video.generate",
+      "lane": "media",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "external_state_change",
+          "scope": "configured video generation provider task",
+          "reversible": false
+        },
+        {
+          "type": "local_write",
+          "scope": "generated MP4 when provider output can be downloaded",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "artifact",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "verified",
+          "verificationStatus",
+          "status",
+          "provider",
+          "model",
+          "taskId",
+          "generationMode",
+          "inputReferenceAccepted",
+          "selectionReason",
+          "artifactDurability",
+          "artifacts"
+        ],
+        "requiredValues": {
+          "ok": true,
+          "verified": true,
+          "verificationStatus": "verified"
+        },
+        "successStatuses": [
+          "generated"
+        ],
+        "failureStatuses": [
+          "failed",
+          "timed_out"
+        ],
+        "requiredArtifactCollections": [
+          "artifacts"
+        ],
+        "successSignals": [
+          "provider completed video generation and Lumi validated container structure, video tracks, bounded sample references, and atomically saved the artifact"
+        ],
+        "limitations": [
+          "Container and sample validation does not decode frames or prove subjective video quality or prompt fidelity."
+        ]
+      }
+    },
+    "idempotencyKey": "50418be3861561862b5b04bc4b5b84b13977d43ff11b81c36d4c8fcd53c38e7a",
+    "adapterStarted": true,
+    "adapterSettlements": [
+      {
+        "name": "generate_video",
+        "attempt": 1,
+        "status": "fulfilled",
+        "timedOut": false,
+        "settledAt": "2026-10-17T07:11:58.572Z"
+      }
+    ],
+    "terminalVerification": {
+      "status": "failed",
+      "strategy": "artifact",
+      "reason": "The terminal receipt reported unknown."
+    },
+    "envelope": {
+      "version": 1,
+      "status": "unknown_outcome",
+      "toolName": "generate_video",
+      "resolutionId": "resolution:chat-song-starlight-4db69592-b29d-4f0a-b20d-6149f0554a89",
+      "taskId": "task_56ee007a-6fab-4033-b951-da2d3b3b54a6",
+      "requestId": "chat-song-starlight-4db69592-b29d-4f0a-b20d-6149f0554a89",
+      "turnRowId": "action_turn_026aa9493980f3967d63e87c2cf7ef52",
+      "turnId": "chat-song-starlight-4db69592-b29d-4f0a-b20d-6149f0554a89",
+      "idempotencyKey": "50418be3861561862b5b04bc4b5b84b13977d43ff11b81c36d4c8fcd53c38e7a",
+      "targetIdentity": "",
+      "startedAt": "2026-10-17T07:09:00.161Z",
+      "completedAt": "2026-10-17T07:11:58.589Z",
+      "durationMs": 178428,
+      "result": {
+        "ok": false,
+        "success": false,
+        "status": "unknown",
+        "verified": false,
+        "verificationStatus": "unverified",
+        "provider": "relay",
+        "model": "aliyun/wan3.0-video",
+        "taskId": "4978b257-2cb2-4eec-b180-f502673b3949",
+        "recoveryId": "bee39cdb8f6cc96ef860c582915098e8febf5283135c370f1f80c77743057115",
+        "recoveryTool": "get_video_generation_status",
+        "automaticResubmissionBlocked": true,
+        "reason": "The original task was retained; status or artifact retrieval did not complete."
+      },
+      "verification": {
+        "status": "failed",
+        "basis": "terminal_verification",
+        "reason": "The terminal receipt reported unknown."
+      }
+    }
+  },
+  "observedFinal": {
+    "text": "",
+    "finalized": true,
+    "blocked": false,
+    "completionFeedbackStatus": "unknown"
+  }
+}

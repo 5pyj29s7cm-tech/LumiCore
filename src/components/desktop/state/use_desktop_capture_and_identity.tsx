@@ -310,7 +310,7 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
   const seenWorkflowToolEvents = useRef<Set<string>>(new Set());
 
   const socket = useSocket();
-  const { appendMeetingTranscript, meetingCaptureResetRef, meetingVoiceActiveRef, setMeetingPaused, meetingIdentityRef, meetingPaused, setMeetingStartedAt, meetingStartedAt, legalMeetingCaseTitle, meetingReport, meetingNotes, formatMeetingNoteForExport, setMeetingReport, setMeetingReportGenerating, lastLegalMeetingArchiveRef, setLegalMeetingCaseTitle, waitForMeetingRefinement, setMeetingNotesOpen, renewMeetingIdentity, setMeetingNotes, setMeetingSpeakerCount, lastMeetingTranscriptRef, resetMeetingCapture, meetingModeRef, meetingNotesOpen, meetingReportGenerating, meetingSpeakerCount, meetingNoteHasSpeakerInfo, meetingSpeakerLabel } = useMeetingTranscript({ workDomain, meetingStorageKeys, meetingPreferenceScopeKey, operationMode, lang, socket });
+  const { appendMeetingTranscript, meetingCaptureResetRef, meetingVoiceActiveRef, setMeetingPaused, meetingIdentityRef, meetingPaused, setMeetingStartedAt, meetingStartedAt, legalMeetingCaseTitle, meetingReport, meetingNotes, formatMeetingNoteForExport, setMeetingReport, setMeetingReportGenerating, lastLegalMeetingArchiveRef, setLegalMeetingCaseTitle, waitForMeetingRefinement, setMeetingNotesOpen, renewMeetingIdentity, setMeetingNotes, setMeetingSpeakerCount, lastMeetingTranscriptRef, meetingModeRef, meetingNotesOpen, meetingReportGenerating, meetingSpeakerCount, meetingNoteHasSpeakerInfo, meetingSpeakerLabel, meetingHistory, meetingRecordId, meetingHistoryReadOnly, meetingCaseId, meetingArchiveReceipt, recordMeetingArchive, bindMeetingCase, createMeetingRecord, selectMeetingRecord, importMeetingRecords } = useMeetingTranscript({ workDomain, meetingStorageKeys, meetingPreferenceScopeKey, operationMode, lang, socket });
 
   useEffect(() => {
     if (knowledgeOpen) setKnowledgeLoaded(true);
@@ -402,7 +402,7 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
   }, [getVoiceScopeOptions, selectedVoiceId, startCall]);
 
   const stopMeetingAudio = useCallback((options: { refineTranscript?: boolean; refinementId?: string } = {}) => {
-    setMeetingPaused(false);
+    setMeetingPaused(true);
     meetingVoiceActiveRef.current = false;
     if (operationMode === 'meeting') setOperationMode('assistant');
     if (callState !== 'idle') endCall({ refineTranscript: options.refineTranscript === true, refinementId: options.refinementId });
@@ -410,12 +410,18 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
   }, [callState, endCall, meetingIdentityRef, meetingVoiceActiveRef, operationMode, setMeetingPaused, setOperationMode, socket]);
 
   useEffect(() => {
-    if (operationMode !== 'meeting') {
-      if (meetingPaused) setMeetingPaused(false);
+    if (meetingHistoryReadOnly || operationMode !== 'meeting') {
+      if (!meetingPaused) setMeetingPaused(true);
       if (meetingVoiceActiveRef.current && callState !== 'idle') {
         meetingVoiceActiveRef.current = false;
         endCall();
       }
+      return;
+    }
+
+    if (callError && callState === 'idle' && meetingVoiceActiveRef.current) {
+      meetingVoiceActiveRef.current = false;
+      setMeetingPaused(true);
       return;
     }
 
@@ -430,7 +436,6 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
     setMeetingStartedAt(prev => {
       if (prev) return prev;
       const now = Date.now();
-      localStorage.setItem(meetingStorageKeys.startedAt, String(now));
       return now;
     });
 
@@ -441,7 +446,7 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
       meetingVoiceActiveRef.current = true;
       void startCall(selectedVoiceId, 'lumi', 'lumi', { ...getVoiceScopeOptions(), transcriptionOnly: true, meetingId: meetingIdentityRef.current.meetingId });
     }
-  }, [callState, endCall, getVoiceScopeOptions, meetingIdentityRef, meetingPaused, meetingStorageKeys.startedAt, meetingVoiceActiveRef, operationMode, selectedVoiceId, setMeetingPaused, setMeetingStartedAt, startCall]);
+  }, [callError, callState, endCall, getVoiceScopeOptions, meetingIdentityRef, meetingHistoryReadOnly, meetingPaused, meetingVoiceActiveRef, operationMode, selectedVoiceId, setMeetingPaused, setMeetingStartedAt, startCall]);
   // Spacebar push-to-talk: track whether this call was started by spacebar
   const isSpacebarRecording = useRef(false);
   const callStateRef = useRef(callState);
@@ -473,11 +478,11 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
     meetingNotes, formatMeetingNoteForExport, meetingIdentityRef, setMeetingReport, setMeetingReportGenerating, lastLegalMeetingArchiveRef,
     setLegalMeetingCaseTitle, waitForMeetingRefinement, stopMeetingAudio, setMeetingNotesOpen, endCall, setMeetingPaused, meetingVoiceActiveRef,
     meetingStartAttemptRef, meetingPaused, renewMeetingIdentity, setMeetingNotes, setMeetingSpeakerCount, setMeetingStartedAt, lastMeetingTranscriptRef,
-    setPendingOperationMode, pendingOperationMode, resetMeetingCapture, setMcpActivities, setAgentStatus, seenWorkflowToolEvents, callStateRef,
+    setPendingOperationMode, pendingOperationMode, setMcpActivities, setAgentStatus, seenWorkflowToolEvents, callStateRef,
     startStandardVoiceCall, closeMemoryAvatar, meetingModeRef, startCall, getVoiceScopeOptions, isSpacebarRecording, openMemoryAvatar, meetingNotesOpen,
     meetingReportGenerating, agentStatus, mcpActivities, desktopIcons, audioLevel, transcript, handleWallpaperUpload, handleTopbarPointerDown,
     setShowOnboarding, toggleMute, handleWindowMinimize, handleWindowMaximize, handleWindowClose, openProactiveChat, desktopIconAreaHeight,
-    getDefaultDesktopIconPosition, meetingSpeakerCount, meetingNoteHasSpeakerInfo, meetingSpeakerLabel, finishSensorPrimer, showOnboarding, isTrainingOpen,
+    getDefaultDesktopIconPosition, meetingSpeakerCount, meetingNoteHasSpeakerInfo, meetingSpeakerLabel, meetingHistory, meetingRecordId, meetingHistoryReadOnly, meetingCaseId, meetingArchiveReceipt, recordMeetingArchive, bindMeetingCase, createMeetingRecord, selectMeetingRecord, importMeetingRecords, finishSensorPrimer, showOnboarding, isTrainingOpen,
     setIsTrainingOpen, openMemoryAvatarLab, enterCreatedMemoryAvatar
   } as const;
 }

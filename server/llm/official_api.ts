@@ -9,6 +9,7 @@
  * namespaced route, while the defaults follow the OpenAI-compatible contract.
  */
 import { requireNotStrict } from '../config/privacy';
+import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
 import {
   relayApiKey,
   relayBaseUrl,
@@ -164,16 +165,26 @@ function errorMessage(body: any, response: Response, credential = relayApiKey())
 
 /** Only an actual gateway response can prove rejection; timeouts cannot. */
 export class OfficialApiHttpError extends Error {
-  constructor(readonly status: number, readonly requestPath: string, message: string) {
+  videoSubmissionRejected = false;
+  constructor(readonly status: number, readonly requestPath: string, message: string, readonly responseBody?: unknown) {
     super(message);
     this.name = 'OfficialApiHttpError';
   }
 }
 
+const DEFINITE_SUBMISSION_REJECTION_STATUSES = new Set([400, 401, 403, 404, 413, 415, 422, 429]);
+
 export function isDefiniteOfficialImageRejection(error: unknown): boolean {
   return error instanceof OfficialApiHttpError
     && /(?:^|\/)images\/(?:generations|edits)$/.test(error.requestPath)
-    && [400, 401, 403, 404, 413, 415, 422, 429].includes(error.status);
+    && DEFINITE_SUBMISSION_REJECTION_STATUSES.has(error.status);
+}
+
+/** Branded only at the first video submission, before any provider task exists. */
+export function isDefiniteOfficialVideoRejection(error: unknown): boolean {
+  return error instanceof OfficialApiHttpError
+    && error.videoSubmissionRejected === true
+    && DEFINITE_SUBMISSION_REJECTION_STATUSES.has(error.status);
 }
 
 /** Preserve the gateway's FastAPI error detail through OpenAI SDK parsing. */
@@ -230,7 +241,7 @@ export async function officialApiRequest<T = any>(
     });
     const body = await readBody(response);
     if (!response.ok) throw new OfficialApiHttpError(response.status, path,
-      `Lumi Official API request failed (${response.status}): ${errorMessage(body, response)}`);
+      `Lumi Official API request failed (${response.status}): ${errorMessage(body, response)}`, body);
     return { response, body: body as T };
   } catch (error: any) {
     if (error?.name === 'AbortError' && !callerSignal?.aborted) {
@@ -312,7 +323,7 @@ export function parseOfficialApiModelCatalog(body: unknown): OfficialApiModelCat
       capability === 'video_generation'
         ? (/(?:^|[\/_-])i2v(?:[\/_-]|$)|image[-_]?to[-_]?video/i.test(model.id)
           ? ['image_to_video']
-          : ['video_generation'])
+          : ['video_generation', ...(model.id === LUMI_OFFICIAL_DEFAULT_MODELS.image_to_video ? ['image_to_video'] : [])])
         : OFFICIAL_MODEL_CAPABILITY_ROLES[capability] || []
     ));
     for (const role of roles) {

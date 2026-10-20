@@ -3,6 +3,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { getDataPath } from '../config/data_path';
 import * as EDB from './db';
+import { recordLegalCaseWrite } from '../legal/execution';
 import { inspectLegalReasoningStructure } from '../regions/packs/cn/legal_reasoning_structure';
 import { CN_LEGAL_REASONING_DRAFT_MESSAGES } from "../regions/messages/skill_messages";
 import {
@@ -386,6 +387,7 @@ export function createCase(orgId: string, userId: string, input: Partial<OrgLega
   };
   store.cases.unshift(caseFile);
   writeStore(store);
+  recordLegalCaseWrite(orgId, userId, caseFile.id, caseFile.materials.map(material => material.id));
   EDB.logAudit({
     orgId,
     userId,
@@ -419,6 +421,7 @@ export function updateCase(orgId: string, userId: string, caseId: string, patch:
   };
   store.cases[idx] = next;
   writeStore(store);
+  recordLegalCaseWrite(orgId, userId, caseId, next.materials.filter(material => !current.materials.some(prior => prior.id === material.id)).map(material => material.id));
   EDB.logAudit({
     orgId,
     userId,

@@ -1,4 +1,5 @@
 import type { ModelAttemptTimeouts, ModelAttemptDeadlineStage, AttemptDeadline } from './contracts';
+import type { NormalizedLLMResponse } from '../../tools/types';
 
 export const DEFAULT_MODEL_ATTEMPT_TIMEOUTS: Readonly<ModelAttemptTimeouts> = Object.freeze({
   requestMs: 20_000,
@@ -12,8 +13,11 @@ export class ModelAttemptDeadlineError extends Error {
   readonly stage: ModelAttemptDeadlineStage;
   readonly timeoutMs: number;
   readonly callerCancelled: boolean;
+  readonly completedEmpty: boolean;
+  readonly finishReason?: NormalizedLLMResponse['finishReason'];
+  readonly usage?: NormalizedLLMResponse['usage'];
 
-  constructor(stage: ModelAttemptDeadlineStage, timeoutMs: number, options: { cause?: unknown; completedEmpty?: boolean } = {}) {
+  constructor(stage: ModelAttemptDeadlineStage, timeoutMs: number, options: { cause?: unknown; completedEmpty?: boolean } & Pick<NormalizedLLMResponse, 'finishReason' | 'usage'> = {}) {
     const message = stage === 'cancelled'
       ? 'Model attempt cancelled by caller'
       : options.completedEmpty
@@ -24,6 +28,9 @@ export class ModelAttemptDeadlineError extends Error {
     this.stage = stage;
     this.timeoutMs = timeoutMs;
     this.callerCancelled = stage === 'cancelled';
+    this.completedEmpty = options.completedEmpty === true;
+    this.finishReason = options.finishReason;
+    this.usage = options.usage;
   }
 }
 
@@ -117,9 +124,9 @@ export class ModelAttemptSupervisor {
     this.semanticContentSeen = true;
   }
 
-  assertSemanticContent(): void {
+  assertSemanticContent(completion: Pick<NormalizedLLMResponse, 'finishReason' | 'usage'> = {}): void {
     if (this.semanticContentSeen) return;
-    const error = new ModelAttemptDeadlineError('semantic_content', this.timeouts.semanticContentMs, { completedEmpty: true });
+    const error = new ModelAttemptDeadlineError('semantic_content', this.timeouts.semanticContentMs, { ...completion, completedEmpty: true });
     this.abort(error);
     throw error;
   }

@@ -1,11 +1,12 @@
 {
   "name": "lumi-skill-content-ops",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "New media and content operations pack for topic pipelines, short-video scripts, account reviews, comment insights, and content calendars.",
   "type": "module",
   "main": "index.ts",
   "scripts": { "start": "npx tsx index.ts" },
-  "dependencies": { "@modelcontextprotocol/sdk": "^1.0.0", "zod": "^3.22.0" },
+  "dependencies": { "@modelcontextprotocol/sdk": "^1.0.0", "zod": "^3.22.0",
+    "fast-csv": "4.3.6" },
   "lumi": {
     "displayName": "Content Ops",
     "category": "Content",

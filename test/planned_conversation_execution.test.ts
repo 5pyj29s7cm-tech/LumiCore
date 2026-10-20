@@ -1,5 +1,21 @@
 import './helpers';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { runResolvedLumiTurn } from '../server/cognition/turn_model';
+vi.mock('../server/llm/lumi_turn', async () => ({ ...await vi.importActual<typeof import('../server/llm/lumi_turn')>('../server/llm/lumi_turn'), runLumiTurn: async (input: any) => {
+  const { executeToolCall } = await import('../server/tools/execution_engine');
+  const record = await executeToolCall({registry: input.registry, id: input.config.requestId+':observed', name: 'web_search', arguments: {query: 'synthetic evidence'}, context: input.context});
+  await input.onToolCall(record);
+  return {response: 'Synthetic evidence', toolCalls: [record]};
+} }));
+async function observeBoundPlan(input: Awaited<ReturnType<typeof accepted>>) {
+  expect(input.execution.executionPlan).toBeUndefined();
+  await runResolvedLumiTurn({ execution: input.execution, registry: input.registry, messages: [], config: {provider: 'deepseek', model: 'synthetic',requestId: input.requestId}, getters: {},
+    context: {userId: input.userId,conversationId: input.conversationId,taskId: input.execution.taskId}, onToolCall: async () => {} });
+  expect(input.execution.executionPlan?.decisionAuthority).toBe('registry_bound_call');
+  expect(input.execution.executionPlan?.nodes).toHaveLength(1);
+  expect(input.execution.executionPlan?.nodes[0]).toMatchObject({toolName:'web_search',state:'terminal'});
+}
+
 import { recordPendingConfirmationDurably, clearAllPendingConfirmationsForTests, buildTransportNeutralConfirmationScope, getPendingConfirmationDurably } from '../server/tools/pending_confirmation';
 import { randomUUID } from 'node:crypto';
 import { initDatabase, readDB, flushDBOrThrow } from '../db_layer';
@@ -22,7 +38,7 @@ async function accepted(text: string, previous?: { userId: string; conversationI
     personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: [], maxIterations: 4 },
     actionTaskState: getConversationForScope(conversationId, userId, 'personal', '')?.actionContinuationState,
   });
-  return { userId, conversationId, requestId, userMessageId, userText: text, execution };
+  return { userId, conversationId, requestId, userMessageId, userText: text, execution, registry };
 }
 async function unfinished() {
   const input = await accepted('Search the public web for synthetic cloud examples.');
@@ -43,7 +59,8 @@ describe('planned conversation task ownership', () => {
     expect(prepared.kind).toBe('new');
     expect(prepared.state?.activeRequestId).toBe(input.requestId);
     expect(prepared.state?.latestInstructionRef).toBe(input.userMessageId);
-    expect(input.execution.executionPlan.taskId).toBe(prepared.state!.taskId);
+    await observeBoundPlan(input);
+    expect(input.execution.executionPlan!.taskId).toBe(prepared.state!.taskId);
     const persistedPlan = JSON.parse(readDB().conversationActionTasks.find((row: any) => row.id === prepared.state!.taskId).context).executionPlan;
     expect(persistedPlan).toMatchObject({ taskId: prepared.state!.taskId, planId: input.execution.executionPlan.planId });
     expect(persistedPlan.intent.payload).toBe('');
@@ -55,7 +72,8 @@ describe('planned conversation task ownership', () => {
     const prepared = preparePlannedConversationExecution(input);
     expect(prepared.kind).toBe('resume'); expect(prepared.state?.taskId).toBe(previous.taskId);
     expect(prepared.state?.activeRequestId).toBe(input.requestId);
-    expect(input.execution.executionPlan.taskId).toBe(previous.taskId);
+    await observeBoundPlan(input);
+    expect(input.execution.executionPlan!.taskId).toBe(previous.taskId);
     expect(JSON.parse(readDB().conversationActionTasks.find((row: any) => row.id === previous.taskId).context).executionPlan.planId).toBe(input.execution.executionPlan.planId);
   });
   it('gives an unrelated concrete action its own task and preserves the supersession edge', async () => {

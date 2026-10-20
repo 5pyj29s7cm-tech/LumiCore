@@ -32,9 +32,6 @@ export function SpriteAnimator({
   style,
   onFrame,
   onAnimationEnd,
-  audioLevel = 0,
-  callState = 'idle',
-  behavior = 'default',
   accessoryIds,
 }: {
   spritesheet: string;
@@ -45,9 +42,6 @@ export function SpriteAnimator({
   style?: React.CSSProperties;
   onFrame?: (frame: number) => void;
   onAnimationEnd?: (animName: string) => void;
-  audioLevel?: number;
-  callState?: string;
-  behavior?: PetBehavior;
   accessoryIds?: string[];
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -219,9 +213,6 @@ export function PetAvatar({
         scale={scale}
         className={className}
         style={style}
-        audioLevel={audioLevel}
-        callState={callState}
-        behavior={behavior}
         accessoryIds={accessoryIds}
       />
     </div>

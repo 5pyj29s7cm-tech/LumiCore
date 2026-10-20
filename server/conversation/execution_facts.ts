@@ -1,8 +1,8 @@
 import { readDatabaseTables } from '../../db_layer';
 import { projectConversationReceiptHistory } from './receipt_history';
-import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import { CN_CONVERSATION_EXECUTION_FACT_MESSAGES } from "../regions/messages/conversation_execution_facts_messages";
-import { hasMixedStatusExecutionIntent, isPriorArtifactDeliveryQuestion, isPriorWorkDeliveryFactQuestion, isPriorTurnToolReceiptQuestion } from '../cognition/normalized_action_intent';
+import { hasMixedStatusExecutionIntent, isPriorArtifactDeliveryQuestion, isPriorWorkDeliveryFactQuestion, isPriorTurnToolReceiptQuestion, isPriorSingleFileReadFactQuestion, isPriorFailureExplanationQuestion } from '../cognition/normalized_action_intent';
+export { isConversationExecutionFactQuestion } from '../cognition/normalized_action_intent';
 import { toolRecordSucceeded } from '../cognition/task_execution_ledger';
 import { formatCnToolFailureDetail } from "../regions/messages/voice_fast_path_messages";
 
@@ -60,24 +60,6 @@ function parseToolCalls(value: unknown): any[] {
   return Array.isArray(parsed) ? parsed : [];
 }
 
-export function isConversationExecutionFactQuestion(text: string): boolean {
-  const normalized = String(text || '').trim();
-  if (!normalized) return false;
-  if (classifySkillAuthoringIntent(normalized) !== 'none') return false;
-  if (isPriorArtifactDeliveryQuestion(normalized) && !hasMixedStatusExecutionIntent(normalized)) return true;
-  if (isPriorWorkDeliveryFactQuestion(normalized)) return true;
-  if (isPriorFailureExplanationQuestion(normalized)) return true;
-  if (isPriorTurnToolReceiptQuestion(normalized)) return true;
-  if (isPriorSingleFileReadFactQuestion(normalized)) return true;
-  // i18n-allow -- Chinese prior-open fact-question recognition; not user-visible copy.
-  const asksAboutPriorOpen = /(?:你)?(?:不是|不都|难道没)?(?:已经|刚才|刚刚|之前).{0,16}(?:打开|启动|运行).{0,24}(?:吗|没有|没|不知道|忘了)|(?:你)?(?:已经|刚才|刚刚).{0,16}(?:打开|启动|运行)了[，,。！？!?\s]*(?:你)?(?:自己)?(?:不知道|忘了)|\b(?:didn'?t|did\s+you\s+not|you\s+already).{0,40}\b(?:open|launch|start)(?:ed)?\b/iu.test(normalized);
-  if (asksAboutPriorOpen) return true;
-  const conversationScope = /(?:这|本|当前|刚才|刚刚|整个).{0,10}(?:轮|段|次)?(?:对话|会话|聊天)|\b(?:this|current|that)\s+(?:conversation|chat|session)\b/iu.test(normalized);
-  const asksWhether = /(?:有没有|有没|是否|究竟|到底|真的)|\b(?:did|have|was|were)\b/iu.test(normalized);
-  const executionSubject = /(?:(?:调用|执行|使用|跑).{0,10}(?:工具|插件|技能)|(?:创建|新建|建立).{0,10}(?:任务|计划))|\b(?:call|use|run|execute)(?:d|ing)?\s+(?:any\s+)?tools?\b|\bcreat(?:e|ed|ing)\s+(?:any\s+)?tasks?\b/iu.test(normalized);
-  const asksVerifiedClientNavigation = /(?:成功|实际|真实|回执).{0,24}(?:客户端)?(?:导航|界面动作|页面动作)|(?:哪一个|哪个|什么).{0,24}(?:客户端)?(?:导航动作|界面动作)/u.test(normalized);
-  return (conversationScope && asksWhether && executionSubject) || asksVerifiedClientNavigation;
-}
 
 function parseRecordArguments(value: unknown): Record<string, any> {
   let parsed = value;
@@ -89,71 +71,7 @@ function parseRecordArguments(value: unknown): Record<string, any> {
     : {};
 }
 
-function isPriorSingleFileReadFactQuestion(text: string): boolean {
-  const normalized = String(text || '').replace(/\s+/gu, ' ').trim();
-  if (!normalized) return false;
-  // A correction that names a concrete file is executable work even when it
-  // also says "previous task" or contains the word "path".  Let the normal
-  // task-continuation path bind it to the server-owned task; never consume it
-  // as a read-only history lookup before the tool loop runs.
-  // i18n-allow: multilingual action/target recognition; not user-visible copy.
-  const hasExplicitFileTarget = /(?:[A-Za-z]:[\\/]|\\\\)[^\r\n“”"'<>|?*，,；;。！？!?]{1,440}\.[A-Za-z0-9]{1,16}(?=$|[\s，,；;。！？!?)）\]}'"])/u.test(normalized)
-    || /\/(?:Users|home|tmp|var|opt|Volumes)\/[^\r\n“”"'<>]{1,440}\.[A-Za-z0-9]{1,16}(?=$|[\s，,；;。！？!?)）\]}'"])/u.test(normalized);
-  // i18n-allow: multilingual correction/continuation recognition; not user-visible copy.
-  const explicitTargetAction = /(?:不是|不对|纠正|改成|改为|换成|而是|应该是)|(?:继续|接着|重试).{0,32}(?:任务|读取|读|打开|分析)|(?:请|帮我|现在|然后|继续|接着|重新|再次|再|改成|改为|换成)\s*(?:读取|读一下|打开|分析)|\b(?:instead|correct|change|replace|continue|resume|retry|re-?read|read\s+again)\b/iu.test(normalized);
-  if (hasExplicitFileTarget && explicitTargetAction) return false;
-  // A request to re-read is executable work. This fast path is only for
-  // recalling the immediately preceding, already verified read receipt.
-  // i18n-allow: multilingual previous-file fact recognition; not user-visible copy.
-  const freshReadMarkers = Array.from(normalized.matchAll(
-    /(?:重新\s*读取|再次\s*读取|再\s*读(?:取)?|重读)|\b(?:re-?read(?:ing)?|read\s+again)\b/giu,
-  ));
-  const asksForFreshRead = freshReadMarkers.some(marker => {
-    const markerIndex = marker.index ?? 0;
-    const prefix = normalized.slice(Math.max(0, markerIndex - 48), markerIndex);
-    const clausePrefix = prefix.slice(Math.max(
-      prefix.lastIndexOf('，'),
-      prefix.lastIndexOf(','),
-      prefix.lastIndexOf('。'),
-      prefix.lastIndexOf('.'),
-      prefix.lastIndexOf('！'),
-      prefix.lastIndexOf('!'),
-      prefix.lastIndexOf('？'),
-      prefix.lastIndexOf('?'),
-      prefix.lastIndexOf('；'),
-      prefix.lastIndexOf(';'),
-    ) + 1);
-    // "不要重新读取" and "without re-reading" explicitly forbid a new
-    // tool call. They must not be mistaken for an executable re-read request.
-    // Keep the negation close to the marker so a separate clause such as
-    // "不要猜，重新读取" still requests fresh work.
-    // i18n-allow: multilingual negated re-read recognition; not user-visible copy.
-    const negated = /(?:不要|别|无需|无须|不用|不必|不需要|请勿|禁止|不是(?:要|让你)?|并非(?:要|让你)?)[^，,。.!！？?；;\n]{0,6}$/u.test(clausePrefix)
-      || /(?:do\s+not|don't|dont|never|without|no\s+need\s+to|need\s+not|needn't|must\s+not)(?:\s+(?:actually|really|ever|please|the\s+file|it)){0,3}\s*$/iu.test(clausePrefix);
-    return !negated;
-  });
-  if (asksForFreshRead) return false;
-  // i18n-allow: multilingual previous-file fact recognition; not user-visible copy.
-  const prior = /(?:刚才|刚刚|上一轮|上次|前一轮|此前)|\b(?:just\s+now|previous(?:ly)?|last\s+turn|prior\s+turn|earlier)\b/iu.test(normalized);
-  // i18n-allow: multilingual previous-file fact recognition; not user-visible copy.
-  const read = /(?:读取|读过|读的|所读)|\b(?:read|file)\b/iu.test(normalized);
-  // i18n-allow: multilingual previous-file fact recognition; not user-visible copy.
-  const asksFact = /(?:哪个|哪一个|什么|精确|路径|字段|值|名称|版本)|\b(?:which|what|exact|path|field|value|name|version)\b/iu.test(normalized);
-  // A fact lookup must actually ask for, recall, or request presentation of a
-  // stored value. Merely mentioning "previous", "read", and "path" is not a
-  // question and must not steal an executable correction from the task lane.
-  // i18n-allow: multilingual fact-query recognition; not user-visible copy.
-  const asksForRecall = /[？?]/u.test(normalized)
-    || /(?:告诉我|列出|给我|回答|说(?:一)?下|回忆|根据.{0,20}回执|分.{0,8}(?:行|列))/u.test(normalized)
-    || /\b(?:tell|report|list|give|recall|show|based\s+(?:only\s+)?on)\b/iu.test(normalized);
-  return prior && read && asksFact && asksForRecall;
-}
 
-function isPriorFailureExplanationQuestion(text: string): boolean {
-  // i18n-allow: Chinese previous-turn failure question recognition; not user-visible copy.
-  return /^(?:(?:这次|刚才|刚刚|上次|前面|那个任务)\s*)?(?:为什么|怎么(?:会)?|为何)\s*(?:失败|没(?:有)?(?:做成|完成|成功)|没做成|出错|报错|受阻|卡住)(?:了|的)?[啊呀呢，,。！？?!\s]*$/u.test(text)
-    || /^why\s+(?:did\s+)?(?:it|that|the\s+(?:task|request))?\s*(?:fail|failed|not\s+(?:finish|complete|succeed))[?!.\s]*$/iu.test(text);
-}
 
 function interactionRequestId(item: any): string {
   return String(item?.requestId || item?.externalMessageId || '').trim();

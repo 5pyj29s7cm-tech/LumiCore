@@ -26,6 +26,14 @@ export interface ImageGenerationTask {
   updatedAt: string;
 }
 
+export type OfficialVideoGenerationTask = Omit<ImageGenerationTask, 'provider' | 'settings'> & {
+  kind: 'video'; provider: 'relay'; gatewayDigest: string;
+  settings: { requestedSettings: { size?: string; duration?: number }; generationMode: 'text_to_video' | 'image_to_video';
+    inputReferenceAccepted: boolean; selectionReason: 'explicit_model' | 'configured_text_to_video_role' | 'configured_image_to_video_role' };
+  videoUrl?: string; outputPath?: string; artifactSha256?: string; compositionSegment?: boolean;
+};
+type MediaGenerationTask = ImageGenerationTask | OfficialVideoGenerationTask;
+
 function directory(): string { return ensurePrivateRuntimeDirectory(getDataPath('media-generation-tasks')); }
 function filename(recoveryId: string): string {
   if (!/^[a-f0-9]{64}$/.test(recoveryId)) throw new Error('Invalid media recovery identity.');
@@ -34,31 +42,34 @@ function filename(recoveryId: string): string {
 function scope(context?: ToolContext) {
   return { userId: String(context?.userId || ''), domain: context?.domain === 'work' ? 'work' as const : 'personal' as const, orgId: String(context?.orgId || '') };
 }
-export function assertImageTaskOwner(task: ImageGenerationTask, context?: ToolContext): void {
+export function assertMediaTaskOwner(task: MediaGenerationTask, context?: ToolContext): void {
   const owner = scope(context);
   if (task.userId !== owner.userId || task.domain !== owner.domain || task.orgId !== owner.orgId
     || task.domain === 'work' && !isOrganizationMembershipAuthorizationCurrent(task.membership, task.orgId, task.userId)) {
-    throw new Error('The image generation task is unavailable in the current owner scope.');
+    throw new Error('The media generation task is unavailable in the current owner scope.');
   }
   if (context?.executionSignal?.aborted) throw context.executionSignal.reason || new Error('Image task cancelled.');
   if (context?.isCancelled?.()) throw new Error('Image task cancelled.');
 }
-function read(recoveryId: string): ImageGenerationTask | null {
+export const assertImageTaskOwner = assertMediaTaskOwner;
+function read(recoveryId: string): MediaGenerationTask | null {
   const file = filename(recoveryId);
   if (!fs.existsSync(file)) return null;
   const stat = fs.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) throw new Error('Invalid media task journal.');
-  const task = JSON.parse(fs.readFileSync(file, 'utf8')) as ImageGenerationTask;
-  if (task.version !== 1 || task.recoveryId !== recoveryId || task.provider !== 'qwen') throw new Error('Invalid media task journal.');
+  const task = JSON.parse(fs.readFileSync(file, 'utf8')) as MediaGenerationTask;
+  if (task.version !== 1 || task.recoveryId !== recoveryId
+    || task.provider !== 'qwen' && (task.provider !== 'relay' || task.kind !== 'video')) throw new Error('Invalid media task journal.');
   return task;
 }
 export function readImageGenerationTask(recoveryId: string, context?: ToolContext): ImageGenerationTask | null {
   const task = read(recoveryId);
-  if (task) assertImageTaskOwner(task, context);
-  return task;
+  if (task && task.provider !== 'qwen') throw new Error('The task is not an image generation.');
+  if (task) assertMediaTaskOwner(task, context);
+  return task as ImageGenerationTask | null;
 }
 /** Synchronous atomic replacement is a strict barrier before polling or reporting acceptance. */
-export function saveImageGenerationTask(task: ImageGenerationTask): void {
+export function saveMediaGenerationTask(task: MediaGenerationTask): void {
   const output = filename(task.recoveryId);
   const temporary = `${output}.${randomUUID()}.tmp`;
   let descriptor: number | undefined;
@@ -72,8 +83,36 @@ export function saveImageGenerationTask(task: ImageGenerationTask): void {
     try { fs.unlinkSync(temporary); } catch {}
   }
 }
+export const saveImageGenerationTask = saveMediaGenerationTask;
 export function imageGenerationRecoveryId(args: Record<string, any>, context?: ToolContext): string {
   return createHash('sha256').update(JSON.stringify([scope(context), executionIdempotencyKey('generate_image', args, context)])).digest('hex');
+}
+
+export function videoGenerationRecoveryId(args: Record<string, any>, context?: ToolContext): string {
+  return createHash('sha256').update(JSON.stringify([scope(context), executionIdempotencyKey('generate_video', args, context)])).digest('hex');
+}
+export function readVideoGenerationTask(recoveryId: string, context?: ToolContext): OfficialVideoGenerationTask | null {
+  const task = read(recoveryId);
+  if (task && task.provider !== 'relay') throw new Error('The task is not an official video generation.');
+  if (task) assertMediaTaskOwner(task, context);
+  return task as OfficialVideoGenerationTask | null;
+}
+export function prepareVideoGenerationTask(args: Record<string, any>, model: string, settings: OfficialVideoGenerationTask['settings'],
+  gatewayDigest: string, context?: ToolContext): { task: OfficialVideoGenerationTask; created: boolean } {
+  const recoveryId = videoGenerationRecoveryId(args, context), inputDigest = externalCommitInputDigest('generate_video', args);
+  const existing = readVideoGenerationTask(recoveryId, context);
+  if (existing) {
+    if (existing.inputDigest !== inputDigest) throw new Error('Media task identity is already bound to different arguments.');
+    return { task: existing, created: false };
+  }
+  const owner = scope(context);
+  const task: OfficialVideoGenerationTask = { version: 1, recoveryId, inputDigest,
+    idempotencyKey: executionIdempotencyKey('generate_video', args, context), ...owner, ownerTaskId: String(context?.taskId || ''),
+    ...(owner.domain === 'work' ? { membership: captureOrganizationMembershipAuthorization(owner.orgId, owner.userId) } : {}),
+    kind: 'video', provider: 'relay', model, settings, gatewayDigest, compositionSegment: args.__videoSegment !== undefined,
+    providerTaskId: '', state: 'submitting', updatedAt: new Date().toISOString() };
+  assertMediaTaskOwner(task, context); saveMediaGenerationTask(task);
+  return { task, created: true };
 }
 export function prepareImageGenerationTask(args: Record<string, any>, model: string, context?: ToolContext): { task: ImageGenerationTask; created: boolean } {
   const recoveryId = imageGenerationRecoveryId(args, context);

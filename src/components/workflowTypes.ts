@@ -1,7 +1,6 @@
 import type { Locale } from '@/i18n/runtime';
 import { taskCompletionFeedbackCopy } from '@/i18n/locales/taskCompletionFeedback';
 import {
-  hasInternalAgentExecutionDetail,
   sanitizeAgentResponseTextForDisplay,
 } from '@/lib/agentResponseDelivery';
 
@@ -69,7 +68,6 @@ export function customerVisibleTaskDetail(
   const sanitized = sanitizeAgentResponseTextForDisplay(raw, locale);
   if (
     !sanitized
-    || hasInternalAgentExecutionDetail(sanitized)
     || MACHINE_EXECUTION_DETAIL_RE.test(sanitized)
   ) return fallback;
   return sanitized;

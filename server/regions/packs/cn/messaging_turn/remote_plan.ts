@@ -37,6 +37,7 @@ export interface RemoteLumiExecutionPlanInput {
   requestId?: string;
   userText?: string;
   acceptedResolution?: TurnResolution;
+  serverBoundCapability?: BuildLumiExecutionPipelineInput['serverBoundCapability'];
   userId: string;
   text: string;
   source: string;
@@ -54,6 +55,7 @@ export interface RemoteLumiExecutionPlanInput {
 export function remoteTurnPlanningData(input: RemoteLumiExecutionPlanInput): BuildLumiExecutionPipelineInput {
   return {
     requestId:input.requestId, userText:input.userText, acceptedResolution:input.acceptedResolution,
+    serverBoundCapability: input.serverBoundCapability,
     dispatch: {
       userId: input.userId,
       text: input.text,

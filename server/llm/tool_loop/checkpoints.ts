@@ -1,42 +1,31 @@
 import type { ToolExecutionRecord, ToolContext } from "../../tools/types";
 import type { CompletionGuardResult } from "../../work_product/completion_guard";
-import { CN_DURABLE_EXECUTION_MESSAGES } from "../../regions/messages/durable_execution_messages";
-import { isVerifiedToolSuccess } from './recovery';
-import { buildIterationLimitSummary, humanToolLabel } from './summaries';
-import { compactReceiptForModel, compactStringForModel } from './receipts';
-import { guardToolResponseIfNeeded } from './projection';
+import { CN_TASK_EXECUTION_MESSAGES } from "../../regions/messages/task_execution_messages";
+import { buildIterationLimitSummary } from './summaries';
+import { parseReceiptObject } from '../../tools/receipt_payload';
+import { sanitizeUserFacingExecutionOutput } from '../../cognition/user_output_protection';
+import { guardToolResponseIfNeeded, inspectPublicExecutionReferences } from './projection';
+import { actualDocumentReadContent, isSuccessfulExactDocumentRead, documentReadMatchesRequestedTarget } from '../../cognition/action_desktop_evidence';
 
 export function buildVerifiedToolCheckpoint(executionLog: ToolExecutionRecord[], task: string, context?: ToolContext): CompletionGuardResult {
-  const verified = executionLog.filter(isVerifiedToolSuccess).slice(-4);
-  if (verified.length === 0) return { text: buildIterationLimitSummary(executionLog, task), blocked: false };
-  const isZh = /[\u3400-\u9fff]/.test(task);
-  const evidence = verified.map((record, index) => {
-    const result = String(record.result || '').trim();
-    const receipt = result ? '' : compactReceiptForModel(record.receipt);
-    const detail = compactStringForModel(
-      result || receipt || record.terminalVerification?.reason || (isZh ? CN_DURABLE_EXECUTION_MESSAGES.terminalVerificationPassed : 'terminal verification passed'),
-      3_000,
-      'Verified checkpoint evidence',
-    );
-    return `${index + 1}. ${humanToolLabel(record.name)}\n${detail}`;
+  const input = { task, response: '', toolCalls: executionLog, requestId: context?.requestId,
+    taskId: context?.taskId, completionRequest: context?.completionRequest, acceptedTaskTarget: context?.acceptedTaskTarget,
+    acceptedActionContract: context?.acceptedActionContract };
+  const currentRecords = context?.requestId && context?.taskId ? inspectPublicExecutionReferences(input, '').currentRecords : [];
+  const evidence = currentRecords.flatMap(record => {
+    const receipt = parseReceiptObject(record.receipt);
+    return ['create', 'mutate'].includes(record.capability?.operation || '') && record.capability?.verification.requiredFields?.includes('content') && typeof receipt?.content === 'string' && receipt.content.trim()
+      ? [receipt.content.trim()] : record.capability?.operation === 'observe' && isSuccessfulExactDocumentRead(record)
+        && documentReadMatchesRequestedTarget(record, task, context?.acceptedTaskTarget, [], context?.userId ? { userId: context.userId, domain: context.domain || 'personal', orgId: context.orgId || '' } : undefined)
+        ? [actualDocumentReadContent(record)] : [];
   });
-  const checkpoint = isZh
-    ? [
-        CN_DURABLE_EXECUTION_MESSAGES.verifiedCheckpointHeading,
-        ...evidence,
-        '',
-        CN_DURABLE_EXECUTION_MESSAGES.verifiedCheckpointContinuation,
-      ].join('\n')
-    : ['Verified execution results:', ...evidence, '', 'The progress and receipts are preserved so subsequent work can continue from this checkpoint.'].join('\n');
-  return guardToolResponseIfNeeded({
-    task,
-    response: checkpoint,
-    toolCalls: executionLog,
-    requestId: context?.requestId,
-    taskId: context?.taskId,
-    acceptedTaskTarget: context?.acceptedTaskTarget,
-    acceptedActionContract: context?.acceptedActionContract,
-  });
+  const checkpoint = evidence.length ? evidence.join('\n\n') : buildIterationLimitSummary(executionLog, task);
+  if (inspectPublicExecutionReferences(input, checkpoint).privateReference) return {
+    text: CN_TASK_EXECUTION_MESSAGES.incompleteWholeRequest, blocked: true, reason: 'reply_private_reference',
+  };
+  const text = sanitizeUserFacingExecutionOutput(checkpoint, { task, toolRecords: executionLog });
+  if (context?.currentTurnExecutionRequested) return { text, blocked: true, reason: 'The primary-model whole-request result is unavailable; verified progress is preserved.' };
+  return guardToolResponseIfNeeded({ ...input, response: text });
 }
 
 export function isCallerCancellation(

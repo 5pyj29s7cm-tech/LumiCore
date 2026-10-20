@@ -17,6 +17,9 @@ import { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from ".
 import { resultTaskText, isVerifiedCurrentTurnRecord, taskActionContract, hasResultCoreActionEvidence, isChineseText, isInternalRuntimeWorkNarration } from "./result_finalizer_support";
 import { isVerifiedPrimaryDesktopOpen } from "./result_desktop_presenter";
 
+// i18n-allow: Existing standalone execution-status recognition; capture only locates its suffix.
+const STANDALONE_ONGOING_EXECUTION_CLAIM = /(?:^|[\n。！？.!?])\s*(正在\s*(?:执行|操作|处理|调用|修复|重启)[—\-\s。！!]*)$/iu;
+
 type RealWorldClaimKind =
   | 'communication'
   | 'reminder'
@@ -35,12 +38,12 @@ export function realWorldClaimKind(value: string): RealWorldClaimKind | '' {
     .replace(/[“”][^“”\r\n]{0,240}[“”]/gu, ' ')
     .replace(/[‘’][^‘’\r\n]{0,240}[‘’]/gu, ' ')
     .replace(/"[^"\r\n]{0,240}"/gu, ' ')
-    .split(/[\n。！!]+/u)
+    .split(/[\n。！!，,；;]+/u)
     .map(clause => clause.trim())
     // i18n-allow: Chinese negated/hypothetical execution-claim recognition; not user-visible copy.
     .filter(clause => clause
       && !/[？?]/u.test(clause)
-      && !/^(?:没有|没|未|并未|不能|无法|如果|假如|例如|比如|假设)|(?:没有|并未|未曾|不能|不应|不可).{0,16}(?:完成|发送|创建|打开|播放|执行)|\b(?:did\s+not|didn't|cannot|can't|if|for\s+example)\b/iu.test(clause) // i18n-allow: reviewed execution-claim input recognition.
+      && !/^(?:没有|没|未|并未|尚未|还未|还没|不能|无法|如果|假如|例如|比如|假设)|(?:没有|并未|未曾|不能|不应|不可).{0,16}(?:完成|发送|创建|打开|播放|执行)|\b(?:did\s+not|didn't|cannot|can't|if|for\s+example)\b/iu.test(clause) // i18n-allow: reviewed execution-claim input recognition.
       && !/(?:你|他|她|它|用户|模型|系统|文档|消息).{0,10}(?:说|声称|表示|写着|显示|回复|提到).{0,24}(?:已|已经|成功)|\b(?:you|they|the\s+(?:model|system|message|document))\s+(?:said|claimed|reported|shows?)\b/iu.test(clause)) // i18n-allow: reviewed reported-speech input recognition.
     .join('\n');
   if (!positive) return '';
@@ -255,8 +258,7 @@ export function groundedVerifiedDocumentObservation(
     return null;
   }
   const record = [...(input.toolRecords || [])].reverse().find(candidate => (
-    VERIFIED_DOCUMENT_OBSERVATION_TOOL_RE.test(String(candidate.name || ''))
-    && isVerifiedCurrentTurnRecord(input, candidate)
+    isVerifiedCurrentTurnRecord(input, candidate)
     && isSuccessfulExactDocumentRead(candidate)
     && documentReadMatchesRequestedTarget(candidate, task, input.flow?.acceptedTaskTarget, input.flow?.currentAttachmentPaths)
   ));
@@ -265,12 +267,15 @@ export function groundedVerifiedDocumentObservation(
   // In particular, preserve a blocked shared-loop verdict instead of saving
   // its "not complete" text under a completed assistant receipt.
   if (input.completionGuard?.blocked) return { ...input.completionGuard };
+  const contract = taskActionContract(input);
+  if (contract.applies && !hasResultCoreActionEvidence(input, contract, input.toolRecords || [], task)) return null;
   const response = String(input.responseText || '').trim();
+  const rawReadOnly = response.replace(/\s+/gu, '') === String(record.result || '').replace(/\s+/gu, '');
   if (unsupportedRealWorldClaim(input)) return null;
   const unusableNarration = !response
-    || isInternalRuntimeWorkNarration(response)
+    || !rawReadOnly && (isInternalRuntimeWorkNarration(response)
     // i18n-allow: Chinese stale/internal blocked-result recognition; not user-visible copy.
-    || /(?:^|\n)\s*(?:状态\s*[：:]\s*(?:受阻|失败)|这(?:次|项操作)还没完成|没有取得可用的分析结果)|(?:尚未|还没|没有|未能|无法).{0,16}(?:完成|算出|计算|给出结果)|\b(?:blocked|execution_recovery_incomplete|not (?:yet )?complete|no (?:usable )?result)\b/iu.test(response);
+    || /(?:^|\n)\s*(?:状态\s*[：:]\s*(?:受阻|失败)|这(?:次|项操作)还没完成|没有取得可用的分析结果)|(?:尚未|还没|没有|未能|无法).{0,16}(?:完成|算出|计算|给出结果)|\b(?:blocked|execution_recovery_incomplete|not (?:yet )?complete|no (?:usable )?result)\b/iu.test(response));
   // A verified read is terminal for a plain read/view request. It is only an
   // intermediate step when the user asked Lumi to interpret or synthesize the
   // document and no usable analysis prose was produced.
@@ -280,7 +285,6 @@ export function groundedVerifiedDocumentObservation(
   const analysisRequested = calculationRequested || /(?:分析|审查|审阅|总结|概括|提炼|解读|\b(?:review|analy[sz]e|summari[sz]e|interpret|synthesize)\b)/iu.test(instruction);
   const calculationOutput = /(?:金额|总额|合计|总计|结果|[=×]|\b(?:amount|total|result)\b)[^\r\n]{0,100}(?:\d|[零一二三四五六七八九十百千万])|^\s*[-+]?\d+(?:\.\d+)?\s*(?:元|美元|USD|CNY)?[。.!！]?\s*$/iu.test(response); // i18n-allow: returned calculation data, not tool-count or path digits.
   const onlyReadAcknowledgment = /^(?:(?:已|已经|成功|完成|文件|内容|数据|读取|阅读|查看|检查|核验|验证|完毕|任务|操作|read|file|content|verified|completed|successfully|done)|[\s。.!！,，:：;；-])+$/iu.test(response);
-  const rawReadOnly = response.replace(/\s+/gu, '') === String(record.result || '').replace(/\s+/gu, '');
   const analysisMissing = analysisRequested && (unusableNarration || onlyReadAcknowledgment || rawReadOnly || (calculationRequested && !calculationOutput));
   return {
     text: unusableNarration || analysisMissing
@@ -439,6 +443,24 @@ function hasVerifiedOngoingExecutionReceipt(input: LumiResultFinalizerInput): bo
   });
 }
 
+export function withoutUnsupportedOngoingExecutionTail(
+  input: LumiResultFinalizerInput,
+  preservedTexts: readonly string[],
+): string {
+  const response = String(input.responseText || '');
+  const match = STANDALONE_ONGOING_EXECUTION_CLAIM.exec(response.trimEnd());
+  if (!match || !unsupportedOngoingExecutionClaim(input, true)) return response;
+  const start = match.index + match[0].length - match[1].length;
+  if (preservedTexts.some(body => {
+    if (!body) return false;
+    for (let at = response.indexOf(body); at >= 0; at = response.indexOf(body, at + 1)) {
+      if (at < response.trimEnd().length && at + body.length > start) return true;
+    }
+    return false;
+  })) return response;
+  return response.slice(0, start);
+}
+
 export function unsupportedOngoingExecutionClaim(
   input: LumiResultFinalizerInput,
   includeActionPlans = true,
@@ -456,7 +478,7 @@ export function unsupportedOngoingExecutionClaim(
   // “正在执行——”. At finalization that wording is truthful only when a durable
   // background execution receipt still reports an active run.
   // i18n-allow: Reviewed multilingual execution-status recognition; not user-visible copy.
-  const claimsStandaloneOngoing = /(?:^|[\n。！？.!?])\s*正在\s*(?:执行|操作|处理|调用|修复|重启)[—\-\s。！!]*$/iu.test(response);
+  const claimsStandaloneOngoing = STANDALONE_ONGOING_EXECUTION_CLAIM.test(response);
   // General first-person execution promises are handled by the shared
   // completion guard below, which already excludes quoted explanations and
   // reflective self-assessment. This narrow check covers the distinct false

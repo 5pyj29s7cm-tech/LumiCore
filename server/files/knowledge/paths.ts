@@ -6,10 +6,11 @@ import { spawn } from "child_process";
 import { isPathInsideRoot } from '../../../shared/file_identity';
 import { readKnowledgeFileState } from "../knowledge_state";
 import { getDataPath, getGeneratedOutputDir } from "../../config/data_path";
-import { collectChatArtifacts } from "../../conversation/chat_artifacts";
+import { collectChatArtifacts, artifactContentSnapshot, publicArtifactSnapshotDelivery } from "../../conversation/chat_artifacts";
 import { sameArtifactPath } from "../../tools/artifact_evidence";
 import { GENERATED_FILE_EXTS } from './formats';
 import { getFileScope } from './ownership';
+import type { FileScope } from './contracts';
 
 export const PERSONAL_KNOWLEDGE_DIR = getDataPath('knowledge');
 
@@ -43,9 +44,18 @@ export function resolveGeneratedDownloadPath(value: unknown, req?: Request): str
   }
   const generatedRoot = fs.realpathSync.native(getGeneratedOutputDir());
   const realPath = fs.realpathSync.native(resolved);
+  const disclosure = publicArtifactSnapshotDelivery(artifactContentSnapshot(realPath), realPath,
+    { ...(req?.user?.orgId ? { domain: 'work', orgId: req.user.orgId } : { userId: req?.user?.uid, domain: 'personal' }),
+      conversationId: String(req?.query.conversationId || '') || undefined });
+  if (disclosure.deliveryBlocked) throw Object.assign(new Error('This generated file is not available for public delivery.'), { status: 403 });
   // Scope conversation links to actual server-owned output receipts, including
   // files saved outside the shared output directory. Prose grants no access.
   const conversationId = String(req?.query.conversationId || '').trim();
+  // Reject redirected parents for any receipt-backed output.
+  let redirected = false;
+  for (let entry = resolved; path.dirname(entry) !== entry; entry = path.dirname(entry)) {
+    if (fs.lstatSync(entry).isSymbolicLink()) { redirected = true; break; }
+  }
   if (conversationId) {
     const db = readKnowledgeFileState();
     const conv = (db.conversations || []).find((item: any) => item.id === conversationId && item.userId === req?.user?.uid);
@@ -54,11 +64,6 @@ export function resolveGeneratedDownloadPath(value: unknown, req?: Request): str
       item.conversationId === conversationId && item.userId === req?.user?.uid
       && (item.role === 'assistant' || Boolean(item.response))
       && collectChatArtifacts(item.toolCalls, conversationId).some(artifact => sameArtifactPath(artifact.path, resolved)));
-    // Reject redirected symlinks/junctions, including a replaced output parent.
-    let redirected = false;
-    for (let entry = resolved; path.dirname(entry) !== entry; entry = path.dirname(entry)) {
-      if (fs.lstatSync(entry).isSymbolicLink()) { redirected = true; break; }
-    }
     if (!ownedOutput || redirected) {
       throw Object.assign(new Error('File is not a verified output of this conversation'), { status: 403 });
     }
@@ -72,8 +77,8 @@ export function resolveGeneratedDownloadPath(value: unknown, req?: Request): str
   return realPath;
 }
 
-export function resolveKnowledgeFilePath(req: Request, idValue: unknown): string {
-  const scope = getFileScope(req);
+export function resolveKnowledgeFilePath(req: Request | FileScope, idValue: unknown): string {
+  const scope = 'dir' in req ? req : getFileScope(req);
   const safeName = path.basename(String(idValue || '').trim());
   if (!safeName) {
     const err: any = new Error('id is required');

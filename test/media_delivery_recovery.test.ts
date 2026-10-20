@@ -233,6 +233,7 @@ it('publishes a valid video but rejects a 16-byte header without publishing a ve
   upsertUserPreferredGenerationModels(uid, { video: { provider: 'relay', model: 'huawei_maas/Wan2.2-T2V-A14B' } });
   let providerBytes = VALID_MP4;
   const mock = vi.fn(async (input: string | URL | Request) => {
+    if (String(input) === 'https://relay.invalid/v1/models') return json({ data: [{ id: 'huawei_maas/Wan2.2-T2V-A14B', capability: 'video_generation' }] });
     if (String(input) !== 'https://relay.invalid/v1/videos/generations') throw new Error('Unexpected provider request');
     return json({ video_base64: `data:video/mp4;base64,${providerBytes.toString('base64')}` });
   }); vi.stubGlobal('fetch', mock);
@@ -245,8 +246,10 @@ it('publishes a valid video but rejects a 16-byte header without publishing a ve
   expect(response.status).toBe(200); expect(Buffer.from(await response.arrayBuffer())).toEqual(VALID_MP4);
   providerBytes = Buffer.from([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 0, 0, 0, 0]);
   const before = fs.readdirSync(getGeneratedOutputDir()).sort(); const original = context(); const args = { prompt: 'Synthetic broken provider result' };
-  await expect(registry.execute('generate_video', args, original)).rejects.toThrow(/container validation failed/);
+  const incomplete = JSON.parse(await registry.execute('generate_video', args, original));
+  expect(incomplete).toMatchObject({ status: 'unknown', verified: false, recoveryTool: 'get_video_generation_status' });
+  expect(incomplete).not.toHaveProperty('outputPath');
   expect(fs.readdirSync(getGeneratedOutputDir()).sort()).toEqual(before);
   await expect(registry.execute('generate_video', args, original)).rejects.toThrow(/automatic resend was stopped/);
-  expect(mock).toHaveBeenCalledTimes(2);
+  expect(mock.mock.calls.filter(call => String(call[0]).endsWith('/videos/generations'))).toHaveLength(2);
 });

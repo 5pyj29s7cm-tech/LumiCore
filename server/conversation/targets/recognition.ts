@@ -2,7 +2,7 @@
 
 export const FILE_EXTENSIONS = '(?:pptx?|docx?|xlsx?|pdf|txt|md|csv|json|png|jpe?g|gif|svg|dwg|dxf|zip)';
 
-export const FILE_NAME_RE = new RegExp(`([^\\\\/\\r\\n，,;；"'“”‘’]{1,180}\\.${FILE_EXTENSIONS})`, 'iu');
+export const FILE_NAME_RE = new RegExp("(?:[\"'“‘]|(?=[A-Za-z0-9_@.+~-][^\\\\/\\s，,;；:：()（）\\[\\]{}=\"'“”‘’。！？!?]*\\." + FILE_EXTENSIONS + "(?![A-Za-z0-9_-]|\\.[A-Za-z0-9_.-])))([^\\\\/\\r\\n，,;；:：()（）\\[\\]{}=\"'“”‘’。！？!?]{1,180}?\\." + FILE_EXTENSIONS + ")(?![A-Za-z0-9_-]|\\.[A-Za-z0-9_.-])", 'iu');
 
 export const ABSOLUTE_FILE_RE = new RegExp(`(?:[A-Za-z]:[\\\\/]|\\\\\\\\)[^\\r\\n，,；;。！？!?"'“”‘’]{1,420}\\.${FILE_EXTENSIONS}`, 'iu');
 

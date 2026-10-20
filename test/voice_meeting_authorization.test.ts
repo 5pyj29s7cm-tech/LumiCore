@@ -48,7 +48,7 @@ vi.mock('../server/conversation/manager', async original => {
     return actual.convergeForegroundRequestBeforeRelease(...args);
   } };
 });
-vi.mock('../server/stt/file_transcription', () => ({ transcribeAudioFile: (...args: any[]) => mocks.transcribe(...args) }));
+vi.mock('../server/stt/file_transcription', async original => ({ ...await original<typeof import('../server/stt/file_transcription')>(), transcribeAudioFile: (...args: any[]) => mocks.transcribe(...args) }));
 vi.mock('../server/tts/adapter', async original => ({
   ...await original<typeof import('../server/tts/adapter')>(),
   getActiveProvider: () => null,
@@ -162,7 +162,7 @@ function meetingUi(socket: FixtureSocket) {
   const common: Record<string, any> = {
     crypto, Date,
     lang: 'en', meetingPreferenceScopeKey: 'fixture-scope', meetingStartedAt: state.startedAt, meetingStorageKeys: { report: 'report', notes: 'notes', startedAt: 'started' },
-    setMeetingNotes: (value: any) => { state.notes = typeof value === 'function' ? value(state.notes) : value; },
+    setMeetingNotes: (value: any) => { state.notes = typeof value === 'function' ? value(state.notes) : value; state.persisted = state.notes; },
     setMeetingSpeakerCount: vi.fn(), setMeetingReport: (value: string) => { state.report = value; },
     setMeetingStartedAt: (value: any) => { state.startedAt = typeof value === 'function' ? value(state.startedAt) : value; },
     persistMeetingNotes: (notes: any[]) => { state.persisted = notes; },
@@ -172,7 +172,10 @@ function meetingUi(socket: FixtureSocket) {
     meetingModeRef: { current: true }, meetingPausedRef: { current: false },
     meetingIdentityRef: { current: { scope: 'fixture-scope', meetingId: '', refinementId: '' } },
     meetingRefinementCancelRef: { current: null }, meetingCaptureResetRef: { current: null },
-    setMeetingReportGenerating: vi.fn(),
+    setMeetingReportGenerating: vi.fn(), meetingReportGenerating: false, meetingExportBusy: false,
+    operationMode: 'meeting', meetingPaused: true, copy: { newConfirm: 'Create new record' },
+    window: { confirm: vi.fn(() => true) }, pauseMeetingCapture: vi.fn(),
+    createMeetingRecord: () => { common.renewMeetingIdentity(); state.notes = []; state.persisted = []; state.report = ''; return true; },
   };
   common.renewMeetingIdentity = realDesktopCallback('renewMeetingIdentity', common);
   const apply = realDesktopCallback('applyRefinedMeetingTranscript', common);
@@ -185,7 +188,7 @@ function meetingUi(socket: FixtureSocket) {
     const identity = { scope: 'fixture-scope', meetingId, refinementId: `refine-${meetingId}` };
     common.meetingIdentityRef.current = identity;
     return wait(identity);
-  }, identity: common.meetingIdentityRef, resetCapture: common.meetingCaptureResetRef, clear: realDesktopCallback('clearMeetingNotes', common), events };
+  }, identity: common.meetingIdentityRef, resetCapture: common.meetingCaptureResetRef, clear: realDesktopCallback('clearMeetingNotes', common), clearWhileBusy: realDesktopCallback('clearMeetingNotes', { ...common, meetingReportGenerating: true }), events };
 }
 
 describe('voice organization authority through actual STT and model pipeline', () => {
@@ -300,7 +303,7 @@ describe('meeting capture ownership and complete paused recordings', () => {
     const firstWaiter = ui.wait('meeting-before-clear');
     await socket.receive('audio:stop', { sessionId: 'meeting-before-clear', refineTranscript: true, refinementId: ui.identity.current.refinementId });
     expect(mocks.transcribe).toHaveBeenCalledOnce();
-    ui.clear(); // The real Clear button is enabled even while reportGenerating.
+    ui.clear(); // The prepared, paused owner creates a fresh record and invalidates the prior refinement.
     expect(ui.state.notes).toEqual([]);
     await socket.receive('audio:start', start('meeting-after-clear', true));
     await socket.receive('audio:chunk', Buffer.alloc(16000, 0x44));
@@ -315,6 +318,16 @@ describe('meeting capture ownership and complete paused recordings', () => {
     expect(ui.state.persisted.map(note => note.text)).toEqual(['CURRENT MEETING NOTES']);
     const event = socket.outputs.find(([name]) => name === 'meeting:refined_transcript')![1];
     expect(event).toMatchObject({ sessionId: 'meeting-before-clear', meetingId: 'meeting-before-clear', refinementId: 'refine-meeting-before-clear' });
+  });
+
+  it('cannot clear an active report while the matching refinement still owns the record', async () => {
+    const { socket } = fixture(); const ui = meetingUi(socket);
+    const completed = ui.wait('busy-report'), identity = ui.identity.current;
+    ui.clearWhileBusy();
+    expect(ui.identity.current).toBe(identity);
+    socket.client.emit('meeting:refined_transcript', { ...identity, text: 'CURRENT REPORT RECORD' });
+    expect((await completed)[0].text).toBe('CURRENT REPORT RECORD');
+    expect(ui.state.notes.map(note => note.text)).toEqual(['CURRENT REPORT RECORD']);
   });
 
   it('pause/resume keeps both PCM segments and refines the complete meeting', async () => {

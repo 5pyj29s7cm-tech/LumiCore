@@ -20,6 +20,8 @@ import {
 } from './tool_intent';
 import { hasVisionIntent } from './vision_routing';
 import { resolveWorkSurfaceRoute } from './work_surface';
+import { getStoredDesktopExecutionPreference } from './operation_mode_store';
+import type { DesktopExecutionPreference } from '../../shared/operation_modes';
 import { matchSkillWorkflow, type SkillWorkflowDescriptor } from '../skills/workflow_registry';
 import { needsCompletionEvidence } from '../work_product/completion_guard';
 import {
@@ -95,6 +97,7 @@ export interface LumiTurnFlow {
   selfRepairTurn: boolean;
   clientActionOnlyTurn: boolean;
   visionIntent: boolean;
+  desktopExecutionPreference?: DesktopExecutionPreference;
   workSurfaceRoute: ReturnType<typeof resolveWorkSurfaceRoute>;
   workTakeover: WorkTakeoverContinuityContext;
   /** Matched reusable workflow exposed to the model as a capability hint. */
@@ -393,6 +396,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     surface,
   });
   const currentActionContract = analysis.contract(input.text);
+  const currentActionIntent = analysis.intent(input.text);
   const rawClientActionIntent = !conceptualCapabilityQuestion
     && !explicitNoToolInstruction
     && !currentActionContract.components?.length
@@ -404,6 +408,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   // i18n-allow: A standalone Chinese completed-action acknowledgement has no new instruction.
   const completedActionAcknowledgement = /^(?:已经|已)?(?:打开|关闭|保存|发送|完成)(?:好)?了[。.!！\s]*$/u.test(input.text);
   const readOnlyConversationTurn = completedActionAcknowledgement || isStoredMemoryRecallQuestion(input.text)
+    || !statusOnlyContinuation && currentActionIntent.kind === 'status_query' && currentActionIntent.target === 'previous_action'
     || isConversationalProductFeedback(input.text, analysis)
     || (
       explicitNoMutationInstruction
@@ -438,7 +443,6 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     && isDiagnosticOrRepairRequest(input.text, analysis);
   const clientActionOnlyTurn = !selfRepairTurn && clientActionIntent;
   const visionIntent = hasVisionIntent(routingText);
-  const workSurfaceRoute = resolveWorkSurfaceRoute(routingText, currentAppEditTarget);
   const recoveredCurrentAppEdit = Boolean(currentAppEditTarget);
   const allowToolUseForTurn = immediateAssistantRestatement || explicitNoToolInstruction || readOnlyConversationTurn
     ? false
@@ -452,6 +456,9 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
           continuationMayDriveAction ||
           workTakeover.shouldResumeTask ||
           shouldAllowToolUseForTurn(input.text, input.source, effectiveOperationMode, analysis);
+  const desktopExecutionPreference = getStoredDesktopExecutionPreference(input.userId);
+  const workSurfaceRoute = resolveWorkSurfaceRoute(routingText, currentAppEditTarget,
+    allowToolUseForTurn && !clientActionOnlyTurn && !selfRepairTurn ? desktopExecutionPreference : 'internal');
   // Legacy action detection still describes the likely lane, but it no longer
   // decides whether the main chat model can inspect/use the manifest. Only
   // explicit no-tool/read-only/status/meeting boundaries turn model access off.
@@ -521,6 +528,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     selfRepairTurn,
     clientActionOnlyTurn,
     visionIntent,
+    desktopExecutionPreference,
     workSurfaceRoute,
     workTakeover,
     workflowHint: matchedWorkflow,

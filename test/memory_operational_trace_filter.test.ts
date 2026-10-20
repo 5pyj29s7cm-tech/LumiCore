@@ -41,7 +41,11 @@ function addTraceProbeMemories(
     sourceInteractionId: `legacy_${token}`,
   }, { source: 'import' });
 
-  return { normal, sourceTaggedTrace, contentTaggedTrace };
+  const greetings = ['shared_memory', 'lumi_self'].map((perspective, index) => addMemory({
+    ...common, content: `[Greeting] ${token} generated welcome ${index}`,
+    sourceInteractionId: `greeting_${token}_${index}`,
+  }, { source: 'voice', perspective: perspective as 'shared_memory' | 'lumi_self' }));
+  return { normal, sourceTaggedTrace, contentTaggedTrace, greetings };
 }
 
 describe('operational memory trace filtering', () => {
@@ -57,7 +61,7 @@ describe('operational memory trace filtering', () => {
   it('excludes legacy execution traces from keyword and consolidation recall by default', () => {
     const token = `tracekeyword${Date.now()}${Math.random().toString(36).slice(2)}`;
     const userId = `memory-${token}`;
-    const { normal, sourceTaggedTrace, contentTaggedTrace } = addTraceProbeMemories(userId, token);
+    const { normal, sourceTaggedTrace, contentTaggedTrace, greetings } = addTraceProbeMemories(userId, token);
 
     const defaultResults = queryMemories({ userId, query: token, limit: 10 });
     expect(defaultResults.map(memory => memory.id)).toEqual([normal.id]);
@@ -72,17 +76,18 @@ describe('operational memory trace filtering', () => {
       normal.id,
       sourceTaggedTrace.id,
       contentTaggedTrace.id,
+      ...greetings.map(memory => memory.id),
     ]));
 
     expect(getUnconsolidatedEpisodic(userId).map(memory => memory.id)).toEqual([normal.id]);
     expect(new Set(getUnconsolidatedEpisodic(userId, undefined, undefined, true).map(memory => memory.id)))
-      .toEqual(new Set([normal.id, sourceTaggedTrace.id, contentTaggedTrace.id]));
+      .toEqual(new Set([normal.id, sourceTaggedTrace.id, contentTaggedTrace.id, ...greetings.map(memory => memory.id)]));
   });
 
   it('applies the same default and explicit behavior to vector recall', async () => {
     const token = `tracevector${Date.now()}${Math.random().toString(36).slice(2)}`;
     const userId = `memory-${token}`;
-    const { normal, sourceTaggedTrace, contentTaggedTrace } = addTraceProbeMemories(
+    const { normal, sourceTaggedTrace, contentTaggedTrace, greetings } = addTraceProbeMemories(
       userId,
       token,
       [1, 0, 0],
@@ -122,6 +127,7 @@ describe('operational memory trace filtering', () => {
       normal.id,
       sourceTaggedTrace.id,
       contentTaggedTrace.id,
+      ...greetings.map(memory => memory.id),
     ]));
   });
 

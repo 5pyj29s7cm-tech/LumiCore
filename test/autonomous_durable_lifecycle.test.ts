@@ -1,7 +1,12 @@
 import './helpers';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {encodeToolResult} from '../server/tools/result_envelope';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ model: vi.fn(), failFlush: false, flushGate: null as Promise<void> | null }));
+const mocks = vi.hoisted(() => ({ model: vi.fn(), failFlush: false, flushGate: null as Promise<void> | null, finalSaveGate: null as Promise<void> | null, gateTaskId: '' }));
 vi.mock('../server/llm/providers', async () => ({
   ...await vi.importActual<typeof import('../server/llm/providers')>('../server/llm/providers'),
   makeLLMCall: mocks.model,
@@ -14,6 +19,7 @@ vi.mock('../db_layer', async () => {
   const actual = await vi.importActual<typeof import('../db_layer')>('../db_layer');
   return { ...actual, flushDBOrThrow: async () => {
     if (mocks.failFlush) throw new Error('synthetic durability failure');
+    if (mocks.finalSaveGate && (await import('../server/autonomy/task_finalization')).isAutonomousTaskFinalizationPending(mocks.gateTaskId)) mocks.flushGate = mocks.finalSaveGate;
     if (mocks.flushGate) await mocks.flushGate;
     await actual.flushDBOrThrow();
   } };
@@ -71,7 +77,7 @@ function fixture() {
 
 beforeEach(async () => {
   mocks.failFlush = false;
-  mocks.flushGate = null;
+  mocks.flushGate = null; mocks.finalSaveGate = null; mocks.gateTaskId = '';
   mocks.model.mockReset();
   resetRealtimeUserActivityForTests();
   await initDatabase();
@@ -365,13 +371,15 @@ describe('autonomous work sharing a conversation admission', () => {
     const f = await anchoredTask();
     const foreground = reserveConversationExecution({ ...f.scope, source: 'chat' }, 'foreground-anchor');
     await foreground.waitForTurn();
-    const handler = vi.fn(async () => 'File written: synthetic.txt (4 bytes)');
+    const fixturePath=path.join(os.tmpdir(),'lumi-autonomy-final-save-'+randomUUID()+'.txt');
+    const handler=vi.fn(async (args:Record<string,string>)=>{await fs.writeFile(args.path,args.content);expect(await fs.readFile(args.path,'utf8')).toBe(args.content);return encodeToolResult('File written: '+args.path+' (4 bytes)',{ok:true,status:'written',filePath:args.path});});
     toolRegistry.register({ name: 'write_file', description: 'Write a local text report', permission: 'public', securityLevel: 'safe',
       parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] }, handler });
     let releaseSave!: () => void;
     const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
-    mocks.model.mockResolvedValueOnce({ text: '', toolCalls: [{ id: 'anchored-write', name: 'write_file', arguments: { path: 'synthetic.txt', content: 'text' } }] })
-      .mockImplementation(async () => { mocks.flushGate = saveGate; return { text: 'The report is ready.', toolCalls: [] }; });
+    mocks.finalSaveGate = saveGate; mocks.gateTaskId = f.queued.id;
+    mocks.model.mockResolvedValueOnce({ text: '', toolCalls: [{ id: 'anchored-write', name: 'write_file', arguments: { path: fixturePath, content: 'text' } }] })
+      .mockImplementation(async () => ({ text: 'The report is ready.', toolCalls: [] }));
     const pending = executeNextAutonomousTask(io, { getDeepSeek: () => null, getGemini: () => null }, owner);
     let next: ReturnType<typeof reserveConversationExecution> | undefined;
     try {
@@ -392,7 +400,7 @@ describe('autonomous work sharing a conversation admission', () => {
       expect(entered).toBe(true);
       expect(handler).toHaveBeenCalledOnce();
       expect(mocks.model.mock.calls[0][2].conversationId).toBe(f.conversation.id);
-    } finally { releaseSave(); foreground.release(); await pending; next?.release(); }
+    } finally { releaseSave(); foreground.release(); await pending; next?.release(); await fs.rm(fixturePath,{force:true}); }
   });
 
   it('cancels queued autonomous work before any model or tool starts', async () => {

@@ -36,7 +36,7 @@ type WindowFingerprint = DesktopWindowFingerprint & {
   displayId?: string;
 };
 
-const CONTROL_TOOL_RE = /^(?:client_(?:get_state|action)|desktop_(?:open|show_lumi_window|window_control|active_window|list_apps|ui_|capture_screen|mouse_|keyboard_|run_command)|mouse_(?:move|click|drag)|keyboard_(?:type|press)|computer_use|run_command|powershell|shell_exec|terminal_exec|wechat_(?:read_recent_chat|send_message)|cad_(?:prepare_autocad_operations|draw_floorplan_in_autocad)|mcp_cad-drafting_autocad_|wps_create_document_with_text|desktop_ai_ask)/i;
+const CONTROL_TOOL_RE = /^(?:desktop_(?:open|show_lumi_window|window_control|active_window|list_apps|ui_|capture_screen|mouse_|keyboard_|run_command)|mouse_(?:move|click|drag)|keyboard_(?:type|press)|computer_use|run_command|powershell|shell_exec|terminal_exec|wechat_(?:read_recent_chat|send_message)|cad_(?:prepare_autocad_operations|draw_floorplan_in_autocad)|mcp_cad-drafting_autocad_|wps_create_document_with_text|desktop_ai_ask)/i;
 
 function digest(value: unknown): string {
   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -90,7 +90,7 @@ function fingerprintInvalidatesVisualPlan(before: WindowFingerprint | null, afte
 type RuntimeCapabilityDescriptor = Pick<
   CapabilityManifestEntry,
   'lane' | 'operation' | 'sideEffects'
->;
+> & Partial<Pick<CapabilityManifestEntry, 'family'>>;
 
 function isSafeObservationCapability(capability?: RuntimeCapabilityDescriptor): boolean {
   return Boolean(
@@ -115,6 +115,7 @@ function isDesktopRuntimeCapability(
   toolName: string,
   capability?: RuntimeCapabilityDescriptor,
 ): boolean {
+  if (capability?.lane === 'client') return false;
   if (CONTROL_TOOL_RE.test(toolName)) return true;
   if (!capability) return false;
   // Office/CAD/messaging also contain background file and API capabilities.
@@ -122,12 +123,14 @@ function isDesktopRuntimeCapability(
   return capability.sideEffects.some(effect => effect.type === 'desktop_control');
 }
 
-function isFocusOrOpenCapability(toolName: string): boolean {
+function isFocusOrOpenCapability(toolName: string, capability?: RuntimeCapabilityDescriptor): boolean {
   const segments = toolName.toLocaleLowerCase().split('_').filter(Boolean);
   return segments.includes('open')
     || segments.includes('focus')
     || segments.join('_') === 'desktop_show_lumi_window'
-    || segments.join('_') === 'desktop_window_control';
+    || segments.join('_') === 'desktop_window_control'
+    || (capability?.family === 'web_login' && capability.lane === 'web'
+      && capability.operation === 'mutate' && !isExternalCommitCapability(capability));
 }
 
 /**
@@ -148,7 +151,7 @@ function stepForTool(
     return plan.steps.find(step => step.operation === 'observe')
       || plan.steps.find(step => step.operation === 'verify');
   }
-  if (isFocusOrOpenCapability(toolName)) {
+  if (isFocusOrOpenCapability(toolName, capability)) {
     return plan.steps.find(step => step.operation === 'focus_or_open');
   }
   if (isExternalCommitCapability(capability)) {
@@ -259,12 +262,8 @@ export class DesktopExecutionTracker {
       // and it must neither consume nor renew the last input lease.
       if (!fingerprint) return;
       const fingerprintInvalidated = fingerprintInvalidatesVisualPlan(this.lastFingerprint, fingerprint);
-      const identityAssessment = this.plan.application.family === 'lumi'
-        ? null
-        : assessDesktopApplicationIdentity(fingerprint, this.plan.application);
-      const matched = this.plan.application.family === 'lumi'
-        ? record.name === 'client_get_state' && verified
-        : this.plan.application.family === 'unknown'
+      const identityAssessment = assessDesktopApplicationIdentity(fingerprint, this.plan.application);
+      const matched = this.plan.application.family === 'unknown'
           ? desktopFingerprintMatchesRequestedTarget(
               fingerprint,
               this.plan.expectedWindow.requestedTarget,

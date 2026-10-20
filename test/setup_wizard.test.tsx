@@ -8,6 +8,7 @@ import { useLocalModelConfig } from '../src/hooks/useLocalModelConfig';
 import { extractSourceExpression } from './source_expression';
 import { apiJson } from '../src/services/apiClient';
 import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../shared/model_provider_capabilities';
+import { mediaGenerationCopy } from '../src/i18n/locales/mediaGeneration';
 const fixture = vi.hoisted(() => ({ net: vi.fn(), update: vi.fn(), save: vi.fn(), speak: vi.fn(), connect: vi.fn(), reload: vi.fn(), aiConfig: { ready: true, loadError: '' } }));
 vi.mock('../src/contexts/AppContext', () => ({ useApp: () => ({ aiConfig: fixture.aiConfig, updateAIConfig: fixture.update, reloadModelPreferences: fixture.reload }) }));
 vi.mock('../src/lib/useT', () => ({ useT: () => ({}), useLocale: () => 'en' }));
@@ -137,7 +138,14 @@ function modelPage(name: string, context: any = {}) {
   const deps: any = { React, useState: React.useState, useEffect: React.useEffect, useRef: React.useRef, useCallback: React.useCallback, AbortController, AbortSignal, localStorage, toast,
     apiFetch: fixture.net, apiJson, runModelConnectionTest: fixture.connect, useApp: () => ({ updateAIConfig: fixture.update, ...context }),
     uiMessage: (key: string) => key.split('.')[1], formatUiMessage: (key: string) => key.split('.')[1],
-    LUMI_OFFICIAL_PROVIDER_ID: 'relay', LUMI_OFFICIAL_DEFAULT_MODELS, useLumiOfficialCatalog: () => null, officialModelOptions: (_: any, __: any, fallback: any) => fallback, lumiOfficialApiLabel: () => 'Lumi',
+    LUMI_OFFICIAL_PROVIDER_ID: 'relay', LUMI_OFFICIAL_DEFAULT_MODELS, mediaGenerationCopy,
+    useLumiOfficialCatalog: () => context.officialCatalog !== undefined ? context.officialCatalog : ({ byRole: {
+      image_generation: [LUMI_OFFICIAL_DEFAULT_MODELS.image_generation],
+      image_edit: [LUMI_OFFICIAL_DEFAULT_MODELS.image_edit],
+      video_generation: [LUMI_OFFICIAL_DEFAULT_MODELS.video_generation],
+      image_to_video: [LUMI_OFFICIAL_DEFAULT_MODELS.image_to_video],
+    } }),
+    officialModelOptions: (catalog: any, role: string, fallback: any) => catalog?.byRole[role] || fallback, lumiOfficialApiLabel: () => 'Lumi',
     LumiOfficialCapabilityBadge: () => null, SettingsSection: ({ children }: any) => <div>{children}</div>, Button: (props: any) => <button {...props} />,
     GenerationModelInput: ({ id, value, onChange }: any) => <input aria-label={id} value={value} onChange={event => onChange(event.target.value)} />,
     ...Object.fromEntries(['Globe', 'Search', 'BrainCircuit', 'Sparkle', 'Save', 'Zap', 'Loader2'].map(icon => [icon, () => null])),
@@ -210,14 +218,14 @@ it.each(['saved', 'rejected', 'edited', 'closed', 'pinned'])('reasoning tests us
   const context = { aiConfig: { provider: 'openai', model: 'old-model', selectionMode: outcome === 'pinned' ? 'pinned' : 'ordered_fallback', fallbackCandidates: [{ provider: 'ollama', model: 'backup' }], allowCloudFallback: false } };
   const { Page } = modelPage('ReasoningRoleSettings', context), view = render(<Page />), input = screen.getByLabelText('reasoning-role-openai');
   fireEvent.change(input, { target: { value: 'new-model' } });
-  const saved = deferred(); fixture.update.mockReturnValueOnce(saved.promise); act(() => { fireEvent.click(button('test')); fireEvent.click(button('test')); });
-  if (outcome === 'pinned') { await screen.findByText('live-call-passed-value0-ms'); expect(fixture.update).not.toHaveBeenCalled(); expect(fixture.connect.mock.calls[0].slice(0, 3)).toEqual(['llm', 'openai', 'new-model']); return; }
+  const saved = deferred(), testLabel = outcome === 'pinned' ? 'test' : 'test-effective-model'; fixture.update.mockReturnValueOnce(saved.promise); act(() => { fireEvent.click(button(testLabel)); fireEvent.click(button(testLabel)); });
+  if (outcome === 'pinned') { await screen.findByText('live-call-passed-value0-ms · model-a'); expect(fixture.update).not.toHaveBeenCalled(); expect(fixture.connect.mock.calls[0].slice(0, 3)).toEqual(['llm', 'openai', 'new-model']); return; }
   expect(fixture.update).toHaveBeenCalledExactlyOnceWith({ model: 'new-model', selectionMode: 'ordered_fallback', fallbackCandidates: [{ provider: 'ollama', model: 'backup' }], allowCloudFallback: false }); expect(fixture.connect).not.toHaveBeenCalled();
   if (outcome === 'edited') fireEvent.change(input, { target: { value: 'newer-draft' } });
   if (outcome === 'closed') view.unmount();
   await act(async () => { if (outcome === 'saved') { context.aiConfig = { ...context.aiConfig, model: 'new-model' }; view.rerender(<Page />); } saved.resolve(outcome !== 'rejected'); });
   expect(fixture.connect).toHaveBeenCalledTimes(outcome === 'saved' ? 1 : 0);
-  if (outcome === 'saved') { await screen.findByText('live-call-passed-value0-ms'); expect(fixture.connect.mock.calls[0][0]).toBe('llm/route'); }
+  if (outcome === 'saved') { await screen.findByText('live-call-passed-value0-ms · model-a'); expect(fixture.connect.mock.calls[0][0]).toBe('llm/route'); }
 });
 
 it('reasoning preserves newer edits across configuration refresh and a pending save confirmation', async () => {
@@ -255,4 +263,15 @@ it('provider rows follow confirmed account models without importing stale browse
   const old = deferred(); fixture.update.mockReturnValueOnce(old.promise); fireEvent.change(input, { target: { value: 'a-draft' } });
   context.user = { uid: 'b' }; context.aiConfig.models = { openai: 'b-model' }; view.rerender(<Row />); const nextInput = await screen.findByRole('combobox'); expect(nextInput).toHaveProperty('value', 'b-model');
   await act(async () => old.resolve(false)); expect(nextInput).toHaveProperty('value', 'b-model');
+});
+
+
+it.each(['unavailable', 'unknown'] as const)('generation refuses to save when the official catalog is %s', async status => {
+  const officialCatalog = status === 'unavailable' ? null : { byRole: { image_generation: [], image_edit: [], video_generation: [], image_to_video: [] } };
+  const { Page, defaults } = modelPage('GenerativeModelsPage', { officialCatalog });
+  fixture.net.mockResolvedValueOnce(reply(defaults.DEFAULT_GENERATION_PREFERENCES));
+  render(<Page />); await screen.findByLabelText('generation-relay-image-edit-model');
+  fireEvent.click(button('save-model-roles'));
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith(status === 'unavailable' ? mediaGenerationCopy('zh').modelCatalogUnavailable : mediaGenerationCopy('zh').modelUnavailable));
+  expect(fixture.net).toHaveBeenCalledTimes(1); expect(toast.success).not.toHaveBeenCalled();
 });

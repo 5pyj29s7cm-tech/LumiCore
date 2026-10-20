@@ -48,6 +48,8 @@ interface ComputerUseAction {
 
 export interface ComputerUseOptions {
   userId?: string;
+  /** The confirmed step or an existing external workspace owns presentation. */
+  desktopPresentationManaged?: boolean;
   desktopRelay: (toolName: string, args: Record<string, any>) => Promise<string>;
   llmGetters: Record<string, () => any>;
   maxIterations?: number;
@@ -625,7 +627,8 @@ export async function computerUseLoop(
     lastActions: actionHistory.slice(-3),
   });
 
-  // ── Enter desktop control: show cursor glow so user sees where Lumi is clicking ──
+  // The existing confirmed-step lease owns presentation when present.
+  if (!options.desktopPresentationManaged) {
   try {
     await options.desktopRelay('desktop_set_wallpaper_mode', {
       enabled: true,
@@ -638,6 +641,7 @@ export async function computerUseLoop(
     options.onProgress?.('Wallpaper mode enabled for desktop control');
   } catch (e: any) {
     options.onProgress?.(`Wallpaper mode unavailable: ${e.message}`);
+  }
   }
 
   try {

@@ -1,3 +1,4 @@
+import { useLumiOfficialCatalog } from '../../../hooks/useLumiOfficialCatalog';
 import { apiJson } from '@/services/apiClient';
 import { videoGenerationOptions } from '../../../../shared/video_generation_options';
 import type { MediaGenerationStudioProps } from '../../MediaGenerationStudio';
@@ -10,9 +11,10 @@ import { normalizeStructuredMediaRequest } from "../../../../shared/media_genera
 import type { useChatRequestControls } from './use_chat_request_controls';
 
 export function useChatMediaControls(previousBindings: ReturnType<typeof useChatRequestControls>) {
-  const { layout, onClose, refreshKnowledgeFiles, activeMediaGenerationRef, mediaStudioOpenRef, setMediaStudioMode, mediaStudioMode, mediaGenerationArtifactsRef, setMediaGenerationArtifacts, setMediaGeneration, isOpen, isOfficeCommandCenter, creationRequestId, onCreationRequestConsumed, setMediaSources, mediaSourceUploading, mediaSourceUploadTargetRef, isTyping, mediaGenerationText, mediaGenerationArtifactValidationRef, setMediaGenerationRetryRequest, isZh, sendText, setMediaSourceUploading, setChatSongOpen, chatSongWorkbenchRef, openChatFile, chatRequestLedgerRef, socket, chatViewWorkRef, setWorkflowStatus, pushChatProgress, chatTurnTimerGuardRef, chatExecutionSource, activeDomain, activeOrgId, attachmentConversationIdRef, prefillMessage, setMessages, agentName, prefillSource, onPrefillConsumed, draftTextRef, pendingAttachments, pendingAttachmentsRef, isListening, inputDictationActiveRef, localVoiceSession, setIsListening, recognition, isElectron, callState, selectedVoiceId, agentId, t, voiceSession } = previousBindings;
+  const { layout, onClose, refreshKnowledgeFiles, activeMediaGenerationRef, mediaStudioOpenRef, setMediaStudioMode, mediaStudioMode, mediaGenerationArtifactsRef, setMediaGenerationArtifacts, setMediaGeneration, isOpen, isOfficeCommandCenter, creationRequestId, onCreationRequestConsumed, setMediaSources, mediaSourceUploadTargetRef, isTyping, mediaGenerationText, mediaGenerationRetryRequest, mediaGenerationArtifactValidationRef, setMediaGenerationRetryRequest, isZh, sendText, setMediaSourceUploading, setChatSongOpen, chatSongWorkbenchRef, openChatFile, chatRequestLedgerRef, socket, chatViewWorkRef, setWorkflowStatus, pushChatProgress, chatTurnTimerGuardRef, chatExecutionSource, activeDomain, activeOrgId, attachmentConversationIdRef, prefillMessage, setMessages, agentName, prefillSource, onPrefillConsumed, draftTextRef, pendingAttachments, pendingAttachmentsRef, isListening, inputDictationActiveRef, localVoiceSession, setIsListening, recognition, isElectron, callState, selectedVoiceId, agentId, t, voiceSession } = previousBindings;
 
 
+  const officialCatalog = useLumiOfficialCatalog();
   const [mediaVideoOptions, setMediaVideoOptions] = useState<MediaGenerationStudioProps['videoOptions']>();
   const [mediaVideoOptionsLoading, setMediaVideoOptionsLoading] = useState(false);
   useEffect(() => {
@@ -20,13 +22,23 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
     const controller = new AbortController();
     setMediaVideoOptions(undefined);
     setMediaVideoOptionsLoading(true);
-    void apiJson<any>('/api/preferences/generation', { signal: controller.signal }).then(preferences => {
-      if (!controller.signal.aborted) setMediaVideoOptions({ text_to_video: videoGenerationOptions(preferences.video), image_to_video: videoGenerationOptions(preferences.imageToVideo) });
-    }).catch(error => {
-      if (!controller.signal.aborted) setMediaGeneration({ status: 'error', detail: error.message });
+    void (async () => {
+      const preferences = await apiJson<any>('/api/preferences/generation', { signal: controller.signal });
+      const selectionOptions = (selection: any, role: 'video_generation' | 'image_to_video') => ({
+        ...(videoGenerationOptions(selection) || { sizes: ['1280x720', '720x1280', '960x960'], durations: [5, 6, 10] }),
+        provider: selection?.provider, model: selection?.model,
+        ...(selection?.provider === 'relay' ? { models: officialCatalog?.byRole[role] || [] } : {}),
+      });
+      if (!controller.signal.aborted) setMediaVideoOptions({ text_to_video: selectionOptions(preferences.video, 'video_generation'), image_to_video: selectionOptions(preferences.imageToVideo, 'image_to_video') });
+    })().catch(error => {
+      if (!controller.signal.aborted) {
+        const unavailable = { sizes: ['1280x720'], durations: [5], models: [] };
+        setMediaVideoOptions({ text_to_video: unavailable, image_to_video: unavailable });
+        setMediaGeneration({ status: 'error', detail: error.message });
+      }
     }).finally(() => { if (!controller.signal.aborted) setMediaVideoOptionsLoading(false); });
     return () => controller.abort();
-  }, [activeDomain, activeOrgId, isOpen, mediaStudioMode, setMediaGeneration]);
+  }, [activeDomain, activeOrgId, isOpen, mediaStudioMode, officialCatalog, setMediaGeneration]);
 
   const openMediaGenerationStudio = useCallback((mode: MediaGenerationKind) => {
     void refreshKnowledgeFiles();
@@ -96,6 +108,7 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
       mediaRequest,
       includeConversationAttachments: false,
       onRequestCreated: requestId => {
+        setMediaGenerationRetryRequest({ ...request, requestId });
         activeMediaGenerationRef.current = {
           requestId,
           mode: request.mode,
@@ -130,6 +143,18 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
       setMediaGeneration({ status: 'error', detail: mediaGenerationText.requestNotCreated });
     });
   }, [activeMediaGenerationRef, isTyping, isZh, mediaGenerationArtifactValidationRef, mediaGenerationArtifactsRef, mediaGenerationText.animateImage, mediaGenerationText.anotherTaskRunning, mediaGenerationText.editImage, mediaGenerationText.generateImage, mediaGenerationText.generateVideo, mediaGenerationText.requestNotCreated, mediaGenerationText.settingsMismatch, sendText, setMediaGeneration, setMediaGenerationArtifacts, setMediaGenerationRetryRequest]);
+
+  const checkMediaGenerationStatus = useCallback(() => {
+    const requestId = mediaGenerationRetryRequest?.requestId;
+    if (!requestId || !socket?.connected) { toast.error(mediaGenerationText.backendLostTask); return; }
+    socket.emit('agent:execution_resume', {
+      requestId, source: chatExecutionSource, domain: activeDomain, orgId: activeOrgId || null,
+      conversationId: attachmentConversationIdRef.current || undefined,
+    }, (result?: { ok?: boolean; snapshot?: { requestId?: string }; error?: string }) => {
+      if (result?.ok === true && result.snapshot?.requestId === requestId) toast.info(mediaGenerationText.statusCheckComplete);
+      else toast.error(result?.error || mediaGenerationText.backendLostTask);
+    });
+  }, [mediaGenerationRetryRequest, socket, mediaGenerationText.backendLostTask, mediaGenerationText.statusCheckComplete, chatExecutionSource, activeDomain, activeOrgId, attachmentConversationIdRef]);
 
   const closeMediaGenerationStudio = useCallback(() => {
     mediaStudioOpenRef.current = false;
@@ -309,7 +334,7 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
     }
   };
   return {
-    ...previousBindings, mediaVideoOptions, mediaVideoOptionsLoading, handleMediaSourceChange, requestCloseCreativeStudio, openMediaGenerationStudio, generateMediaFromStudio,
+    ...previousBindings, mediaVideoOptions, mediaVideoOptionsLoading, handleMediaSourceChange, requestCloseCreativeStudio, openMediaGenerationStudio, generateMediaFromStudio, checkMediaGenerationStatus,
     closeMediaGenerationStudio, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed,
     handleSendMessage, toggleListening, startVoiceSession
   } as const;

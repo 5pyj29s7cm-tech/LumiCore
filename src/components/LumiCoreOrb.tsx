@@ -272,7 +272,7 @@ export function LumiCoreOrb({
     return () => {
       if (animationFrame !== undefined) cancelAnimationFrame(animationFrame);
     };
-  }, [reducedMotion]);
+  }, [reducedMotion, isLightMode]);
 
   const beginDrag = (event: React.MouseEvent | React.TouchEvent) => {
     const point = 'touches' in event ? event.touches[0] : event;

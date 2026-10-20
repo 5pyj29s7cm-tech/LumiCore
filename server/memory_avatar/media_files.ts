@@ -9,7 +9,7 @@ import { MemoryAvatarError } from './store';
 
 // The repository's bundled-skills declaration narrows sharp to one argument.
 // This local call signature retains the installed library's input-pixel guard.
-const boundedSharp = sharp as unknown as (input: string, options: { limitInputPixels: number }) => ReturnType<typeof sharp>;
+const boundedSharp = sharp as unknown as (input: Buffer, options: { limitInputPixels: number }) => ReturnType<typeof sharp>;
 
 export type AvatarMediaKind = 'image' | 'video' | 'audio';
 export const AVATAR_MEDIA_MAX_BYTES = { image: 20 * 1024 ** 2, audio: 30 * 1024 ** 2, video: 200 * 1024 ** 2 };
@@ -54,8 +54,9 @@ export async function probeAvatarMedia(filename: string, signal?: AbortSignal): 
   const webp = header.toString('ascii', 0, 4) === 'RIFF' && header.toString('ascii', 8, 12) === 'WEBP';
   if (png || jpeg || webp) {
     if (size > AVATAR_MEDIA_MAX_BYTES.image) throw mediaError('media_size_limit', 'Images must be at most 20 MiB.', 413);
+    const image = await fs.promises.readFile(filename, { signal });
     let meta: { width?: number; height?: number; pages?: number };
-    try { meta = await boundedSharp(filename, { limitInputPixels: 40_000_000 }).metadata(); }
+    try { meta = await boundedSharp(image, { limitInputPixels: 40_000_000 }).metadata(); }
     catch { throw mediaError('media_decode_failed', 'This image could not be decoded.'); }
     signal?.throwIfAborted();
     if (!meta.width || !meta.height || meta.width * meta.height > 40_000_000 || (meta.pages || 1) > 1) throw mediaError('media_image_limit', 'Use a still image with at most 40 million pixels.');
@@ -86,7 +87,7 @@ export async function createMediaDerivatives(userId: string, avatarId: string, m
   const output: { thumbnail?: string; poster?: string; audio?: string } = {};
   if (probe.kind === 'image') {
     output.thumbnail = avatarMediaPath(userId, avatarId, mediaId, 'thumbnail', 'jpg');
-    await boundedSharp(original, { limitInputPixels: 40_000_000 }).rotate().resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toFile(output.thumbnail);
+    await boundedSharp(await fs.promises.readFile(original, { signal }), { limitInputPixels: 40_000_000 }).rotate().resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toFile(output.thumbnail);
   } else {
     if (probe.kind === 'video') {
       output.poster = avatarMediaPath(userId, avatarId, mediaId, 'poster', 'jpg');

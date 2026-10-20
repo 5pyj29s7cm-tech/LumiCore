@@ -125,6 +125,7 @@ export function ToolPanel({ t }: { t?: any }) {
                           <p className="text-xs text-white/55 mt-0.5 truncate">{tool.description}</p>
                         </div>
                         <button
+                          aria-label={tool.name}
                           onClick={() => toggleTool(tool.name)}
                           className={`flex-shrink-0 w-9 h-5 rounded-full p-0.5 transition-colors ${
                             isEnabled(tool.name) ? 'bg-emerald-500/60' : 'bg-white/10'

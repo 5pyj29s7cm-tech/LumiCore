@@ -73,12 +73,6 @@ export interface PresenceHeartbeat {
   voiceprintConfidence: number;
 }
 
-export enum SecurityLevel {
-  L1_DAILY = 1,       // any single factor
-  L2_SENSITIVE = 2,   // any two factors
-  L3_CRITICAL = 3,    // all three factors
-}
-
 export interface TripleLockConfig {
   enabled: boolean;
   pinHash?: string;           // bcrypt hash

@@ -280,6 +280,7 @@ export async function prepareChatTerminalWriters(context: NonNullable<Awaited<Re
       let pendingConfirmationAssistantState = '';
       const requestToolConfirmation = createTurnConfirmation({
         userId: context.uid, source: context.eventSource, requestId: context.requestId, actionIntent: context.visibleUserText,
+        allowLocalFileWrites: context.allowLocalFileWrites,
         pending: context.pendingConfirmation,
         consumeScope: () => context.confirmationScope,
         proposalScope: () => {
@@ -323,7 +324,8 @@ export async function prepareChatTerminalWriters(context: NonNullable<Awaited<Re
         text: context.turnFlow.routeText,
         flow: context.turnFlow,
         capabilitySelection,
-        capabilityExecutionPlan: context.executionPipeline.executionPlan,
+        actionIntent: context.executionPipeline.normalizedIntent,
+        taskId: context.executionPipeline.taskRelation.taskId || context.requestId,
       });
       const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
       const toolRoute = executionDecision.toolRoute;

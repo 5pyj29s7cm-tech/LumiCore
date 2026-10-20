@@ -72,7 +72,7 @@ export function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerS
       signal.throwIfAborted();
     }
     const result = await runModelConnectionTest(selectionMode === 'pinned' ? 'llm' : 'llm/route', aiConfig.provider, model.trim(), signal);
-    return formatUiMessage('settings.live-call-passed-value0-ms.9f3242a245', { value0: result.latencyMs });
+    return formatUiMessage('settings.live-call-passed-value0-ms.9f3242a245', { value0: result.latencyMs }) + ' · ' + result.model;
   });
 
   if (aiConfig.ready === false) return <ModelSettingsStatus error={aiConfig.loadError} retry={() => void reloadModelPreferences('llm')} />;
@@ -181,14 +181,14 @@ export function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerS
       <div className="mt-5 flex flex-wrap justify-end gap-2">
         <Button onClick={test} disabled={busy || !model.trim()} className="h-10 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-4 text-xs font-bold text-emerald-200 hover:bg-emerald-400/15 disabled:opacity-40">
           {testing ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Zap size={15} className="mr-2" />}
-          {uiMessage('settings.test.9408c1ff3a')}
+          {uiMessage(selectionMode === 'pinned' ? 'settings.test.9408c1ff3a' : 'settings.test-effective-model.c9648a120e')}
         </Button>
         <Button onClick={saveReasoningRoute} disabled={busy || !model.trim()} className="h-10 rounded-lg bg-celestial-saturn px-4 text-xs font-bold text-black hover:bg-yellow-300 disabled:opacity-40">
           <Save size={15} className="mr-2" />
           {uiMessage('settings.save.ec8e6d5819')}
         </Button>
       </div>
-      {testMessage && <p className="mt-3 text-right text-xs text-white/55">{testMessage}</p>}
+      {(testing || testMessage) && <p role="status" className="mt-3 text-right text-xs text-white/55">{testing ? uiMessage('settings.running.4ac4390de9') : testMessage}</p>}
     </SettingsSection>
   );
 }

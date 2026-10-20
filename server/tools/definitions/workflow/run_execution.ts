@@ -349,12 +349,12 @@ export async function handleRunWorkflow(args: Record<string, any>, context?: any
       args.inputs || {},
       0, run,
     ) as Record<string, any>;
+    const approval = run.stepApprovals?.[step.stepId];
+    const inputDigests = toolExecutionInputDigests(resolvedArguments);
+    const approved = step.confirmation?.required && approval?.planRevision === run.planRevision
+      && approval.argumentsDigest === inputDigests.argumentsDigest
+      && approval.targetDigest === inputDigests.targetDigest;
     if (step.confirmation?.required) {
-      const approval = run.stepApprovals?.[step.stepId];
-      const inputDigests = toolExecutionInputDigests(resolvedArguments);
-      const approved = approval?.planRevision === run.planRevision
-        && approval.argumentsDigest === inputDigests.argumentsDigest
-        && approval.targetDigest === inputDigests.targetDigest;
       if (!approved) {
         run = waitForWorkflowConfirmation({
           runId: run.runId,
@@ -406,6 +406,7 @@ export async function handleRunWorkflow(args: Record<string, any>, context?: any
         ...context,
         conversationId: run.pendingExecution?.originContext?.conversationId || context?.conversationId,
         source: run.pendingExecution?.originContext?.source || context?.source,
+        autonomous: approved ? false : context?.autonomous,
         userConfirmed: false,
         taskId: run.runId,
         idempotencyKey: executionKey,

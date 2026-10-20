@@ -83,7 +83,7 @@ export function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], 
   if (executionLog.length === 0) {
     return isZh
       ? CN_DURABLE_EXECUTION_MESSAGES.noExecutableToolResult
-      : 'The tool loop ended before any tool result was available, so completion is not verified. Recovery must preserve the current goal and re-plan an available capability or declared fallback without asking the user to repeat known information.';
+      : 'This request is not complete. No confirmed result is available yet; the information already provided does not need to be repeated.';
   }
 
   const artifacts = collectExistingArtifacts(executionLog).slice(0, 8);
@@ -93,7 +93,7 @@ export function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], 
       ? (isZh ? CN_TOOL_LOOP_MESSAGES.notCompletedStatus : 'not completed')
       : record.terminalVerification?.status === 'verified'
         ? (isZh ? CN_DURABLE_EXECUTION_MESSAGES.verifiedStatus : 'verified')
-        : (isZh ? CN_DURABLE_EXECUTION_MESSAGES.unverifiedStatus : 'unverified');
+        : (isZh ? CN_DURABLE_EXECUTION_MESSAGES.unverifiedStatus : 'not yet confirmed complete');
     return `${index + 1}. ${humanToolLabel(record.name)} - ${status}`;
   });
 
@@ -111,13 +111,13 @@ export function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], 
   }
 
   return [
-    'The bounded tool execution and automatic recovery budget was exhausted before final verification passed.',
+    'This request is not complete.',
     'Progress:',
     ...recentSteps,
     artifacts.length > 0 ? 'Verified generated files:' : '',
     ...artifacts.map(artifact => `- ${artifact.path} (${formatBytes(artifact.size)})`),
     artifacts.length > 0
-      ? 'Recovery must continue from these verified results, prefer a declared fallback or independent verification capability, and avoid repeating completed work.'
-      : 'No verified artifact was detected. Recovery must preserve the receipts and re-plan a declared fallback or verification capability instead of treating the failure explanation as completion.',
+      ? 'The files listed above were created; the request remains incomplete.'
+      : 'Files may have been created; deliverable results have not yet been confirmed.',
   ].filter(Boolean).join('\n');
 }

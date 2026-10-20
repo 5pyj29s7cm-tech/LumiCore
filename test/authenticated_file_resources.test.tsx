@@ -3,6 +3,7 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FileLocationActions } from '../src/components/FileLocationActions';
+import { getBackendOrigin } from '../src/services/apiBridge';
 import { FileResourceImage, FileResourceVideo } from '../src/components/FileResourceMedia';
 import { loadFileResource, localFileResourcePath, saveFileResource, fileResourceOpenTarget, openFileResourceFolder } from '../src/services/fileResource';
 
@@ -51,12 +52,14 @@ afterEach(() => {
 describe('authenticated desktop file resources', () => {
   it('only treats allowed paths on the exact backend origin as local resources', () => {
     expect(localFileResourcePath('/api/files/download/synthetic?inline=1')).toBe('/api/files/download/synthetic?inline=1');
-    expect(localFileResourcePath('http://127.0.0.1:3000/lumi_output/image.png')).toBe('/lumi_output/image.png');
+    expect(localFileResourcePath(getBackendOrigin() + '/lumi_output/image.png')).toBe('/lumi_output/image.png');
     for (const value of [
       'https://example.test/api/files/download/synthetic',
       '//example.test/api/files/download/synthetic',
       '/api/files/../../auth/me',
-      'http://user:password@127.0.0.1:3000/api/files/download/synthetic',
+      getBackendOrigin().replace('://', '://user:password@') + '/api/files/download/synthetic',
+      (getBackendOrigin() === 'http://localhost:3000' ? 'http://127.0.0.1:3000' : 'http://localhost:3000') + '/api/files/download/synthetic',
+      'http://localhost:3001/api/files/download/synthetic',
       'javascript:void(0)',
     ]) expect(localFileResourcePath(value)).toBeNull();
   });
@@ -66,7 +69,7 @@ describe('authenticated desktop file resources', () => {
     const resource = await loadFileResource('/api/files/download/synthetic?inline=1');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, request] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://127.0.0.1:3000/api/files/download/synthetic?inline=1');
+    expect(url).toBe(getBackendOrigin() + '/api/files/download/synthetic?inline=1');
     expect(new Headers(request.headers).get('Authorization')).toBe('Bearer synthetic-session-token');
     expect(new Headers(request.headers).get('x-lumi-desktop-session')).toBe('synthetic-desktop-proof');
     expect(request.credentials).toBe('include');
@@ -162,7 +165,7 @@ describe('file folder actions', () => {
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({ success: true, path: 'D:/output' }) });
     await expect(openFileResourceFolder(value)).resolves.toBe('D:/output');
     const [url, request] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://127.0.0.1:3000/api/files/open?domain=work&orgId=org-a');
+    expect(url).toBe(getBackendOrigin() + '/api/files/open?domain=work&orgId=org-a');
     expect(request.method).toBe('POST');
     expect(JSON.parse(request.body)).toEqual({ id: 'archived image.png', reveal: true });
     expect(new Headers(request.headers).get('Authorization')).toBe('Bearer synthetic-session-token');

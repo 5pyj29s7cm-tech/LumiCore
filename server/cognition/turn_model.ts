@@ -1,7 +1,14 @@
+import { inspectPersistedToolExecutionReceipt } from '../tools/persisted_execution_receipt';
+import { isCanonicalToolExecutionRecord } from '../tools/execution_engine';
+import { taskReceiptsToRecords } from './task_execution_ledger';
+import { parseObject, digest } from '../conversation/ledger/serialization';
+import { getConversationCompletionSnapshot } from '../conversation/conversation_lifecycle';
 import { runLumiTurn, type ConversationTurnInput, type ToolSessionOptions } from '../llm/lumi_turn';
 import { createModelTurnState } from '../llm/model_turn_state';
 import type { LumiExecutionPipeline } from './execution_pipeline';
 import type { LLMResult } from '../llm/adapter';
+import { buildCapabilityExecutionPlan } from './capability_execution_plan';
+import { persistConversationExecutionPlan } from '../conversation/manager/execution_preparation';
 
 export type ResolvedTurnModelInput = (ToolSessionOptions | ConversationTurnInput) & {
   /** The server-owned plan resolved after conversation admission. */
@@ -49,9 +56,43 @@ export function runResolvedLumiTurn(input: ResolvedTurnModelInput): Promise<LLMR
     });
   }
   if (!toolSession) throw new Error('An executable turn requires its admitted registry');
+  const onToolCall = toolSession.onToolCall;
+  const snapshot = getConversationCompletionSnapshot({ userId:toolSession.context?.userId, conversationId:toolSession.context?.conversationId,
+    domain:toolSession.context?.domain, orgId:toolSession.context?.orgId, taskId:toolSession.context?.taskId || execution.taskId, requestId });
+  const task = snapshot?.task, root = snapshot?.root, currentTurn = snapshot?.currentTurn;
+  const history = root && currentTurn && task.activeRequestId === requestId && execution.trustedActionContinuation
+    ? taskReceiptsToRecords(parseObject(task.context).actionState?.receipts || []).flatMap(record => {
+      if (!record.id || !record.requestId || record.requestId === requestId || !record.capability || !record.envelope) return [];
+      const rows = (snapshot?.receipts || []).filter((row: any) => row.taskId === task.id && row.conversationId === task.conversationId
+        && row.requestId === record.requestId && row.toolName === record.name && row.idempotencyKey === record.envelope?.idempotencyKey);
+      if (rows.length !== 1) return [];
+      const row = rows[0];const priorTurn = (snapshot?.turns || []).find((turn: any) => turn.id === row.turnRowId && turn.taskId === task.id
+        && turn.requestId === row.requestId && turn.userId === task.userId && turn.conversationId === task.conversationId
+        && (turn.domain || 'personal') === (task.domain || 'personal') && (turn.orgId || '') === (task.orgId || ''));
+      const canonical = inspectPersistedToolExecutionReceipt(row, { rowTaskId: task.id, requestId: record.requestId, toolName: record.name });
+      const typed = inspectPersistedToolExecutionReceipt({ ...row, envelope: record.envelope });
+      if (!priorTurn || !row.inputDigest || !canonical.valid || !typed.valid || canonical.envelope?.status !== typed.envelope?.status) return [];
+      const envelope = canonical.envelope!;
+      return [{ id: 'prior:' + row.id, argumentsVerified: digest(record.arguments || {}) === row.inputDigest, record: { ...record, envelope, result: typeof envelope.result === 'string' ? envelope.result : envelope.result === undefined ? record.result : JSON.stringify(envelope.result) } }];
+    }) : [];
   return runLumiTurn({
     ...toolSession,
     config,
+    onToolCall: onToolCall ? async record => {
+      const entry = toolSession.registry.getCapabilityManifestEntry(record.name, execution.authorizationPolicy, toolSession.context);
+      if (entry && record.capability && record.envelope) execution.executionPlan = buildCapabilityExecutionPlan({
+        record, capability: { ...entry, ...record.capability }, previousPlan: execution.executionPlan,
+        taskId: toolSession.context?.taskId || execution.taskId || requestId,
+      });
+      await onToolCall(record);
+      if (execution.turnIntent.boundary !== 'task_center' && execution.executionPlan
+        && (toolSession.context?.taskId || execution.taskId) && toolSession.context?.conversationId && toolSession.context.userId) {
+        if (!persistConversationExecutionPlan({ conversationId: toolSession.context.conversationId,
+          userId: toolSession.context.userId, plan: execution.executionPlan })) {
+          throw new Error('The observed bound-call plan could not be attached to its exact task');
+        }
+      }
+    } : undefined,
     maxIterations: Math.min(toolSession.maxIterations ?? execution.authorizationPolicy.maxIterations,
       execution.authorizationPolicy.maxIterations),
     context: {
@@ -60,6 +101,8 @@ export function runResolvedLumiTurn(input: ResolvedTurnModelInput): Promise<LLMR
       toolPolicy: execution.authorizationPolicy,
       modelToolProjection: execution.modelToolProjection,
       currentTurnExecutionRequested: true,
+      completionRequest: { currentText: execution.resolution.userText, ...(root ? { rootText: String(root.message || '') } : {}), history },
+      priorToolRecords: [...history.map(item => item.record), ...(toolSession.context?.priorToolRecords || []).filter(record => record.requestId === requestId && isCanonicalToolExecutionRecord(record))],
       acceptedActionContract: execution.turnIntent.flow.acceptedActionContract,
       trustedActionContinuation: execution.trustedActionContinuation,
       actionIntent: toolSession.context?.actionIntent ?? execution.resolution.userText,

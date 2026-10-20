@@ -3,7 +3,7 @@ import { readSettingRecord, writeSetting } from "../persistence/settings_reposit
 import { addMemory } from '../memory/store';
 import { PersonalityVector } from './types';
 import { getSeasonInfo, getNearbyHoliday, isWeekend } from '../time/utils';
-import { himTick, loadHIMState, saveHIMState, getBestPeak, formatPeakForPrompt, type HIMState } from './him';
+import { himTick, loadHIMState, saveHIMState, type HIMState } from './him';
 
 export interface EmotionalState {
   valence: number;        // -1 (unpleasant) ~ +1 (pleasant)
@@ -97,7 +97,7 @@ export function updateEmotionalStateWithHIM(
 }
 
 // ── Re-export for convenience ──
-export { loadHIMState, saveHIMState, getBestPeak, formatPeakForPrompt };
+export { loadHIMState, saveHIMState };
 export type { HIMState };
 
 /** Rules engine — updates emotional state based on events, no LLM required */

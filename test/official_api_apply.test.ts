@@ -30,6 +30,7 @@ describe('Lumi official API one-click adaptation', () => {
     { id: 'aliyun/qwen-image-edit-2509', capability: 'image_edit' },
     { id: 'aliyun/Wan2.2-T2V-A14B', capability: 'video_generation' },
     { id: 'aliyun/Wan2.2-I2V-A14B', capability: 'video_generation' },
+    { id: 'aliyun/wan3.0-video', capability: 'video_generation' },
     { id: 'aliyun/bge-m3', capability: 'embedding' },
     { id: 'aliyun/bge-reranker-v2-m3', capability: 'rerank' },
     { id: 'aliyun/qwen-audio-3.0-asr-flash-streaming', capability: 'speech_recognition' },
@@ -113,7 +114,7 @@ describe('Lumi official API one-click adaptation', () => {
       ok: true,
       provider: 'relay',
       verification: 'catalog_verified_and_configuration_persisted',
-      catalog: { modelCount: 11, roleCount: 11 },
+      catalog: { modelCount: 12, roleCount: 11 },
     });
     expect(body.applied.map((item: any) => item.role)).toEqual([...LUMI_OFFICIAL_SUPPORTED_ROLES]);
     expect(body.skipped.map((item: any) => item.role)).toEqual([...LUMI_OFFICIAL_UNSUPPORTED_ROLES]);
@@ -130,8 +131,8 @@ describe('Lumi official API one-click adaptation', () => {
       'aliyun/qwen3-vl-flash',
       'aliyun/qwen-image',
       'aliyun/qwen-image-edit-2509',
-      'aliyun/Wan2.2-T2V-A14B',
-      'aliyun/Wan2.2-I2V-A14B',
+      'aliyun/wan3.0-video',
+      'aliyun/wan3.0-video',
       'aliyun/bge-m3',
       'aliyun/bge-reranker-v2-m3',
       'aliyun/qwen-audio-3.0-asr-flash-streaming',
@@ -139,8 +140,8 @@ describe('Lumi official API one-click adaptation', () => {
     ]);
     expect(getUserPreferredGenerationModels(userId)).toMatchObject({
       imageEdit: { provider: 'relay', model: 'aliyun/qwen-image-edit-2509' },
-      video: { provider: 'relay', model: 'aliyun/Wan2.2-T2V-A14B' },
-      imageToVideo: { provider: 'relay', model: 'aliyun/Wan2.2-I2V-A14B' },
+      video: { provider: 'relay', model: 'aliyun/wan3.0-video' },
+      imageToVideo: { provider: 'relay', model: 'aliyun/wan3.0-video' },
     });
     expect(body.roles.vision.selectionReason).toBe('recommended_default');
     expect(body.roles.world.selectionReason).toBe('recommended_default');

@@ -48,6 +48,7 @@ isZh: boolean;
 setPreviewFile: React.Dispatch<React.SetStateAction<ChatPreviewFile>>;
 openChatFileInSystem: (file: Pick<ChatFilePanelItem, "fileName" | "fileId" | "path" | "openUrl" | "saveUrl">) => Promise<void>;
 layout: "standalone" | "command-center" | "creation";
+desktopModeControl?: React.ReactNode;
 onReferenceArtifact?: (artifact: MediaGenerationArtifact) => void;
 commandCenterView: CommandCenterView;
 resolvedAppearanceMode: "light" | "dark";
@@ -64,6 +65,7 @@ mediaStudioMode: MediaGenerationKind;
 isTyping: boolean;
 mediaSourceUploading: boolean;
 mediaVideoOptions: MediaGenerationStudioProps['videoOptions'];
+checkMediaGenerationStatus: () => void;
 mediaVideoOptionsLoading: boolean;
 mediaGenerationStatus: MediaGenerationStudioStatus;
 mediaGenerationDetail: string;
@@ -588,7 +590,7 @@ function renderCreationStudio(input: AgentChatViewInput) {
     knowledgeLoading, knowledgeFailed, refreshKnowledgeFiles, appendPendingAttachments, requestCloseCreativeStudio,
     availableMediaSourceArtifacts, mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio,
     handleMediaSourceChange, uploadMediaSourceImage, isWorkChat, setChatSongOpen, chatSongOpen, user,
-    chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, sendText, setMediaGeneration, mediaGenerationText,
+    chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, checkMediaGenerationStatus, sendText, setMediaGeneration, mediaGenerationText,
     cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed,
   } = input;
   return (<MediaGenerationStudio

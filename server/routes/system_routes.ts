@@ -1,4 +1,4 @@
-import { runtimeFaults } from '../runtime/fault_state';
+import { getBackendHealthReport } from '../client/self/health';
 import { Router } from "express";
 import { listTokenUsageRows } from '../llm/token_tracker';
 import os from "os";
@@ -30,6 +30,8 @@ import {
   isImageGenerationProvider,
   isVideoGenerationProvider,
   upsertUserPreferredGenerationModels,
+  normalizeGenerationModelPrefs,
+  validateOfficialGenerationPreferences,
 } from "../llm/generation_preferences";
 import {
   getUserPreferredWorldModel,
@@ -370,18 +372,11 @@ function mountSystemHealthRoutes(router: Router) {
   // Health Check
   router.get("/health", optionalAuth, (req, res) => {
     try {
-      const fault = runtimeFaults.snapshot();
-      const persistence = getDatabasePersistenceStatus();
-      const scheduledTasks = scheduler.listTasks();
-      const schedulerHealth = {
-        degraded: scheduledTasks.some(task => task.requiresReconciliation),
-        pausedTasks: scheduledTasks.filter(task => task.requiresReconciliation).length,
-        queuedTasks: scheduledTasks.filter(task => task.queued).length,
-      };
+      const { fault, persistence, scheduler: schedulerHealth, status } = getBackendHealthReport();
       const detailed = /^(?:1|true|yes)$/i.test(String(req.query.details || ''));
       if (!detailed) {
         return res.json({
-          status: fault.degraded || persistence.degraded || schedulerHealth.degraded ? 'degraded' : 'ok',
+          status,
           fault,
           scheduler: schedulerHealth,
           timestamp: new Date().toISOString(),
@@ -428,7 +423,8 @@ function mountSystemHealthRoutes(router: Router) {
         return counts;
       }, {});
       res.json({
-        status: persistence.degraded || schedulerHealth.degraded ? "degraded" : "ok",
+        status,
+        fault,
         scheduler: schedulerHealth,
         timestamp: new Date().toISOString(),
         runtime: getRuntimeVersionInfo(),
@@ -1123,10 +1119,15 @@ function mountModelPreferenceRoutes(router: Router) {
         return res.status(400).json({ error: 'Invalid generation model provider' });
       }
       const uid = req.user!.uid;
-      const prefs = upsertUserPreferredGenerationModels(uid, req.body);
+      const candidate = normalizeGenerationModelPrefs(req.body);
+      const submitted = Object.keys(req.body || {}).filter(field => Object.hasOwn(candidate, field)) as (keyof typeof candidate)[];
+      if (submitted.some(field => candidate[field].provider === 'relay')) {
+        validateOfficialGenerationPreferences(req.body, await listOfficialApiModels());
+      }
+      const prefs = upsertUserPreferredGenerationModels(uid, candidate);
       return await sendDurableMutation(req, res, { success: true, ...prefs });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(400).json({ error: sanitizedProviderError(err) });
     }
   });
 

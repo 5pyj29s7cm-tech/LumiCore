@@ -1,3 +1,4 @@
+import type { DesktopExecutionPreference } from '../../shared/operation_modes';
 import type { ToolExecutionRecord } from '../tools/types';
 import {
   extractRequestedCurrentAppText,
@@ -207,6 +208,7 @@ export function guardCurrentAppToolCall(input: {
   acceptedTaskTarget?: AcceptedTaskTarget;
   currentAppTarget?: string;
   isolatedCalculation?: boolean;
+  desktopExecutionPreference?: DesktopExecutionPreference;
 }): CurrentAppToolCallGuardResult {
   const targetGuard = guardTaskTargetToolCall({
     taskText: input.taskText,
@@ -257,7 +259,7 @@ export function guardCurrentAppToolCall(input: {
     };
   }
 
-  if ((CURRENT_APP_FORBIDDEN_TOOLS as readonly string[]).includes(toolName)) {
+  if (input.desktopExecutionPreference !== 'external' && (CURRENT_APP_FORBIDDEN_TOOLS as readonly string[]).includes(toolName)) {
     return {
       allowed: false,
       reason: `${toolName} is disabled for current-app editing. Use active-window and UI Automation controls so focus and state changes remain auditable.`,

@@ -1,4 +1,6 @@
 import type { ToolRegistry } from '../registry';
+import { getStoredDesktopExecutionPreference, saveStoredDesktopExecutionPreference } from '../../cognition/operation_mode_store';
+import { broadcastPreferenceChange } from '../../memory';
 import { getClientActionExpectation, getClientState, getClientStateDigest, verifyClientActionResult } from '../../client/self_model';
 import { isExplicitSensitiveClientActionRequest } from '../action_constitution';
 import { sanitizeDiagnosticValue } from '../../client/diagnostic_sanitizer';
@@ -11,6 +13,7 @@ export function registerClientActionTools(registry: ToolRegistry): void {
       'Safely control Lumi client UI surfaces through the client action router.',
       'Use the explicit action from the complete personal-client interface registry, including personality, notifications, reminders, devices, token usage, terminal, profile, MCP settings, Voice Forge, skill generation, app launcher, knowledge, organization, meeting, and runtime surfaces.',
       'This does not use mouse/keyboard control and should be preferred over computer_use for Lumi client UI navigation.',
+      'Use set_desktop_execution_preference with preference internal/external for a user-requested execution preference change. External defaults to vision-guided visible desktop work; it does not change wallpaper, meeting state, or grant desktop authorization.',
     ].join(' '),
     parameters: {
       type: 'object',
@@ -18,7 +21,7 @@ export function registerClientActionTools(registry: ToolRegistry): void {
         action: {
           type: 'string',
           enum: ACTIONS,
-          description: 'Client action to perform.',
+          description: 'Client action to perform. start_meeting_mode opens a prepared workspace and preserves existing notes; the user starts recording with its Start recording button.',
         },
         target: {
           type: 'string',
@@ -27,8 +30,9 @@ export function registerClientActionTools(registry: ToolRegistry): void {
         mode: {
           type: 'string',
           enum: ['meeting', 'assistant'],
-          description: 'Legacy capture-state compatibility field. Use start_meeting_mode/end_meeting_mode for capture; Lumi has no operation mode selector.',
+          description: 'Legacy capture-state compatibility field. Use start_meeting_mode/end_meeting_mode for the meeting workspace; Lumi has no operation mode selector.',
         },
+        preference: { type: 'string', enum: ['internal', 'external'], description: 'Execution preference for set_desktop_execution_preference only; independent of wallpaper and meeting state.' },
         task: {
           type: 'string',
           description: 'Optional context text for routed client actions.',
@@ -37,9 +41,9 @@ export function registerClientActionTools(registry: ToolRegistry): void {
           type: 'object',
           description: 'Optional structured payload for a registered client action.',
         },
-        resetNotes: {
-          type: 'boolean',
-          description: 'Optional meeting action flag to reset captured notes before starting meeting mode.',
+        legalCaseId: {
+          type: 'string',
+          description: 'Existing case ID for a legal meeting. Omit it when the meeting is not associated with a case.',
         },
         legalCaseTitle: {
           type: 'string',
@@ -51,7 +55,7 @@ export function registerClientActionTools(registry: ToolRegistry): void {
         },
         section: {
           type: 'string',
-          description: 'Optional section. For open_organization_workspace use dashboard, kb, chat, messaging, templates, review, members, audit, settings, branch, legal, spatial-design, or brand-design. For open_settings use general, neural/autonomy, ai-providers, external-connections, tools, reasoning-model, world-model, generation-model, retrieval-model, voice-model, security, hardware, voice, or computer. Legacy data-sources and applications requests open the matching tab in External Connections. Legacy app-tools, connections-tools, and MCP aliases route to tools; document-model aliases route to world-model; safety-model aliases route to security; model-routing/llm/world/generation/voice-service aliases route to their canonical settings sections.',
+          description: 'Optional section. For open_organization_workspace use an available organization view reported by client_get_state. For open_settings use general, neural/autonomy, ai-providers, external-connections, tools, reasoning-model, world-model, generation-model, retrieval-model, voice-model, security, hardware, voice, or computer. Legacy data-sources and applications requests open the matching tab in External Connections. Legacy app-tools, connections-tools, and MCP aliases route to tools; document-model aliases route to world-model; safety-model aliases route to security; model-routing/llm/world/generation/voice-service aliases route to their canonical settings sections.',
         },
         confirmed: {
           type: 'boolean',
@@ -61,6 +65,14 @@ export function registerClientActionTools(registry: ToolRegistry): void {
       required: ['action'],
     },
     handler: async (args, context) => {
+      if (args.action === 'set_desktop_execution_preference') {
+        if (!context?.userId || context.autonomous) throw new Error('An authenticated user request is required to change execution preference.');
+        if (args.preference !== 'internal' && args.preference !== 'external') throw new Error('Invalid desktop execution preference');
+        const preference = await saveStoredDesktopExecutionPreference(context.userId, args.preference);
+        broadcastPreferenceChange(context.userId, 'desktop_execution', { preference }, { domain: context.domain, orgId: context.orgId });
+        const verified = getStoredDesktopExecutionPreference(context.userId) === preference;
+        return JSON.stringify({ ok: verified, action: args.action, preference, verification: { status: verified ? 'verified' : 'failed', message: verified ? 'Execution preference saved. Wallpaper and meeting state are unchanged.' : 'Execution preference could not be verified.' } });
+      }
       if (!context?.desktopRelay) {
         throw new Error('Client actions require the Lumi desktop client relay.');
       }
@@ -75,7 +87,7 @@ export function registerClientActionTools(registry: ToolRegistry): void {
         mode: args.mode || '',
         task: args.task || '',
         payload: args.payload,
-        resetNotes: Boolean(args.resetNotes),
+        legalCaseId: args.legalCaseId || '',
         legalCaseTitle: args.legalCaseTitle || '',
         enabled: Boolean(args.enabled),
         section: args.section || '',

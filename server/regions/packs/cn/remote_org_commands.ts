@@ -1,9 +1,44 @@
+import type { ToolContext, CapabilityOperation } from '../../../tools/types';
 import * as LegalCases from '../../../org/legal_cases';
+import { encodeToolResult } from '../../../tools/result_envelope';
 import * as OrgKB from '../../../org/kb';
 import type { IncomingAttachment, IncomingMessage } from '../../../messaging/types';
 import { getMember } from '../../../org/db';
 import { getRequestText, remotePlatformLabel, remoteMaterialSource, needsBinding } from "./remote_materials";
 import { assertMessagingAuthorization } from "./messaging_ingress_runtime";
+
+export type RemoteOrganizationAdapterControl = Pick<ToolContext, 'domain' | 'orgId' | 'onAdapterStart' | 'onAdapterSettlement'> & {
+  prepareNativeAction?: (call: Parameters<NonNullable<ToolContext['onAdapterStart']>>[0]) => Promise<void>;
+};
+
+export async function withRemoteOrganizationAction<T>(msg: IncomingMessage, control: RemoteOrganizationAdapterControl,
+  operation: CapabilityOperation, args: Record<string, unknown>, action: () => Promise<T> | T): Promise<T> {
+  assertMessagingAuthorization(msg);
+  if (!msg.boundOrgId || !msg.boundUserId || !control.onAdapterStart
+    || control.domain !== 'work' || control.orgId !== msg.boundOrgId) throw new Error('The organization action has no matching scoped admission fence.');
+  const call: Parameters<NonNullable<ToolContext['onAdapterStart']>>[0] = { name: 'organization_business_command', attempt: 1,
+    arguments: { ...args, orgId: msg.boundOrgId }, capability: { operation,
+      sideEffects: [{ type: operation === 'observe' ? 'local_read' : 'local_write', scope: msg.boundOrgId, reversible: true }] } };
+  await control.prepareNativeAction?.(call);
+  await control.onAdapterStart(call);
+  let status: 'fulfilled' | 'rejected' = 'rejected';
+  try {
+    assertMessagingAuthorization(msg);
+    const result = await action();
+    status = 'fulfilled';
+    return result;
+  } finally {
+    await control.onAdapterSettlement?.({ name: 'organization_business_command', attempt: 1,
+      status, timedOut: false, settledAt: new Date().toISOString() });
+  }
+}
+
+function remoteOrgReceipt(content: string, ok: boolean, archive: { changedCaseIds?: string[]; articleIds?: string[] } = {}): string {
+  const changedCaseIds = ok ? archive.changedCaseIds || [] : [];
+  const articleIds = ok ? archive.articleIds || [] : [];
+  return encodeToolResult(content, { ok, verified: ok, status: ok ? 'completed' : 'blocked',
+    persisted: changedCaseIds.length > 0 || articleIds.length > 0, changedCaseIds, articleIds });
+}
 
 function formatKbResults(results: any[]): string {
   if (!results || results.length === 0) return '没有在组织知识库里找到相关内容。';
@@ -166,7 +201,7 @@ function formatCaseFocusedExtraction(caseFile: LegalCases.OrgLegalCaseFile, requ
   return sections.join('\n');
 }
 
-async function handleRemoteExtractionCommand(msg: IncomingMessage, textAttachments: IncomingAttachment[]): Promise<string | null> {
+async function handleRemoteExtractionCommand(msg: IncomingMessage, textAttachments: IncomingAttachment[], control: RemoteOrganizationAdapterControl): Promise<string | null> {
   const requestText = getRequestText(msg);
 
   const asksAboutCurrentAttachments = textAttachments.length > 0
@@ -176,48 +211,53 @@ async function handleRemoteExtractionCommand(msg: IncomingMessage, textAttachmen
 
   const wantsKbExtraction = /(提取|调取|获取|查看|查询|查找|整理|总结|摘要|列出|读取).*(知识库|资料库|文档库|制度|组织资料|组织文档)|(知识库|资料库|文档库|制度).*(提取|调取|获取|查看|整理|总结|摘要|资料|信息)/.test(requestText);
   if (wantsKbExtraction) {
+    return withRemoteOrganizationAction(msg, control, 'observe', { action: 'knowledge_extract' }, async () => {
     const query = stripExtractionQuery(requestText, 'kb') || requestText;
     const results = await searchOrgKnowledge(msg.boundOrgId!, msg.boundUserId!, query, 6);
-    return formatKbExtraction(results, query);
+    return remoteOrgReceipt(formatKbExtraction(results, query), true);
+    });
   }
 
   const wantsCaseExtraction = /(提取|调取|获取|查看|查询|查找|整理|总结|摘要|列出|读取).*(案件|案号|卷宗|案情|材料|证据)|(案件|案号|卷宗).*(提取|调取|获取|查看|整理|总结|摘要|材料|证据|关键日期|时间线|资料|信息)/.test(requestText);
   if (wantsCaseExtraction) {
+    return withRemoteOrganizationAction(msg, control, 'observe', { action: 'case_extract' }, async () => {
     const query = stripExtractionQuery(requestText, 'case');
     const cases = query
       ? LegalCases.listCases(msg.boundOrgId!, query, 5, msg.boundUserId)
       : LegalCases.listCases(msg.boundOrgId!, '', 5, msg.boundUserId);
     if (cases.length === 0) {
-      return query
+      return remoteOrgReceipt(query
         ? `没有找到“${query}”对应的组织案件。可以换一个案号、当事人、法院或案件名称再试。`
-        : '请告诉我你要提取哪个案件，例如：提取 张三合同纠纷案 的材料清单。';
+        : '请告诉我你要提取哪个案件，例如：提取 张三合同纠纷案 的材料清单。', false);
     }
     if (cases.length > 1 && query) {
       const exact = cases.find(item => item.caseNumber === query || item.title === query);
       if (!exact) {
-        return [
+        return remoteOrgReceipt([
           `找到 ${cases.length} 个可能相关的案件，请再指定一个案号或案件名称：`,
           '',
           ...cases.slice(0, 5).map((item, index) => `${index + 1}. ${item.title || '未命名案件'}｜${item.caseNumber || '未填案号'}｜${item.cause || '未填案由'}`),
-        ].join('\n');
+        ].join('\n'), false);
       }
-      return formatCaseFocusedExtraction(exact, requestText);
+      return remoteOrgReceipt(formatCaseFocusedExtraction(exact, requestText), true);
     }
-    return formatCaseFocusedExtraction(cases[0], requestText);
+    return remoteOrgReceipt(formatCaseFocusedExtraction(cases[0], requestText), true);
+    });
   }
 
   const wantsGenericExtraction = /(提取|调取|获取|查看|查询|查找|整理|总结|摘要|列出|读取).*(资料|信息|文档)/.test(requestText);
   if (wantsGenericExtraction) {
     const query = stripExtractionQuery(requestText, 'any');
     if (!query) return null;
+    return withRemoteOrganizationAction(msg, control, 'observe', { action: 'organization_extract', query }, async () => {
     const [kbResults, cases] = await Promise.all([
       searchOrgKnowledge(msg.boundOrgId!, msg.boundUserId!, query, 4),
       Promise.resolve(LegalCases.listCases(msg.boundOrgId!, query, 3, msg.boundUserId)),
     ]);
     if (kbResults.length === 0 && cases.length === 0) {
-      return `没有从组织知识库或案件库里提取到“${query}”相关资料。`;
+      return remoteOrgReceipt(`没有从组织知识库或案件库里提取到“${query}”相关资料。`, false);
     }
-    return [
+    return remoteOrgReceipt([
       `围绕“${query}”提取到这些组织资料：`,
       '',
       cases.length > 0 ? '【相关案件】' : '',
@@ -225,7 +265,8 @@ async function handleRemoteExtractionCommand(msg: IncomingMessage, textAttachmen
       cases.length > 0 ? '' : '',
       kbResults.length > 0 ? '【知识库资料】' : '',
       ...kbResults.slice(0, 4).map((item: any, index: number) => `${index + 1}. ${item.title || '资料'}\n${String(item.chunk || item.content || '').slice(0, 500)}`),
-    ].filter(Boolean).join('\n');
+    ].filter(Boolean).join('\n'), true);
+    });
   }
 
   return null;
@@ -323,20 +364,19 @@ function updateCaseHintsFromText(orgId: string, userId: string, caseFile: LegalC
   }
 }
 
-export async function handleRemoteOrgCommand(msg: IncomingMessage, assertExecutionCurrent?: () => void): Promise<string | null> {
+export async function handleRemoteOrgCommand(msg: IncomingMessage, control: RemoteOrganizationAdapterControl = {}): Promise<string | null> {
   assertMessagingAuthorization(msg);
-  assertExecutionCurrent?.();
   const requestText = getRequestText(msg);
   const platformLabel = remotePlatformLabel(msg.platform);
   const materialSource = remoteMaterialSource(msg.platform);
   const wantsOrgData = needsBinding(requestText);
   if (wantsOrgData && (!msg.boundUserId || !msg.boundOrgId)) {
-    return `这个操作需要先绑定${platformLabel}身份。请在 Lumi 桌面端生成绑定码，然后在${platformLabel}里发送：绑定 Lumi <绑定码>。`;
+    return remoteOrgReceipt(`这个操作需要先绑定${platformLabel}身份。请在 Lumi 桌面端生成绑定码，然后在${platformLabel}里发送：绑定 Lumi <绑定码>。`, false);
   }
   if (!msg.boundUserId || !msg.boundOrgId) return null;
   const membership = getMember(msg.boundOrgId, msg.boundUserId);
   if (!membership || membership.status !== 'active') {
-    return '当前 Lumi 身份的组织成员权限已经失效，请重新进入组织或联系管理员。';
+    return remoteOrgReceipt('当前 Lumi 身份的组织成员权限已经失效，请重新进入组织或联系管理员。', false);
   }
   const caseAttachmentWriteIntent = msg.attachments?.length
     ? classifyRemoteCaseAttachmentWriteIntent(requestText)
@@ -345,31 +385,35 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage, assertExecuti
   const writeRequest = /(归档|保存|导入|上传|新建|创建|添加|写入|修改|更新|删除)/.test(affirmativeWriteText)
     || caseAttachmentWriteIntent !== 'none';
   if (writeRequest && membership.role === 'viewer') {
-    return '当前 Lumi 身份在该组织中只有查看权限，不能归档、创建或修改组织数据。';
+    return remoteOrgReceipt('当前 Lumi 身份在该组织中只有查看权限，不能归档、创建或修改组织数据。', false);
   }
 
   const textAttachments = (msg.attachments || []).filter(item => item.extractedText?.trim());
-  const extractionReply = await handleRemoteExtractionCommand(msg, textAttachments);
+  const extractionReply = await handleRemoteExtractionCommand(msg, textAttachments, control);
   assertMessagingAuthorization(msg);
-  assertExecutionCurrent?.();
   if (extractionReply) return extractionReply;
 
   if (/知识库|制度|资料|文档库/.test(requestText) && /(查|搜|找|检索|搜索)/.test(requestText)) {
+    return withRemoteOrganizationAction(msg, control, 'observe', { action: 'knowledge_search' }, async () => {
     const query = requestText.replace(/(查|搜|找|检索|搜索)?\s*(组织)?\s*(知识库|制度|资料|文档库)/g, '').trim() || requestText;
     const results = await searchOrgKnowledge(msg.boundOrgId, msg.boundUserId, query, 5);
-    return formatKbResults(results);
+    return remoteOrgReceipt(formatKbResults(results), true);
+    });
   }
 
   if (/(查|搜|找|检索|搜索).*(案件|案号|材料|卷宗)|案件.*(在哪|有没有|列表)/.test(requestText)) {
+    return withRemoteOrganizationAction(msg, control, 'observe', { action: 'case_search' }, async () => {
     const query = requestText.replace(/(查|搜|找|检索|搜索)?\s*(组织)?\s*(案件|案号|材料|卷宗)/g, '').trim();
     const cases = LegalCases.listCases(msg.boundOrgId, query, 8, msg.boundUserId);
-    return formatCaseResults(cases);
+    return remoteOrgReceipt(formatCaseResults(cases), true);
+    });
   }
 
   const wantsKbArchive = textAttachments.length > 0
     && /(知识库|文档库|资料库)/.test(requestText)
     && /(归档|保存|导入|上传|收录)/.test(affirmativeWriteText);
   if (wantsKbArchive) {
+    return withRemoteOrganizationAction(msg, control, 'create', { action: 'knowledge_archive', files: textAttachments.map(item => item.fileName) }, async () => {
     const articles = textAttachments.map(attachment => OrgKB.createArticle(msg.boundOrgId!, msg.boundUserId!, {
       title: attachment.fileName || requestText.slice(0, 80) || `${platformLabel}远程文档`,
       content: attachment.extractedText || '',
@@ -377,16 +421,18 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage, assertExecuti
       tags: [materialSource, 'remote-file'],
       status: 'published',
     }));
-    return [
+    return remoteOrgReceipt([
       `已归档 ${articles.length} 份${platformLabel}文件到组织知识库。`,
       '',
       ...articles.map((article, index) => `${index + 1}. ${article.title}`),
       '',
       `后续可以在${platformLabel}里说“查组织知识库 <关键词>”继续检索。`,
-    ].join('\n');
+    ].join('\n'), true, { articleIds: articles.map(article => article.id) });
+    });
   }
 
   if (textAttachments.length > 0 && caseAttachmentWriteIntent !== 'none') {
+    return withRemoteOrganizationAction(msg, control, 'mutate', { action: caseAttachmentWriteIntent, files: textAttachments.map(item => item.fileName) }, async () => {
     const first = textAttachments[0];
     const combined = textAttachments
       .map(item => `# ${item.fileName}\n\n${item.extractedText}`)
@@ -413,7 +459,7 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage, assertExecuti
       }
       updateCaseHintsFromText(msg.boundOrgId, msg.boundUserId, targetCase, combined);
       const refreshed = LegalCases.getCase(msg.boundOrgId, targetCase.id, msg.boundUserId) || targetCase;
-      return [
+      return remoteOrgReceipt([
         `已把 ${textAttachments.length} 份${platformLabel}附件归档到已有案件。`,
         '',
         `案件：${refreshed.title}`,
@@ -424,11 +470,11 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage, assertExecuti
         '',
         '后续可以继续发送材料，或说“查案件 <关键词>”。',
         '注意：此归档和分析只辅助律师工作，最终法律意见由执业律师确认。',
-      ].join('\n');
+      ].join('\n'), true, { changedCaseIds: [targetCase.id] });
     }
 
     if (caseAttachmentWriteIntent === 'archive_existing') {
-      return [
+      return remoteOrgReceipt([
         '附件尚未归档，也没有创建新案件。',
         '',
         archiveSelection.alternatives.length > 1
@@ -437,7 +483,7 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage, assertExecuti
           ? `没有找到“${target}”对应的已有案件。请提供准确案号或案件名称。`
           : '请指定要归档到的已有案件名称或案号。',
         '只有你明确说“新建案件并归档附件”时，Lumi 才会创建新案件。',
-      ].join('\n');
+      ].join('\n'), false);
     }
 
     const title = requestText
@@ -465,7 +511,7 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage, assertExecuti
       });
     }
     const refreshed = LegalCases.getCase(msg.boundOrgId, caseFile.id, msg.boundUserId) || caseFile;
-    return [
+    return remoteOrgReceipt([
       `已创建组织案件并归档 ${textAttachments.length} 份${platformLabel}附件。`,
       '',
       `案件：${refreshed.title}`,
@@ -476,10 +522,12 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage, assertExecuti
       '',
       `我已按案件材料保存。后续可以在${platformLabel}里说“查案件 <关键词>”，或在桌面端组织律所区域继续整理。`,
       '注意：此归档和分析只辅助律师工作，最终法律意见由执业律师确认。',
-    ].join('\n');
+    ].join('\n'), true, { changedCaseIds: [caseFile.id] });
+    });
   }
 
   if (/(新建|创建).*(案件)/.test(requestText)) {
+    return withRemoteOrganizationAction(msg, control, 'create', { action: 'case_create' }, async () => {
     const caseFile = LegalCases.createCaseFromRemoteMaterial({
       orgId: msg.boundOrgId,
       userId: msg.boundUserId,
@@ -487,7 +535,8 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage, assertExecuti
       text: requestText,
       source: materialSource,
     });
-    return `已新建组织案件：${caseFile.title}\n案号：${caseFile.caseNumber || '未识别'}\n后续可以继续发送文件并说“归档到案件”。`;
+    return remoteOrgReceipt(`已新建组织案件：${caseFile.title}\n案号：${caseFile.caseNumber || '未识别'}\n后续可以继续发送文件并说“归档到案件”。`, true, { changedCaseIds: [caseFile.id] });
+    });
   }
 
   return null;

@@ -19,7 +19,8 @@ describe('shared foreground planning after shortcut retirement', () => {
       const plan = foregroundPipeline(text, channel);
       expect(plan.executionRequested, text).toBe(true);
       expect(plan.modelToolProjection.toolNames, text).toEqual(expect.arrayContaining([...tools]));
-      expect(plan.executionPlan.nodes.some(node => node.type === 'skill' && !node.toolName), text).toBe(false);
+      expect(plan.executionPlan, text).toBeUndefined();
+      expect(plan.modelToolProjection.toolNames, text).not.toContain('self_intro_demo');
     }
   });
 
@@ -43,7 +44,8 @@ describe('shared foreground planning after shortcut retirement', () => {
       expect(plan.turnIntent.flow.workflowHint?.id).toBe('self_intro_demo');
       expect(plan.executionRequested).toBe(false);
       expect(plan.authorizationPolicy.allowedTools).toEqual([]);
-      expect(plan.executionPlan.nodes).toEqual([]);
+      expect(plan.executionPlan).toBeUndefined();
+      expect(plan.modelToolProjection.toolNames).toEqual([]);
     },
   );
   it.each(['打开计算器。不要修改文件，读取 D:/fixtures/orders.csv 并总结内容。',

@@ -51,6 +51,7 @@ export function useChatIdentityAndState({
   onOpenKnowledge,
   voiceSession,
   onReferenceArtifact,
+  desktopModeControl,
 }: {
   t: any;
   user: any;
@@ -75,6 +76,7 @@ export function useChatIdentityAndState({
   /** Desktop command center reuses the shell's single microphone session. */
   voiceSession?: AgentChatVoiceSession;
   onReferenceArtifact?: (artifact: MediaGenerationArtifact) => void;
+  desktopModeControl?: React.ReactNode;
 }) {
 
   const prefersReducedMotion = useReducedMotion();
@@ -473,6 +475,6 @@ export function useChatIdentityAndState({
     conversationHistoryLoadingMore, setCommandCenterPlannerOpen, commandCenterPlannerOpen, commandCenterPlannerText,
     visibleSuggestions, searchError, isSearchingHistory, copiedId, isOptimizing, attachmentUploadFailures,
     optimizationProgress, attachmentMenuRef, conversationTransitionPending, hasDraftText, onOpenMemoryAvatar,
-    onOpenKnowledge, activeCapabilities
+    onOpenKnowledge, activeCapabilities, desktopModeControl
   } as const;
 }

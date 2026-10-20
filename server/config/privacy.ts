@@ -46,8 +46,8 @@ export function savePrivacyMode(mode: PrivacyMode): void {
   writeJsonAtomic(destination, { version: 1, mode });
 }
 
-export function requireLocalEndpoint(value: string, operation = 'Local AI processing'): void {
-  if (!isStrictPrivacy()) return;
+export function requireLocalEndpoint(value: string, operation = 'Local AI processing', forceLocalOnly = false): void {
+  if (!forceLocalOnly && !isStrictPrivacy()) return;
   let url: URL;
   try { url = new URL(value); } catch { throw new Error(`[Privacy] ${operation}: invalid local endpoint.`); }
   const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
@@ -55,16 +55,17 @@ export function requireLocalEndpoint(value: string, operation = 'Local AI proces
     || (isIP(host) === 4 && host.startsWith('127.'))
     || /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host);
   if (!local || !['http:', 'https:', 'ws:', 'wss:'].includes(url.protocol) || url.username || url.password) {
-    throw new Error(`[Privacy] ${operation}: strict mode requires an endpoint on this computer.`);
+    throw new Error(`[Privacy] ${operation}: local-only processing requires an endpoint on this computer.`);
   }
 }
 
 /** Local SDKs may follow redirects by default. Check every request and prevent
  * a local endpoint from redirecting a prompt to a remote service. */
-export const localPrivacyFetch: typeof fetch = (input, init) => {
-  requireLocalEndpoint(input instanceof Request ? input.url : String(input));
-  return fetch(input, { ...init, ...(isStrictPrivacy() ? { redirect: 'error' as const } : {}) });
-};
+export function localPrivacyFetch(input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1], forceLocalOnly = false): ReturnType<typeof fetch> {
+  const localOnly = forceLocalOnly || isStrictPrivacy();
+  requireLocalEndpoint(input instanceof Request ? input.url : String(input), 'Local AI request', localOnly);
+  return fetch(input, { ...init, ...(localOnly ? { redirect: 'error' as const } : {}) });
+}
 
 export function isStrictPrivacy(): boolean {
   return getPrivacyMode() === 'strict';

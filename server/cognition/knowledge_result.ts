@@ -1,17 +1,9 @@
 import type { ToolExecutionRecord } from '../tools/types';
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { KNOWLEDGE_RESULT_MESSAGES } from "../regions/messages/knowledge_result_messages";
+import { isReadOnlyKnowledgeBaseInspectionRequest as isKnowledgeInventoryRequest } from './knowledge_intent';
 
-/** Statistics prove an inventory/processing-state query, never a UI action or a content review. */
-export function isKnowledgeInventoryRequest(taskText: string): boolean {
-  const text = String(taskText || '');
-  // i18n-allow: Recognition patterns for knowledge inventory, not response copy.
-  if (!/(?:知识库|知识文件|knowledge\s*(?:base|files?))/iu.test(text)) return false;
-  // i18n-allow: Reject other goals even when an inventory tool happened to run.
-  if (/(?:打开|进入|跳转|切换|删除|移除|上传|添加|导入|重新索引|重建|读取正文|全文|内容|审阅|审查|总结|分析)|\b(?:open|navigate|switch|delete|remove|upload|add|import|reindex|rebuild|contents?|full\s*text|review|summari[sz]e|analy[sz]e)\b/iu.test(text)) return false;
-  // i18n-allow: Read-only inventory and coverage requests.
-  return /(?:查看|看看|看一下|查一下|查询|统计|数量|多少|哪些|文件|列表|清单|吸收|索引|处理|验证|状态)|\b(?:list|show|check|count|how\s+many|which|files?|inventory|status|coverage|absorbed|indexed|verified)\b/iu.test(text);
-}
+export { isKnowledgeInventoryRequest };
 
 export function formatGroundedKnowledgeObservation(input: {
   taskText: string;

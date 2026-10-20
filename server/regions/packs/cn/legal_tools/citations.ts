@@ -1,7 +1,7 @@
-import { type CitationCheck, verifyMultipleCitations } from "../../../../legal/kb";
+import { type CitationCheck, type CitationVerificationOptions, isLegalReferenceDate, verifyMultipleCitations } from "../../../../legal/kb";
 import { inspectLegalReasoningStructure } from "../legal_reasoning_structure";
 import * as LegalCases from "../../../../org/legal_cases";
-import { textArg, listArg, legalWorkspaceId } from "./context";
+import { textArg, listArg, legalWorkspaceId, legalTemporalOptions } from "./context";
 import { archiveLegalReportToCase } from "./case_workflow";
 
 function normalizeCaseCitation(value: string): string {
@@ -27,22 +27,20 @@ function isOwnCaseCitation(item: CitationCheck, ownCaseNumbers: string[]): boole
 }
 
 export function formatCitationReportMarkdown(args: Record<string, any>, text: string, sourceLabel: string): string {
+  const factDate = textArg(args, 'factDate');
   const caseName = textArg(args, 'caseName') || '未命名案件';
   const orgId = textArg(args, 'orgId') || undefined;
-  const checks = verifyMultipleCitations(text, orgId);
-  const statuteChecks = checks.filter(item => item.type === 'statute');
-  const caseChecks = checks.filter(item => item.type === 'case');
   const ownCaseNumbers = ownCaseNumbersFromArgs(args);
+  const gate = evaluateCurrentLawGate(text, orgId, ownCaseNumbers, factDate, legalTemporalOptions(args));
+  const { checks, statuteChecks } = gate;
+  const caseChecks = checks.filter(item => item.type === 'case');
   const missing = checks.filter(item => !item.exists);
   const repealed = checks.filter(item => item.isEffective === false);
-  const statuteGateRisks = statuteChecks.filter(item => !item.exists || item.isEffective !== true);
-  const statuteGatePassed = statuteChecks.length > 0 && statuteGateRisks.length === 0;
-  const caseSourceGatePassed = caseChecks.filter(item => !item.exists && !isOwnCaseCitation(item, ownCaseNumbers)).length === 0;
-  const valid = checks.filter(item => item.exists && item.isEffective !== false);
+  const valid = checks.filter(item => item.type === 'case' ? item.exists : item.exists && item.isEffective === true && item.provisionVerified === true && item.quotationVerified !== false && item.temporalApplicabilityVerified !== false);
 
   const rows = checks.length
     ? checks.map((item, index) =>
-      `| ${index + 1} | ${item.type === 'statute' ? '法条' : '案例'} | ${item.citation.replace(/\|/g, ' ')} | ${item.exists ? '存在' : '未确认'} | ${item.isEffective === null ? '不适用/待人工核验' : item.isEffective ? '现行有效' : '已废止'} | ${(item.source || 'N/A').replace(/\|/g, ' ')} | ${item.detail.replace(/\|/g, ' ')} |`,
+      `| ${index + 1} | ${item.type === 'statute' ? '法条' : '案例'} | ${item.citation.replace(/\|/g, ' ')} | ${item.exists ? '存在' : '未确认'} | ${item.applicabilityStatus === 'historical_version_verified' ? '历史版本及时间效力来源已核验' : item.temporalApplicabilityVerified === false || item.isEffective === null ? '本案时点适用待复核' : item.isEffective ? '所核验时点有效' : '已废止/不在有效区间'} | ${(item.source || 'N/A').replace(/\|/g, ' ')} | ${item.detail.replace(/\|/g, ' ')} |`,
     ).join('\n')
     : '| 1 | 无 | 未检测到《XX法》或案号格式引用 | 待补充 | 待核验 | N/A | 建议在正式文书中补充引用来源 |';
 
@@ -50,6 +48,9 @@ export function formatCitationReportMarkdown(args: Record<string, any>, text: st
     `# ${caseName} 引用核验报告`,
     '',
     `- 来源材料：${sourceLabel}`,
+    `- 关键事实发生日期：${factDate || '待确认，法律适用尚未核准'}`,
+    `- 程序行为发生日期：${textArg(args, 'procedureDate') || '待确认；不得用事实日期替代'}`,
+    '- 时间效力边界：历史原文、有效区间和时间效力条文来源检查，与具体案件适用结论的律师复核分别进行。',
     `- 生成时间：${new Date().toISOString()}`,
     `- 核验范围：法条引用、案号引用、是否存在、是否已废止、本地知识库是否收录。`,
     `- 核验边界：本报告不能替代律师最终检索；未在本地库命中的案例需到人民法院案例库/裁判文书网/法蝉/Alpha 等授权来源人工复核。`,
@@ -59,11 +60,11 @@ export function formatCitationReportMarkdown(args: Record<string, any>, text: st
     `- 引用总数：${checks.length}`,
     `- 法条引用：${statuteChecks.length}`,
     `- 案例引用：${caseChecks.length}`,
-    `- 已确认或可继续使用：${valid.length}`,
+    `- 已对照权威原文（本案适用另行复核）：${valid.length}`,
     `- 未确认存在：${missing.length}`,
     `- 已废止/失效风险：${repealed.length}`,
-    `- 现行有效法律硬门槛：${statuteGatePassed ? '通过' : '未通过'}`,
-    `- 类案/案号来源硬门槛：${caseSourceGatePassed ? '通过' : '未通过'}`,
+    `- 现行有效法律硬门槛：${gate.passed ? '通过' : '未通过'}`,
+    `- 类案/案号来源硬门槛：${gate.caseSourcePassed ? '通过' : '未通过'}`,
     '',
     '## 明细',
     '',
@@ -71,18 +72,27 @@ export function formatCitationReportMarkdown(args: Record<string, any>, text: st
     '| --- | --- | --- | --- | --- | --- | --- |',
     rows,
     '',
+    '## 时间效力依据与适用复核',
+    '',
+    '| 本次引用 | 对应时点 | 时间效力条文 | 连续原文摘录 | 权威来源 | 边界 |',
+    '| --- | --- | --- | --- | --- | --- |',
+    ...statuteChecks.filter(item => item.temporalBasisCitation || item.temporalApplicabilityVerified === false || item.applicabilityStatus === 'historical_review_required')
+      .map(item => `| ${item.citation} | ${item.temporalScope === 'procedure' ? '程序' : '事实'}：${item.referenceDate || '待确认'} | ${item.temporalBasisCitation || '待核验'} | ${(item.temporalBasisQuote || '未取得权威连续摘录').replace(/[|\n]/g, ' ')} | ${item.temporalBasisSource || '待核验'} | 来源核验与本案适用结论分别进行，仍须律师复核 |`),
+    '',
     '## 处理建议',
     '',
-    '- 已废止法条不得直接作为现行法律依据，应替换为现行有效法律或司法解释。',
+    '- 已废止法条不得直接作为现行法律依据；历史事实应核验对应历史原文、有效区间及时间效力规则，不能机械替换为现行法。',
     '- 未确认案例不得写成“已有裁判支持”，应先完成来源登记和律师复核。',
     '- 最终文书应保留来源名称、发布日期/裁判日期、案号、法院层级、链接或下载文件路径。',
     '',
   ].join('\n');
 }
 
-interface CurrentLawGateResult {
+export interface CurrentLawGateResult {
   passed: boolean;
   missingStatuteCitation: boolean;
+  missingFactDate: boolean;
+  missingProcedureDate: boolean;
   caseSourcePassed: boolean;
   checks: CitationCheck[];
   statuteChecks: CitationCheck[];
@@ -98,15 +108,19 @@ interface LegalReasoningGateResult {
   missing: string[];
 }
 
-export function evaluateCurrentLawGate(text: string, orgId?: string, ownCaseNumbers: string[] = []): CurrentLawGateResult {
-  const checks = verifyMultipleCitations(text, orgId);
+export function evaluateCurrentLawGate(text: string, orgId?: string, ownCaseNumbers: string[] = [], factDate?: string, options: CitationVerificationOptions = {}): CurrentLawGateResult {
+  const checks = verifyMultipleCitations(text, orgId, { ...options, factDate });
   const statuteChecks = checks.filter(item => item.type === 'statute');
-  const blockingStatutes = statuteChecks.filter(item => !item.exists || item.isEffective !== true);
+  const blockingStatutes = statuteChecks.filter(item => !item.exists || item.isEffective !== true || item.provisionVerified !== true || item.quotationVerified === false || item.temporalApplicabilityVerified === false);
   const missingCaseChecks = checks.filter(item => item.type === 'case' && !item.exists && !isOwnCaseCitation(item, ownCaseNumbers));
   const missingStatuteCitation = statuteChecks.length === 0;
+  const missingFactDate = (statuteChecks.length === 0 || statuteChecks.some(item => item.temporalScope !== 'procedure')) && !isLegalReferenceDate(factDate);
+  const missingProcedureDate = statuteChecks.some(item => item.temporalScope === 'procedure') && !isLegalReferenceDate(options.procedureDate);
   return {
-    passed: !missingStatuteCitation && blockingStatutes.length === 0,
+    passed: !missingStatuteCitation && !missingFactDate && !missingProcedureDate && blockingStatutes.length === 0,
     missingStatuteCitation,
+    missingFactDate,
+    missingProcedureDate,
     caseSourcePassed: missingCaseChecks.length === 0,
     checks,
     statuteChecks,
@@ -199,6 +213,8 @@ export function formatCurrentLawGateBlock(args: {
     `- Source register: ${args.sourcePath}`,
     `- Statute citations checked: ${args.gate.statuteChecks.length}`,
     `- Missing statute citation: ${args.gate.missingStatuteCitation ? 'yes' : 'no'}`,
+    `- Missing or invalid case fact date: ${args.gate.missingFactDate ? 'yes' : 'no'}`,
+    `- Missing or invalid procedure date: ${args.gate.missingProcedureDate ? 'yes' : 'no'}`,
     `- Blocking statute citations: ${args.gate.blockingStatutes.length}`,
     `- Missing case citations for lawyer review: ${args.gate.missingCaseChecks.length}`,
     '',
@@ -213,9 +229,11 @@ export function formatCurrentLawGateBlock(args: {
     '## Required Fix',
     '',
     '- Add at least one reviewable current effective statute or judicial interpretation citation for formal legal delivery.',
-    '- Replace repealed statutes with current effective law or judicial interpretations.',
+    '- Confirm the case fact date and verify the applicable historical version and temporal rules; never substitute the generation or hearing date.',
+    '- Verify procedural rules against the relevant procedure date and a quoted authoritative temporal rule; do not substitute the substantive fact date.',
+    '- For historical facts, verify the historical original, its effective interval and a sourced temporal rule; do not mechanically replace old law with current law.',
     '- Verify unknown statutes against an authoritative source before generating the formal delivery package.',
-    '- Re-run legal_finalize_delivery_package after the legal authority text is corrected.',
+    '- Re-run 正式交付核验 after the legal authority text is corrected.',
     '',
   ].join('\n');
 }
@@ -297,7 +315,7 @@ export function buildLegalWorkProductPreflightSection(
   args: Record<string, any>,
   orgId?: string,
 ): string {
-  const gate = evaluateCurrentLawGate(collectLegalWorkProductGateText(report, args), orgId);
+  const gate = evaluateCurrentLawGate(collectLegalWorkProductGateText(report, args), orgId, ownCaseNumbersFromArgs(args), textArg(args, 'factDate'), legalTemporalOptions(args));
   const statuteStatus = legalReasoningGateStatus(gate);
   const blocking = compactCitationListForPreflight(gate.blockingStatutes);
   const missingCases = compactCitationListForPreflight(gate.missingCaseChecks);

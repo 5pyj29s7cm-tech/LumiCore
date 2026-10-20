@@ -1,5 +1,5 @@
 import { buildMediaGenerationContract } from './contracts/media_contract';
-import { isExplicitArtifactCreationText, isExternalCommitConfirmationOnlyRequest, normalizeActionIntent, withoutChatReplyDestination } from "./normalized_action_intent";
+import { isExplicitArtifactCreationText, isExternalCommitConfirmationOnlyRequest, normalizeActionIntent } from "./normalized_action_intent";
 import { isLegalEntryTurn, isRemoteLegalMessageTurn } from "./legal_entry";
 import type { ActionIntentAnalysis } from "./normalized_action_intent";
 import { hasExplicitNoToolInstruction, isInformationOnlyQuestion } from "./tool_intent";
@@ -19,7 +19,7 @@ import { requestsExactReadOnlyArtifactInspection } from "./action_desktop_eviden
 import type { LumiActionContract } from './contracts/contracts';
 import { NONE_CONTRACT, withDefaults } from './contracts/contracts';
 import { buildRuntimeControlContract } from './contracts/runtime_contract';
-import { buildArtifactWorkContract, buildLegalDocumentContract, buildCadGeometryExtractionContract, buildDesignDeliveryContract, buildReadOnlyArtifactInspectionContract } from './contracts/artifact_contracts';
+import { buildArtifactWorkContract, buildArtifactRetrievalContract, buildLegalDocumentContract, buildCadGeometryExtractionContract, buildDesignDeliveryContract, buildReadOnlyArtifactInspectionContract } from './contracts/artifact_contracts';
 import { extensionRegistryToolForAction, buildVisualModelAvailabilityContract, buildCurrentAppMutationContract, buildSimpleDesktopOpenContract, buildMediaPlaybackContract, buildDesktopOperationContract } from './contracts/navigation_contracts';
 import { buildExternalHistoryActionContract } from './contracts/external_history_contract';
 import { buildEcommerceOperationsContract, buildCustomerOperationsContract } from './contracts/business_contracts';
@@ -72,6 +72,8 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
     ) return primaryContract;
   }
 
+  const retrieval = buildArtifactRetrievalContract(rawInput);
+  if (retrieval) return retrieval;
   const text = compact(withoutLocationLiterals(withoutNegatedLookupClauses(rawInput), true));
   if (!text) return NONE_CONTRACT;
   const authoringContract = buildAuthoringActionContract(rawInput, text, analysis);
@@ -79,7 +81,7 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
   const runtimeContract = buildRuntimeControlContract(rawInput, text, primaryTaskText);
   if (runtimeContract) return runtimeContract;
   if (normalizedIntent.kind === 'media_generation') {
-    return buildMediaGenerationContract(normalizedIntent.target as 'generate_image' | 'ai_edit_image' | 'generate_video', primaryTaskText || rawInput);
+    return buildMediaGenerationContract(normalizedIntent.target as 'generate_image' | 'ai_edit_image' | 'generate_video', primaryTaskText || rawInput, undefined, normalizedIntent.operation === 'mutate' && normalizedIntent.target === 'generate_video');
   }
   // Preserve a narrow local-file inspection candidate across the generic
   // question/status guards below. Domain-specific contracts still get first
@@ -149,7 +151,7 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
   // An explicit local artifact instruction owns every noun inside its payload.
   // Literal values such as "channel: command-center chat" or "status: pending"
   // must not be reclassified as messaging, navigation, or task-status work.
-  if (isExplicitArtifactCreationText(text)) return buildArtifactWorkContract();
+  if (isExplicitArtifactCreationText(rawInput)) return buildArtifactWorkContract();
   const extensionRegistryTool = extensionRegistryToolForAction(text);
   if (extensionRegistryTool) {
     const mutating = ['extension_registry_install', 'extension_registry_rollback', 'extension_registry_disable'].includes(extensionRegistryTool);
@@ -203,7 +205,7 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
     return buildSimpleDesktopOpenContract();
   }
   const confirmationOnlyExternalCommit = isExternalCommitConfirmationOnlyRequest(text);
-  const negatedMessagingSend = hasNegatedMessagingSendIntent(text) && !confirmationOnlyExternalCommit;
+  const negatedMessagingSend = hasNegatedMessagingSendIntent(rawInput) && !confirmationOnlyExternalCommit;
   const appInventoryInspection = /\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
   const desktopObservationInspection = desktopObservationPlan.length > 0;
   const currentAuthoringDocumentInspection = requiresCurrentAuthoringDocumentInspection(rawInput);
@@ -243,14 +245,9 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
     });
   }
 
-  // URLs and prohibitions on sending are not a request to read messages.
-  // i18n-allow: Negative message-action clause recognition.
-  const messageSourceText = withoutChatReplyDestination(text).replace(/https?:\/\/[^\s，。；;！？!?]+/giu, ' ')
-    .replace(/(?:不要|无需|不用|别|不)\s*(?:发送|发|读|读取|查看)(?:任何)?(?:消息|聊天|对话)[^，,。；;！？!?\n]*/gu, ' ');
   if (
     !readOnlyArtifactInspection &&
-    matches(messageSourceText, /wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f|message|chat/i) &&
-    matches(messageSourceText, /\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u804a\u5929\u5185\u5bb9|\u804a\u5929\u8bb0\u5f55|\u603b\u7ed3|read|view|inspect|recent|history/i) &&
+    normalizedIntent.kind === 'messaging_read' &&
     !directedMessageSend &&
     !matches(text, /\u53d1\u9001|\u53d1\u7ed9|\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\bsend\b/i)
   ) {

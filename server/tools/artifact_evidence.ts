@@ -14,6 +14,21 @@ export function isArtifactProducerRecord(record: Pick<ToolExecutionRecord, 'name
     && Boolean(record.capability?.sideEffects?.some(effect => effect.type === 'local_write')));
 }
 
+/** Explicit retrieval can deliver an existing file without claiming it was created. */
+export function isArtifactDeliveryRecord(record: ToolExecutionRecord): boolean {
+  if (isArtifactProducerRecord(record)) return true;
+  const receipt = parseReceiptObject(toolRecordTerminalPayload(record));
+  return !record.error && record.terminalVerification?.status === 'verified'
+    && record.capability?.operation === 'observe' && Boolean(record.capability.sideEffects?.length)
+    && record.capability.sideEffects.every(effect => effect.type === 'local_read')
+    && record.capability.verification?.successStatuses?.includes('retrieved') === true
+    && receipt?.ok === true && receipt.verified === true && receipt.success !== false && !receipt.error && receipt.status === 'retrieved'
+    && typeof receipt.outputPath === 'string' && Array.isArray(receipt.artifacts)
+    && receipt.artifacts.some((artifact: any) => typeof artifact?.path === 'string'
+      && sameArtifactPath(artifact.path, receipt.outputPath) && Number.isSafeInteger(artifact.size) && artifact.size > 0
+      && typeof artifact.sha256 === 'string' && /^[a-f0-9]{64}$/.test(artifact.sha256));
+}
+
 export function isArtifactReaderRecord(record: ToolExecutionRecord): boolean {
   return READERS.test(record.name);
 }
@@ -42,9 +57,9 @@ export function sameArtifactPath(left: string, right: string): boolean {
 /** Producer receipts describe outputs; a mutation's input is never its output. */
 export function artifactPathFromRecord(record: ToolExecutionRecord): string {
   const args = record.arguments || {};
-  if (isArtifactProducerRecord(record)) {
+  if (isArtifactDeliveryRecord(record)) {
     const receipt = parseReceiptObject(toolRecordTerminalPayload(record));
-    const output = receipt?.path || receipt?.filePath || receipt?.outputPath || receipt?.savedPath;
+    const output = isArtifactProducerRecord(record) ? receipt?.path || receipt?.filePath || receipt?.outputPath || receipt?.savedPath : receipt?.outputPath;
     if (typeof output === 'string' && output.trim()) return output.trim();
     const requestedOutput = args.outputPath || args.destination || args.targetPath
       || (/^(?:write_file|desktop_write_text_file)$/iu.test(record.name) ? args.path || args.filePath : '');
@@ -76,4 +91,22 @@ export function resolveArtifactDelivery(records: ToolExecutionRecord[], accept: 
     && artifactRecordMatchesTurn(record, { requestId: producer.requestId || producer.envelope?.requestId, taskId: producer.taskId || producer.envelope?.taskId })
     && sameArtifactPath(outputPath, artifactPathFromRecord(record)));
   return { producer, outputPath, readback };
+}
+
+/** Callers supply already verified records; generated output readbacks are never original source exceptions. */
+export function artifactReadbackTextSources(records: ToolExecutionRecord[], originalText: readonly string[] = []) {
+  const reads = records.filter(isArtifactReaderRecord).map(record => ({ record, text: artifactReadbackText(record) || '' }));
+  const requestedSource = (record: ToolExecutionRecord) => {
+    const target = artifactPathFromRecord(record);
+    if (!target) return false;
+    // A tool-selected runtime/log read is not user input. Only an exact path
+    // literal in the original server-owned request can grant this exception.
+    return originalText.some(text => {
+      const index = text.indexOf(target);
+      return index >= 0 && (index === 0 || "\"'` \r\n\t".includes(text[index - 1]))
+        && (index + target.length === text.length || "\"'` \r\n\t".includes(text[index + target.length]));
+    });
+  };
+  return { verifiedText: reads.map(item => item.text), sourceText: reads.filter(({ record }) => requestedSource(record) && !records.some(producer => isArtifactProducerRecord(producer)
+    && sameArtifactPath(artifactPathFromRecord(producer), artifactPathFromRecord(record)))).map(item => item.text) };
 }

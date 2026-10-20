@@ -3,7 +3,6 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase } from '../db_layer';
 import { ToolRegistry } from '../server/tools/registry';
 import {
-  buildToolEvidenceRecord,
   hasRelevantEvidenceTool,
   normalizePlannedToolScope,
 } from '../server/cognition/tool_planning';
@@ -70,7 +69,7 @@ describe('generic tool planning', () => {
       name: 'read_capability_state',
       arguments: {},
     }]);
-    expect(buildToolEvidenceRecord(registry, calls[0].name, calls[0].arguments)?.scope)
+    expect(registry.buildEvidenceRecord(calls[0].name, calls[0].arguments)?.scope)
       .toEqual(['alpha', 'beta', 'gamma']);
   });
 

@@ -1,4 +1,6 @@
 import fs from 'fs';
+import { classifyCloudError } from '../../cloud/core';
+import { mediaGenerationIntent } from '../../cognition/normalized_action_intent';
 import { generateVideoSequence } from '../video_composition';
 import { videoGenerationOptions } from '../../../shared/video_generation_options';
 import { requireNotStrict } from '../../config/privacy';
@@ -13,6 +15,7 @@ import {
   DEFAULT_VIDEO_GENERATION_MODELS,
   getUserPreferredGenerationModels,
   type VideoGenerationProvider,
+  assertOfficialGenerationModel,
 } from '../../llm/generation_preferences';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { getGeneratedOutputDir } from '../../config/data_path';
@@ -21,7 +24,14 @@ import {
   officialApiModel,
   officialApiPath,
   officialApiRequest,
+  listOfficialApiModels,
+  OfficialApiHttpError,
+  getOfficialApiConfig,
+  isDefiniteOfficialVideoRejection,
 } from '../../llm/official_api';
+import { assertMediaTaskOwner, prepareVideoGenerationTask, readVideoGenerationTask, saveMediaGenerationTask,
+  videoGenerationRecoveryId, type OfficialVideoGenerationTask } from '../media_generation_journal';
+import { executionIdempotencyKey } from '../registry';
 import { downloadPublicMedia, readResponseBytes } from '../media_artifact';
 import { cancelDashScopeTaskBestEffort } from '../dashscope_async_task';
 import { CN_MEDIA_PROGRESS } from '../../regions/packs/cn/media_progress';
@@ -165,31 +175,35 @@ async function normalizeVideoReference(
   value: unknown,
   label: string,
   signal?: AbortSignal,
+  size?: string,
 ): Promise<string | undefined> {
   const raw = String(value || '').trim();
   if (!raw) return undefined;
   const dataUrl = raw.match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,([A-Za-z0-9+/=\r\n]+)$/i);
+  let bytes: Buffer;
   if (dataUrl) {
-    const normalized = dataUrl[2].replace(/\s+/g, '');
-    const bytes = Buffer.from(normalized, 'base64');
-    const mimeType = await verifiedReferenceMimeType(bytes, label, signal);
-    return `data:${mimeType};base64,${bytes.toString('base64')}`;
-  }
-  if (/^https:/i.test(raw)) {
-    const { bytes } = await downloadPublicMedia(raw, {
+    bytes = Buffer.from(dataUrl[2].replace(/\s+/g, ''), 'base64');
+  } else if (/^https:/i.test(raw)) {
+    ({ bytes } = await downloadPublicMedia(raw, {
       maxBytes: MAX_REFERENCE_IMAGE_BYTES,
       timeoutMs: REMOTE_MEDIA_TIMEOUT_MS,
       signal,
-    });
-    const mimeType = await verifiedReferenceMimeType(bytes, label, signal);
-    return `data:${mimeType};base64,${bytes.toString('base64')}`;
+    }));
+  } else {
+    if (/^https?:/i.test(raw)) throw new Error(`${label} must use HTTPS.`);
+    if (!path.isAbsolute(raw) || !fs.existsSync(raw) || !fs.statSync(raw).isFile()) {
+      throw new Error(`${label} must be an existing local image, an HTTPS URL, or an image data URL.`);
+    }
+    bytes = fs.readFileSync(raw);
   }
-  if (/^https?:/i.test(raw)) throw new Error(`${label} must use HTTPS.`);
-  if (!path.isAbsolute(raw) || !fs.existsSync(raw) || !fs.statSync(raw).isFile()) {
-    throw new Error(`${label} must be an existing local image, an HTTPS URL, or an image data URL.`);
+  let mimeType = await verifiedReferenceMimeType(bytes, label, signal);
+  if (size) {
+    const [width, height] = normalizeSize(size, 'x').split('x').map(Number);
+    bytes = await require('sharp')(bytes, { limitInputPixels: MAX_DECODED_REFERENCE_PIXELS })
+      .rotate().resize(width, height, { fit: 'contain', background: '#000000' }).png().toBuffer();
+    mimeType = 'image/png';
+    throwIfAborted(signal);
   }
-  const bytes = fs.readFileSync(raw);
-  const mimeType = await verifiedReferenceMimeType(bytes, label, signal);
   return `data:${mimeType};base64,${bytes.toString('base64')}`;
 }
 
@@ -227,6 +241,7 @@ async function persistRemoteVideo(
   provider: string,
   headers: Record<string, string> = {},
   signal?: AbortSignal,
+  onBeforeWrite?: () => void,
 ): Promise<{ outputPath: string }> {
   try {
     const { bytes } = await downloadPublicMedia(url, {
@@ -236,6 +251,7 @@ async function persistRemoteVideo(
       signal,
     });
     throwIfAborted(signal);
+    onBeforeWrite?.();
     const outputPath = writeVideoAtomically(bytes, provider, signal);
     return { outputPath };
   } catch (error: any) {
@@ -263,7 +279,7 @@ async function completedResult(input: {
 }): Promise<string> {
   throwIfAborted(input.signal);
   let measurements = await measureGeneratedVideo(input.outputPath, input.requestedSettings, input.signal);
-  if (input.provider === 'relay' && input.generationMode === 'image_to_video' && videoGenerationOptions(input)) {
+  if (input.provider === 'relay' && input.generationMode === 'image_to_video' && videoGenerationOptions(input)?.fixedDuration) {
     measurements = await fitGeneratedVideoSize(input.outputPath, input.requestedSettings, measurements, input.signal);
   }
   throwIfAborted(input.signal);
@@ -554,19 +570,17 @@ async function generateOpenAIVideo(
   throw new Error(`OpenAI video generation timed out. Video ID: ${taskId}`);
 }
 
-function officialVideoPayload(args: Record<string, any>, model: string): FormData {
+function officialVideoPayload(payload: Record<string, unknown>): FormData {
   const form = new FormData();
-  form.set('model', model);
-  form.set('prompt', String(args.prompt || '').trim());
-  form.set('duration', String(Math.max(1, Math.round(Number(args.duration) || 4))));
-  form.set('size', normalizeSize(args.size, 'x'));
-  if (args.first_frame_image) form.set('input_reference', String(args.first_frame_image));
-  if (args.last_frame_image) form.set('last_frame_image', String(args.last_frame_image));
+  for (const [key, value] of Object.entries(payload)) {
+    form.set(key === 'image' ? 'input_reference' : key,
+      typeof value === 'object' ? JSON.stringify(value) : String(value));
+  }
   return form;
 }
 
 function officialVideoTaskId(body: any): string {
-  return String(body?.id || body?.task_id || body?.data?.id || body?.data?.task_id || body?.output?.task_id || '').trim();
+  return String(body?.id || body?.task_id || body?.jobId || body?.job_id || body?.data?.id || body?.data?.task_id || body?.data?.jobId || body?.data?.job_id || body?.output?.task_id || body?.output?.jobId || body?.output?.job_id || '').trim();
 }
 
 function officialVideoUrl(body: any): string {
@@ -597,113 +611,163 @@ function saveBase64Video(
   );
 }
 
-/** OpenAI-compatible asynchronous video generation through Lumi's gateway. */
-async function generateOfficialVideo(
-  args: Record<string, any>,
-  selectedModel: string,
-  signal?: AbortSignal,
-  onProgress?: VideoProgressReporter,
-): Promise<string> {
+function officialVideoGatewayDigest(): string {
+  const url = new URL(getOfficialApiConfig().baseUrl);
+  return crypto.createHash('sha256').update(JSON.stringify([url.origin, url.pathname,
+    officialApiPath('RELAY_VIDEO_STATUS_PATH', '/videos/generations/{id}'),
+    officialApiPath('RELAY_VIDEO_CONTENT_PATH', '/videos/generations/{id}/content')])).digest('hex');
+}
+function videoTaskReceipt(task: OfficialVideoGenerationTask, reason: string, status = 'unknown', queryRetryable = false): string {
+  return JSON.stringify({ ok: false, success: false, status, verified: false, verificationStatus: 'unverified',
+    provider: task.provider, model: task.model, taskId: task.providerTaskId, recoveryId: task.recoveryId,
+    recoveryTool: 'get_video_generation_status', automaticResubmissionBlocked: true, reason,
+    ...(queryRetryable ? { queryRetryable: true } : {}),
+    ...(task.compositionSegment ? { compositionSegment: true, wholeTaskCompleted: false } : {}) });
+}
+async function completeOfficialVideoTask(task: OfficialVideoGenerationTask, body: any, context?: ToolContext, prompt = ''): Promise<string> {
+  const signal = context?.executionSignal;
+  assertMediaTaskOwner(task, context);
+  const url = officialVideoUrl(body) || task.videoUrl;
+  if (url) { task.videoUrl = url; task.updatedAt = new Date().toISOString(); saveMediaGenerationTask(task); }
+  let outputPath = task.outputPath && fs.existsSync(task.outputPath) ? task.outputPath : '';
+  if (!outputPath) outputPath = saveBase64Video(body?.b64_json || body?.base64 || body?.video_base64, signal, () => assertMediaTaskOwner(task, context)) || '';
+  if (!outputPath && url) outputPath = (await persistRemoteVideo(url, 'official', {}, signal, () => assertMediaTaskOwner(task, context))).outputPath;
+  if (!outputPath && task.providerTaskId) {
+    const content = await officialApiBinary(officialApiPath('RELAY_VIDEO_CONTENT_PATH', '/videos/generations/{id}/content')
+      .replace(/\{id\}/gi, encodeURIComponent(task.providerTaskId)), { signal });
+    const bytes = await readResponseBytes(content, MAX_REMOTE_VIDEO_BYTES, signal);
+    assertMediaTaskOwner(task, context);
+    outputPath = writeVideoAtomically(bytes, 'official', signal);
+  }
+  if (!outputPath) return videoTaskReceipt(task, 'The original provider supplied no retrievable video artifact.');
+  assertMediaTaskOwner(task, context);
+  task.outputPath = outputPath; task.updatedAt = new Date().toISOString(); saveMediaGenerationTask(task);
+  const result = JSON.parse(await completedResult({ provider: 'relay', model: task.model, prompt,
+    taskId: task.providerTaskId || 'completed', videoUrl: url, outputPath, ...task.settings, signal, onProgress: context?.onProgress }));
+  assertMediaTaskOwner(task, context);
+  const receipt = JSON.stringify({ ...result, recoveryId: task.recoveryId,
+    ...(task.compositionSegment ? { compositionSegment: true, wholeTaskCompleted: false } : { reconciliationStatus: 'committed' }) });
+  task.artifactSha256 = crypto.createHash('sha256').update(fs.readFileSync(outputPath)).digest('hex');
+  task.state = 'completed'; task.result = receipt; task.updatedAt = new Date().toISOString(); saveMediaGenerationTask(task);
+  return receipt;
+}
+const activeVideoQueries = new Map<string, Promise<string>>();
+async function queryOfficialVideoTask(task: OfficialVideoGenerationTask, context?: ToolContext, prompt = ''): Promise<string> {
+  assertMediaTaskOwner(task, context);
+  const active = activeVideoQueries.get(task.recoveryId);
+  if (active) { const result = await active; assertMediaTaskOwner(task, context); return result; }
+  const query = queryOfficialVideoTaskOnce(task, context, prompt);
+  activeVideoQueries.set(task.recoveryId, query);
+  try { const result = await query; assertMediaTaskOwner(task, context); return result; }
+  finally { if (activeVideoQueries.get(task.recoveryId) === query) activeVideoQueries.delete(task.recoveryId); }
+}
+async function queryOfficialVideoTaskOnce(task: OfficialVideoGenerationTask, context?: ToolContext, prompt = ''): Promise<string> {
+  task = readVideoGenerationTask(task.recoveryId, context) || task;
+  assertMediaTaskOwner(task, context);
+  if (task.state === 'completed' && task.result && task.outputPath && fs.existsSync(task.outputPath)) {
+    try {
+      const bytes = fs.readFileSync(task.outputPath); validateVideoContainer(bytes);
+      if (crypto.createHash('sha256').update(bytes).digest('hex') === task.artifactSha256) return task.result;
+    } catch { /* Retrieve the original again. */ }
+    task.outputPath = undefined; task.result = undefined; task.state = 'accepted'; saveMediaGenerationTask(task);
+  }
+  if (['failed', 'cancelled', 'rejected'].includes(task.state)) return videoTaskReceipt(task, 'The original task reached an unsuccessful terminal state.', task.state);
+  if (!task.providerTaskId && !task.videoUrl && !task.outputPath) return videoTaskReceipt(task, 'No provider task identity was received. No submission will be sent.');
+  let statusReceived = false;
+  try {
+    if (task.gatewayDigest !== officialVideoGatewayDigest()) return videoTaskReceipt(task, 'Restore the original official gateway paths to query this task.');
+    const body = task.providerTaskId ? (await officialApiRequest<any>(officialApiPath('RELAY_VIDEO_STATUS_PATH', '/videos/generations/{id}')
+      .replace(/\{id\}/gi, encodeURIComponent(task.providerTaskId)), { timeoutMs: 15_000, signal: context?.executionSignal })).body : {};
+    statusReceived = true;
+    assertMediaTaskOwner(task, context);
+    const state = String(body?.status || body?.state || body?.output?.status || '').toLowerCase();
+    if (['failed', 'failure', 'error', 'cancelled', 'canceled'].includes(state)) {
+      task.state = ['cancelled', 'canceled'].includes(state) ? 'cancelled' : 'failed';
+      task.updatedAt = new Date().toISOString(); saveMediaGenerationTask(task);
+      return videoTaskReceipt(task, 'The provider reported an unsuccessful terminal state.', task.state);
+    }
+    if (['completed', 'complete', 'succeeded', 'success', 'done'].includes(state) || officialVideoUrl(body)
+      || body?.b64_json || body?.base64 || body?.video_base64 || task.videoUrl || task.outputPath) {
+      return await completeOfficialVideoTask(task, body, context, prompt);
+    }
+    return videoTaskReceipt(task, 'The original accepted task has not completed.', 'pending');
+  } catch (error) {
+    assertMediaTaskOwner(task, context);
+    const failure = classifyCloudError(error instanceof Error ? error : new Error(String(error)));
+    return videoTaskReceipt(task, 'The original task was retained; status or artifact retrieval did not complete.', 'unknown',
+      !statusReceived && task.state === 'accepted' && Boolean(task.providerTaskId) && failure.isRetryable && ['network', 'timeout', 'server_error'].includes(failure.category));
+  }
+}
+/** The existing journal is the barrier before POST and before reporting acceptance. */
+async function generateOfficialVideo(args: Record<string, any>, selectedModel: string, signal?: AbortSignal,
+  onProgress?: VideoProgressReporter, allowDefiniteRejection = true, context?: ToolContext, journalArgs = args): Promise<string> {
   const prompt = String(args.prompt || '').trim();
   if (!prompt) throw new Error('prompt is required');
-  const imageToVideo = Boolean(args.first_frame_image);
-  const model = officialApiModel(
-    imageToVideo ? 'RELAY_IMAGE_TO_VIDEO_MODEL' : 'RELAY_VIDEO_MODEL',
-    selectedModel || (imageToVideo ? DEFAULT_IMAGE_TO_VIDEO_MODELS.relay : DEFAULT_VIDEO_GENERATION_MODELS.relay),
-  );
-  const options = videoGenerationOptions({ provider: 'relay', model });
-  if (options && args.duration !== undefined && Number(args.duration) !== options.fixedDuration) {
-    throw new Error('The configured Wan2.2 model produces 5-second clips. Longer videos require multiple clips and composition; no generation was submitted.');
-  }
-  if (options && args.size && !options.sizes.includes(normalizeSize(args.size, 'x'))) {
-    throw new Error('The configured Wan2.2 model requires a supported size: ' + options.sizes.join(', ') + '. No generation was submitted.');
-  }
-  args = { ...args, size: args.size || options?.sizes[0], duration: args.duration ?? options?.fixedDuration };
-  // ModelDepot documents JSON POST /v1/videos/generations. A deployment can
-  // opt into multipart for an OpenAI-compatible gateway with the explicit
-  // override rather than making the documented path an accidental fallback.
-  const pathName = officialApiPath('RELAY_VIDEO_PATH', '/videos/generations');
+  const ownerContext = { ...context, executionSignal: signal, onProgress };
+  const { task, created } = prepareVideoGenerationTask(journalArgs, selectedModel, completionMetadata(args), officialVideoGatewayDigest(), ownerContext);
+  if (!created) return queryOfficialVideoTask(task, ownerContext, prompt);
   const useJson = process.env.RELAY_VIDEO_REQUEST_FORMAT?.toLowerCase() !== 'multipart';
-  const payload = {
-    model,
-    prompt,
-    duration: Math.max(1, Math.round(Number(args.duration) || options?.fixedDuration || 4)),
-    size: args.size ? normalizeSize(args.size, 'x') : options?.sizes[0] || normalizeSize(args.size, 'x'),
+  const options = videoGenerationOptions({ provider: 'relay', model: selectedModel });
+  const duration = Math.max(1, Math.round(Number(args.duration) || 4)), size = normalizeSize(args.size, 'x');
+  const [width, height] = size.split('x').map(Number);
+  const payload = { model: selectedModel, prompt, duration, size,
     ...(args.first_frame_image ? { image: String(args.first_frame_image) } : {}),
     ...(args.last_frame_image ? { last_frame_image: String(args.last_frame_image) } : {}),
+    ...(options && !options.fixedDuration ? { extra_body: { parameters: { duration,
+      resolution: size.includes('1080') ? '1080P' : size.includes('720') ? '720P' : '480P', prompt_extend: args.prompt_extend === true,
+      ratio: args.first_frame_image ? 'adaptive' : width === height ? '1:1' : width > height ? '16:9' : '9:16', ...(Number.isInteger(args.seed) ? { seed: args.seed } : {}) } } } : {}),
   };
-  const request = await officialApiRequest<any>(pathName, {
-    method: 'POST',
-    headers: useJson ? { 'Content-Type': 'application/json' } : {},
-    body: useJson ? JSON.stringify(payload) : officialVideoPayload(args, model),
-    timeoutMs: 90_000,
-    signal,
-  });
-  const taskId = officialVideoTaskId(request.body);
-  const immediateUrl = officialVideoUrl(request.body);
-  const immediatePath = saveBase64Video(
-    request.body?.b64_json || request.body?.base64 || request.body?.video_base64,
-    signal,
-    () => reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.officialVideoSaving),
-  );
-  if (!taskId && !immediateUrl && !immediatePath) throw new Error('Lumi Official API video generation returned no task or video reference.');
-  if (!taskId) {
-    if (!immediatePath) reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.officialVideoDownloading);
-    const outputPath = immediatePath
-      || (immediateUrl ? (await persistRemoteVideo(immediateUrl, 'official', {}, signal)).outputPath : '');
-    if (!outputPath) throw new Error('Lumi Official API returned no durable video artifact.');
-    return completedResult({ provider: 'relay', model, prompt, taskId: 'completed', videoUrl: immediateUrl, outputPath, ...completionMetadata(args), signal, onProgress });
+  let body: any;
+  try {
+    assertMediaTaskOwner(task, ownerContext);
+    body = (await officialApiRequest<any>(officialApiPath('RELAY_VIDEO_PATH', '/videos/generations'), {
+      method: 'POST', headers: useJson ? { 'Content-Type': 'application/json' } : {},
+      body: useJson ? JSON.stringify(payload) : officialVideoPayload(payload), timeoutMs: 90_000, signal })).body;
+  } catch (error) {
+    if (error instanceof OfficialApiHttpError) {
+      task.providerTaskId = officialVideoTaskId(error.responseBody);
+      task.videoUrl = officialVideoUrl(error.responseBody) || undefined;
+      if (allowDefiniteRejection && !task.providerTaskId && !task.videoUrl
+        && !(error.responseBody as any)?.video_base64 && !(error.responseBody as any)?.b64_json && !(error.responseBody as any)?.base64) error.videoSubmissionRejected = true;
+    }
+    task.state = task.providerTaskId || task.videoUrl ? 'accepted' : isDefiniteOfficialVideoRejection(error) ? 'rejected' : 'unknown';
+    task.updatedAt = new Date().toISOString(); saveMediaGenerationTask(task);
+    assertMediaTaskOwner(task, ownerContext);
+    if (task.state === 'rejected') throw error;
+    return videoTaskReceipt(task, 'The original submission outcome is retained; no automatic resubmission is permitted.');
+  }
+  // Persist the upstream identity before polling, downloading or measuring.
+  task.providerTaskId = officialVideoTaskId(body); task.videoUrl = officialVideoUrl(body) || undefined;
+  task.state = task.providerTaskId || task.videoUrl || body?.b64_json || body?.base64 || body?.video_base64 ? 'accepted' : 'unknown';
+  task.updatedAt = new Date().toISOString(); saveMediaGenerationTask(task);
+  assertMediaTaskOwner(task, ownerContext);
+  if (!task.providerTaskId) {
+    try { return await completeOfficialVideoTask(task, body, ownerContext, prompt); }
+    catch { assertMediaTaskOwner(task, ownerContext); return videoTaskReceipt(task, 'The original immediate artifact has not been safely retrieved.'); }
   }
   reportSubmitted(onProgress, CN_MEDIA_PROGRESS.officialProvider);
-
-  const statusTemplate = officialApiPath('RELAY_VIDEO_STATUS_PATH', '/videos/generations/{id}');
-  const contentTemplate = officialApiPath('RELAY_VIDEO_CONTENT_PATH', '/videos/generations/{id}/content');
-  const maxPolls = Math.max(1, Math.min(120, Number(process.env.RELAY_VIDEO_MAX_POLLS) || MAX_POLLS));
-  for (let attempt = 0; attempt < maxPolls; attempt += 1) {
+  while (true) {
     await waitForNextPoll(signal);
-    const encodedId = encodeURIComponent(taskId);
-    const statusPath = statusTemplate.replace(/\{id\}/gi, encodedId);
-    const { body } = await officialApiRequest<any>(statusPath, { timeoutMs: 90_000, signal });
-    const state = String(body?.status || body?.state || body?.output?.status || '').toLowerCase();
-    const videoUrl = officialVideoUrl(body);
-    const base64Path = saveBase64Video(
-      body?.b64_json || body?.base64 || body?.video_base64,
-      signal,
-      () => reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.videoSaving),
-    );
-    if (['completed', 'complete', 'succeeded', 'success', 'done'].includes(state) || videoUrl || base64Path) {
-      if (!base64Path) reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.videoDownloading);
-      if (base64Path) return completedResult({ provider: 'relay', model, prompt, taskId, videoUrl, outputPath: base64Path, ...completionMetadata(args), signal, onProgress });
-      if (videoUrl) {
-        const saved = await persistRemoteVideo(videoUrl, 'official', {}, signal);
-        return completedResult({ provider: 'relay', model, prompt, taskId, videoUrl, ...saved, ...completionMetadata(args), signal, onProgress });
-      }
-      // Some gateways return a completed task without a URL in the status
-      // body and expose the bytes at a separate content endpoint.
-      try {
-        const content = await officialApiBinary(contentTemplate.replace(/\{id\}/gi, encodedId), { signal });
-        const bytes = await readResponseBytes(content, MAX_REMOTE_VIDEO_BYTES, signal);
-        throwIfAborted(signal);
-        const outputPath = writeVideoAtomically(bytes, 'official', signal);
-        return completedResult({ provider: 'relay', model, prompt, taskId, outputPath, ...completionMetadata(args), signal, onProgress });
-      } catch (error: any) {
-        throwIfAborted(signal);
-        throw new Error(`Lumi Official API video completed but content download failed: ${String(error?.message || error).slice(0, 300)}`);
-      }
-    }
-    if (['failed', 'failure', 'error', 'cancelled', 'canceled'].includes(state)) {
-      throw new Error(`Lumi Official API video generation failed: ${String(body?.error_message || body?.error?.message || body?.message || body?.error || 'unknown error').slice(0, 300)}`);
-    }
+    const result = await queryOfficialVideoTask(task, ownerContext, prompt);
+    const receipt = JSON.parse(result);
+    if (receipt.status !== 'pending' && receipt.queryRetryable !== true) return result;
   }
-  throw new Error(`Lumi Official API video generation timed out. Task: ${taskId}`);
 }
 
-async function generateVideo(args: Record<string, any>, context?: ToolContext): Promise<string> {
+function assertVideoRoleModel(model: string, generationMode: 'image_to_video' | 'text_to_video'): void {
+  if (generationMode === 'image_to_video' && isT2VModel(model)) throw new Error(`The selected model ${model} is text-to-video only. Configure an image-to-video model.`);
+  if (generationMode === 'text_to_video' && isI2VModel(model)) throw new Error(`The selected model ${model} requires a reference image.`);
+}
+
+function resolveVideoRequest(args: Record<string, any>, context?: ToolContext) {
   requireNotStrict('Cloud video generation');
   const signal = context?.executionSignal;
   throwIfAborted(signal);
   const prompt = String(args.prompt || '').trim();
   if (!prompt) throw new Error('prompt is required');
+  const sourceVideoRequired = context?.acceptedActionContract?.contract.mediaGeneration?.sourceVideoRequired
+    ?? (mediaGenerationIntent(context?.actionIntent || '')?.operation === 'mutate');
+  if (sourceVideoRequired || args.reference_video) throw new Error(CN_MEDIA_PROGRESS.videoEditUnavailable);
 
   const hasFirstFrame = Boolean(String(args.first_frame_image || '').trim());
   const hasLastFrame = Boolean(String(args.last_frame_image || '').trim());
@@ -713,8 +777,10 @@ async function generateVideo(args: Record<string, any>, context?: ToolContext): 
   const preference = generationMode === 'image_to_video' ? preferences.imageToVideo : preferences.video;
   if (args.officialOnly === true && preference.provider !== 'relay') throw new Error('This project requires Lumi Official API. Select it for video generation in model settings.');
   const provider = preference.provider;
+  const explicitModel = typeof args.model === 'string' ? args.model.trim() : '';
+  if (args.model !== undefined && (!explicitModel || explicitModel.length > 200)) throw new Error('model must be a nonempty model id of at most 200 characters.');
   let model = String(
-    preference.model
+    explicitModel || preference.model
     || preference.models[provider]
     || (generationMode === 'image_to_video'
       ? DEFAULT_IMAGE_TO_VIDEO_MODELS[provider]
@@ -722,44 +788,75 @@ async function generateVideo(args: Record<string, any>, context?: ToolContext): 
     || '',
   ).trim();
   if (!model) throw new Error(`No video generation model is configured for ${provider}.`);
-  if (generationMode === 'image_to_video' && isT2VModel(model)) {
-    throw new Error(`The selected model ${model} is text-to-video only. Configure an image-to-video model.`);
-  }
-  if (generationMode === 'text_to_video' && isI2VModel(model)) {
-    throw new Error(`The selected model ${model} requires a reference image.`);
-  }
   if (generationMode === 'image_to_video' && provider !== 'relay' && provider !== 'minimax') {
     throw new Error(`${provider} does not have a verified image-to-video input adapter in this build.`);
   }
 
-  if (provider === 'relay') {
-    model = officialApiModel(generationMode === 'image_to_video' ? 'RELAY_IMAGE_TO_VIDEO_MODEL' : 'RELAY_VIDEO_MODEL', model);
-    if (generationMode === 'image_to_video' && isT2VModel(model)) throw new Error(`The selected model ${model} is text-to-video only.`);
-    if (generationMode === 'text_to_video' && isI2VModel(model)) throw new Error(`The selected model ${model} requires a reference image.`);
+  assertVideoRoleModel(model, generationMode);
+  if (provider === 'relay' && !explicitModel) {
+    const effectiveModel = officialApiModel(generationMode === 'image_to_video' ? 'RELAY_IMAGE_TO_VIDEO_MODEL' : 'RELAY_VIDEO_MODEL', model);
+    if (effectiveModel !== model) assertVideoRoleModel(effectiveModel, generationMode);
+    model = effectiveModel;
   }
   const options = videoGenerationOptions({ provider, model });
-  const duration = args.duration === undefined ? options?.fixedDuration || 6 : Number(args.duration);
-  if (options && (!Number.isInteger(duration) || duration < 1 || duration > 120)) throw new Error(CN_MEDIA_PROGRESS.videoSequenceDurationInvalid);
-  if (options && args.size && !options.sizes.includes(normalizeSize(args.size, 'x'))) throw new Error('The configured Wan2.2 model requires a supported size: ' + options.sizes.join(', '));
-  const compose = Boolean(options && duration !== options.fixedDuration);
+  const duration = args.duration === undefined ? options?.fixedDuration || (options ? 5 : 6) : Number(args.duration);
+  const segmentPrompts: string[] | undefined = args.segment_prompts;
+  if (segmentPrompts !== undefined && (!Array.isArray(segmentPrompts) || segmentPrompts.length < 2 || segmentPrompts.length > 24
+    || segmentPrompts.some(text => typeof text !== 'string' || !text.trim() || text.length > 4000))) throw new Error('segment_prompts must contain 2 to 24 nonempty strings of at most 4000 characters each.');
+  const clipDuration = segmentPrompts ? duration / segmentPrompts.length : options?.fixedDuration;
+  if (segmentPrompts && (provider !== 'relay' || !options || options.fixedDuration)) throw new Error('Explicit segment prompts require an official native variable-duration video model.');
+  if (segmentPrompts && (!Number.isInteger(duration) || duration < 1 || duration > 120 || !Number.isInteger(clipDuration)
+    || !options!.durations.includes(clipDuration!))) throw new Error('Segment duration must be an admitted native integer duration, with equal segments totaling at most 120 seconds.');
+  if (options?.fixedDuration && (!Number.isInteger(duration) || duration < 1 || duration > 120)) throw new Error(CN_MEDIA_PROGRESS.videoSequenceDurationInvalid);
+  if (options && args.size && !options.sizes.includes(normalizeSize(args.size, 'x'))) throw new Error('The configured video model requires a supported size: ' + options.sizes.join(', '));
+  if (options && !options.fixedDuration && !segmentPrompts && !options.durations.includes(duration)) throw new Error('The configured video model supports integer durations from ' + options.durations[0] + ' to ' + options.durations.at(-1) + ' seconds. No generation was submitted.');
+  const compose = Boolean(segmentPrompts || options?.fixedDuration && duration !== options.fixedDuration);
   let continuationModel = model;
-  if (compose && duration > options!.fixedDuration! && generationMode === 'text_to_video') {
+  if (compose && !segmentPrompts && duration > options!.fixedDuration! && generationMode === 'text_to_video') {
     const continuation = preferences.imageToVideo;
     continuationModel = officialApiModel('RELAY_IMAGE_TO_VIDEO_MODEL', continuation.model || continuation.models.relay || DEFAULT_IMAGE_TO_VIDEO_MODELS.relay);
-    if (continuation.provider !== 'relay' || !videoGenerationOptions({ provider: 'relay', model: continuationModel }) || !isI2VModel(continuationModel)) throw new Error(CN_MEDIA_PROGRESS.videoSequenceModelInvalid);
+    if (continuation.provider !== 'relay' || videoGenerationOptions({ provider: 'relay', model: continuationModel })?.fixedDuration !== options!.fixedDuration || !isI2VModel(continuationModel)) throw new Error(CN_MEDIA_PROGRESS.videoSequenceModelInvalid);
   }
+
+  return { signal, prompt, provider, model, generationMode, options, duration, compose, clipDuration, segmentPrompts, continuationModel, explicitModel };
+}
+
+async function preflightVideoGeneration(args: Record<string, any>, context?: ToolContext): Promise<void> {
+  const selection = resolveVideoRequest(args, context);
+  if (selection.provider !== 'relay') return;
+  const role = selection.generationMode === 'image_to_video' ? 'image_to_video' : 'video_generation';
+  let catalog: Awaited<ReturnType<typeof listOfficialApiModels>>;
+  try {
+    catalog = await listOfficialApiModels({ signal: selection.signal });
+  } catch {
+    throwIfAborted(selection.signal);
+    throw new Error(CN_MEDIA_PROGRESS.videoCatalogUnavailable);
+  }
+  for (const [selectedRole, model] of [[role, selection.model], ...(selection.compose ? [['image_to_video', selection.continuationModel]] : [])] as const) {
+    try {
+      assertOfficialGenerationModel(catalog, selectedRole as 'video_generation' | 'image_to_video', model);
+    } catch {
+      throw new Error(CN_MEDIA_PROGRESS.videoModelUnavailable(model, catalog.byRole[selectedRole as 'video_generation' | 'image_to_video'] || []));
+    }
+  }
+}
+
+async function generateVideo(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  const { signal, prompt, provider, model, generationMode, options, duration, compose, clipDuration, segmentPrompts, continuationModel, explicitModel } = resolveVideoRequest(args, context);
 
   // Resolve role/model admission before reading or downloading a reference.
   // A misconfigured T2V/I2V route must fail without touching the source image.
-  const firstFrame = await normalizeVideoReference(args.first_frame_image, 'first_frame_image', signal);
-  const lastFrame = await normalizeVideoReference(args.last_frame_image, 'last_frame_image', signal);
+  const referenceSize = options && !options.fixedDuration ? args.size || options.sizes[0] : undefined;
+  const firstFrame = await normalizeVideoReference(args.first_frame_image, 'first_frame_image', signal, referenceSize);
+  const lastFrame = await normalizeVideoReference(args.last_frame_image, 'last_frame_image', signal, referenceSize);
   throwIfAborted(signal);
 
   const normalizedArgs = {
     ...args,
+    ...(options ? { size: args.size || options.sizes[0], duration } : {}),
     ...(firstFrame ? { first_frame_image: firstFrame } : {}),
     ...(lastFrame ? { last_frame_image: lastFrame } : {}),
-    __selectionReason: generationMode === 'image_to_video'
+    __selectionReason: explicitModel ? 'explicit_model' : generationMode === 'image_to_video'
         ? 'configured_image_to_video_role'
         : 'configured_text_to_video_role',
   };
@@ -767,56 +864,99 @@ async function generateVideo(args: Record<string, any>, context?: ToolContext): 
   const onProgress = context?.onProgress;
 
   if (compose && options) {
+    let segmentFailure: any;
+    try {
     const size = args.size ? normalizeSize(args.size, 'x') : options.sizes[0];
-    const sequence = await generateVideoSequence({ duration, size, clipDuration: options.fixedDuration!, outputDirectory: ensureOutputDir(),
+    const sequence = await generateVideoSequence({ duration, size, clipDuration: clipDuration!, outputDirectory: ensureOutputDir(),
       owner: { userId: context?.userId, domain: context?.domain, orgId: context?.orgId, taskId: context?.taskId }, signal, onProgress,
       generateClip: async (index, count, previousEndFrame) => {
         throwIfAborted(signal);
         if (context?.isCancelled?.()) throw new DOMException('Video generation cancelled', 'AbortError');
         const frame = previousEndFrame ? await normalizeVideoReference(previousEndFrame, 'continuation_frame', signal) : firstFrame;
-        const segmentPrompt = [prompt, 'This is segment ' + (index + 1) + ' of ' + count + ' in a continuous ' + duration + '-second video.',
-          'Generate only this ' + options.fixedDuration + '-second segment. Preserve the subject, visual identity and lighting.',
+        const segmentPrompt = [prompt, ...(segmentPrompts ? [segmentPrompts[index]] : []), 'This is segment ' + (index + 1) + ' of ' + count + ' in a continuous ' + duration + '-second video.',
+          'Generate only this ' + clipDuration + '-second segment. Preserve the subject, visual identity and lighting.',
           index === 0 ? 'Establish the scene and begin the requested motion.' : index === count - 1 ? 'Continue smoothly from the supplied frame and bring the motion to a natural ending.' : 'Continue smoothly from the supplied frame; advance the action without restarting it.'].join('\n');
-        const clip = JSON.parse(await generateOfficialVideo({ ...normalizedArgs, prompt: segmentPrompt, size, duration: options.fixedDuration,
+        const clip = JSON.parse(await generateOfficialVideo({ ...normalizedArgs, prompt: segmentPrompt, size, duration: clipDuration, prompt_extend: segmentPrompts ? false : args.prompt_extend,
+          __selectionReason: index === 0 ? normalizedArgs.__selectionReason : 'configured_image_to_video_role',
           first_frame_image: frame, last_frame_image: index === count - 1 ? lastFrame : undefined }, index === 0 ? model : continuationModel, signal,
-          message => reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.videoSequenceProvider(index + 1, count, message))));
+          message => reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.videoSequenceProvider(index + 1, count, message)), index === 0,
+          { ...context, idempotencyKey: executionIdempotencyKey('generate_video', args, context) + ':segment:' + index }, { ...args, __videoSegment: index }));
+        if (clip.verified !== true || !clip.outputPath) { segmentFailure = clip; throw new Error('Original video segment remains incomplete.'); }
         return { path: clip.outputPath, taskId: clip.taskId, model: clip.model };
       },
     });
     const result = JSON.parse(await completedResult({ provider: 'relay', model, prompt, taskId: 'composed_' + crypto.randomUUID(), outputPath: sequence.outputPath,
       ...completionMetadata({ ...normalizedArgs, size, duration }), signal, onProgress }));
-    return JSON.stringify({ ...result, composition: { strategy: 'sequential_clips_with_end_frame_continuation', clipDuration: options.fixedDuration, clipCount: sequence.clips.length,
+    return JSON.stringify({ ...result, composition: { strategy: 'sequential_clips_with_end_frame_continuation', clipDuration, clipCount: sequence.clips.length,
       sourceTaskIds: sequence.clips.map(clip => clip.taskId), models: [...new Set(sequence.clips.map(clip => clip.model))] } });
+    } catch (error) {
+      if (segmentFailure) return JSON.stringify({ ...segmentFailure, compositionSegment: true, wholeTaskCompleted: false });
+      throw error;
+    }
   }
 
   if (provider === 'qwen') return generateQwenVideo(normalizedArgs, model, signal, onProgress);
   if (provider === 'minimax') return generateMiniMaxVideo(normalizedArgs, model, signal, onProgress);
   if (provider === 'siliconflow') return generateSiliconFlowVideo(normalizedArgs, model, signal, onProgress);
-  if (provider === 'relay') return generateOfficialVideo(normalizedArgs, model, signal, onProgress);
+  if (provider === 'relay') return generateOfficialVideo(normalizedArgs, model, signal, onProgress, true, context, args);
   return generateOpenAIVideo(normalizedArgs, model, signal, onProgress);
 }
 
 export function registerVideoTools(registry: ToolRegistry): void {
   registry.register({
+    name: 'get_video_generation_status',
+    description: 'Recover only the original persisted official video recoveryId. Query once and retrieve its verified artifact; never POST a new generation. Ownership and current organization membership are required. A composition segment does not complete the whole video.',
+    parameters: { type: 'object', properties: { recoveryId: { type: 'string', description: 'Exact recoveryId returned by the original video request.' } }, required: ['recoveryId'] },
+    handler: async (args, context) => {
+      requireNotStrict('Cloud video task query');
+      const task = readVideoGenerationTask(String(args.recoveryId || ''), context);
+      if (!task) throw new Error('Video generation recovery task was not found.');
+      return queryOfficialVideoTask(task, context);
+    },
+    localIdempotencyReplay: 'durable_handler', permission: 'user', securityLevel: 'safe',
+    capability: capabilityContract({ id: 'media.video.status', family: 'media-generation', lane: 'media', operation: 'observe', risk: 'low',
+      sideEffects: [{ type: 'network_read', scope: 'original persisted official video task', reversible: true },
+        { type: 'local_write', scope: 'verified recovered video artifact', reversible: true }],
+      verification: { strategy: 'artifact', required: true, requiredFields: ['status', 'verified', 'verificationStatus'],
+        requiredValues: { verified: true, verificationStatus: 'verified' }, successStatuses: ['generated'],
+        failureStatuses: ['unknown', 'pending', 'failed', 'rejected', 'cancelled'], requiredArtifactCollections: ['artifacts'],
+        successSignals: ['original task completed and its video container was validated and saved'],
+        limitations: ['Recovery never submits generation; a segment does not prove the complete composition.'] },
+      reconciliation: { reconcilesCapabilityIds: ['media.video.generate'], outcomeField: 'reconciliationStatus', committedValues: ['committed'], notCommittedValues: [] },
+    }),
+    evidence: capabilityEvidence({ id: 'media.video.status', operation: 'observe', subjectArgument: 'recoveryId',
+      limitations: ['Container validation does not certify content, prompt fidelity, or subjective video quality.'] }),
+  });
+  registry.register({
     name: 'generate_video',
-    description: 'Generate text-to-video or image-to-video output with the separately configured model for that mode. A local reference image is safely converted to a bounded data URL before a verified I2V adapter is called; unsupported providers fail instead of silently falling back to text-to-video.',
+    description: 'Generate text-to-video or image-to-video output with the separately configured model for that mode. A local reference image is safely converted to a bounded data URL before a verified I2V adapter is called; unsupported providers fail instead of silently falling back to text-to-video. Existing-video editing is unavailable on the current gateway; do not substitute a new text-to-video or image-to-video generation for an edit request.',
     parameters: {
       type: 'object',
       properties: {
         officialOnly: { type: 'boolean', description: 'Require the selected provider to be Lumi Official API; reject other providers.' },
-        prompt: { type: 'string', description: 'Describe the scene, motion, lighting, camera angle, and style.' },
-        size: { type: 'string', description: 'Requested output size, such as 1280x720, 720x1280, or 960x960.' },
-        duration: { type: 'number', minimum: 1, maximum: 120, description: 'Final output duration in seconds, up to 120. Lumi Official Wan2.2 automatically generates continuous five-second clips and combines them to the requested length.' },
+        prompt: { type: 'string', description: 'Describe the scene, motion, lighting, camera angle, and style. With segment_prompts, put only shared creative context here and each ordered part in its own segment prompt.' },
+        model: { type: 'string', description: 'Optional model id for this request only. It must belong to the configured provider and the current official catalog role; does not change saved model preferences.' },
+        size: { type: 'string', description: 'Requested output size, such as 1920x1080 or 1080x1920 (1080P), 1280x720 or 720x1280 (720P).' },
+        duration: { type: 'number', minimum: 1, maximum: 120, description: 'Final output duration in seconds. Lumi Official Wan3.0 supports native integer durations from 2 to 30 seconds, or an explicit segment_prompts plan totaling up to 120 seconds with an admitted equal integer duration per segment. Wan2.2 supports up to 120 seconds and automatically generates continuous five-second clips and combines them to the requested length.' },
+        segment_prompts: { type: 'array', minItems: 2, maxItems: 24, items: { type: 'string', minLength: 1, maxLength: 4000 }, description: 'Explicit ordered native segment prompts. Each receives only this segment plus shared prompt context. Duration divided by count must be an admitted native integer duration. Requires the same official model in both video and image-to-video roles; no expansion, automatic extra segments, or retry.' },
         resolution: { type: 'string', description: 'MiniMax resolution, such as 1080P or 768P.' },
         first_frame_image: { type: 'string', description: 'Optional first-frame image: absolute local path, HTTPS URL, or image data URL. Its presence selects the image-to-video role.' },
         last_frame_image: { type: 'string', description: 'Optional last-frame image in the same formats; requires first_frame_image and provider support.' },
         negative_prompt: { type: 'string', description: 'Optional SiliconFlow negative prompt.' },
-        prompt_extend: { type: 'boolean', description: 'Qwen prompt expansion. Defaults to true.' },
+        prompt_extend: { type: 'boolean', description: 'Prompt expansion. Defaults to false for Lumi Official Wan3.0 and true for Qwen.' },
         seed: { type: 'number', description: 'Random seed when supported by the selected provider.' },
       },
       required: ['prompt'],
     },
+    preflight: preflightVideoGeneration,
     handler: (args, context) => generateVideo(args, context),
+    reconcileExternalCommit: async (args, context, idempotencyKey) => {
+      requireNotStrict('Cloud video task reconciliation');
+      const task = readVideoGenerationTask(videoGenerationRecoveryId(args, { ...context, idempotencyKey }), context);
+      if (!task || task.compositionSegment) return null;
+      const result = await queryOfficialVideoTask(task, context);
+      return JSON.parse(result).verified === true ? result : null;
+    },
     permission: 'user',
     securityLevel: 'safe',
     capability: capabilityContract({

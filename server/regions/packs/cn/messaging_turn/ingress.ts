@@ -5,7 +5,7 @@ import { captureMessagingBinding, captureMessagingOrganization, MessagingAuthori
 import { getMessagingJournalEntry, recordMessagingIngress, updateMessagingJournal } from "../../../../messaging/message_journal";
 import { evaluateMessagingIngress } from "../../../../messaging/ingress_policy";
 import { acceptMessageOnce, completeMessageDelivery, releaseMessageDelivery } from "../../../../messaging/delivery_ledger";
-import { commitPersonalOrganizationScopePlan, planPersonalOrganizationScope, requestsOrganizationScope } from "../../../../messaging/personal_org_scope";
+import { commitPersonalOrganizationScopePlan } from "../../../../messaging/personal_org_scope";
 import { applyRemoteAttachmentContext } from "../../../../messaging/attachment_context";
 import { type MessagingRouteOptions, type IncomingMessageTransport, flushMessagingStateOrThrow, isMessagingReplyDurabilityError } from "../messaging_finalization";
 import { remotePlatformLabel, getRequestText } from "../remote_materials";
@@ -13,6 +13,7 @@ import { acceptingMessagingIngress, assertMessagingAuthorization, registerMessag
 import { createMessagingReplyCommitter, admitBoundMessagingTurnDurably } from "../messaging_persistence";
 import { applyMessagingBinding, planMessagingBindingCommand, enqueueBindingCodeTransaction, applyPlannedMessagingBinding } from './binding_commands';
 import { processWithPersonality } from './processing';
+import { planRemoteOrganizationScope } from '../legal_notice_intake';
 
 export function dispatchIncomingMessage(
   message: IncomingMessage,
@@ -23,10 +24,10 @@ export function dispatchIncomingMessage(
   const ingressDecision = evaluateMessagingIngress(message);
   if (!ingressDecision.allowed) {
     recordMessagingIngress(message);
-    updateMessagingJournal(message, {
-      status: 'ignored',
-      error: ingressDecision.reason,
-    });
+    if (!['message_expired', 'invalid_message_timestamp'].includes(ingressDecision.reason)
+      || getMessagingJournalEntry(message)?.status === 'received') {
+      updateMessagingJournal(message, { status: 'ignored', error: ingressDecision.reason });
+    }
     return false;
   }
   const acceptedBinding = Object.prototype.hasOwnProperty.call(message, 'bindingAuthorization')
@@ -184,10 +185,7 @@ export function dispatchIncomingMessage(
       }
 
       const boundMessage = applyMessagingBinding(trackedMessage);
-      const scopePlan = planPersonalOrganizationScope(
-        boundMessage,
-        requestsOrganizationScope(getRequestText(boundMessage)),
-      );
+      const scopePlan = await planRemoteOrganizationScope(boundMessage);
       // Accepted transcripts are persisted immediately, even when execution is
       // queued behind an older long-running turn. Side effects remain fenced.
       const accepted = await admitBoundMessagingTurnDurably(
@@ -227,6 +225,7 @@ export function dispatchIncomingMessage(
           boundOrgId: routeBaseMessage.boundOrgId,
           bindingAuthorization: routeBaseMessage.bindingAuthorization,
           organizationAuthorization: routeBaseMessage.organizationAuthorization,
+          legalNoticeSelection: routeBaseMessage.legalNoticeSelection,
           receivedAt: routeBaseMessage.receivedAt,
           routeSequence: routeBaseMessage.routeSequence,
           userMessagePersisted: routeBaseMessage.userMessagePersisted,

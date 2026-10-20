@@ -537,8 +537,9 @@ describe('Lumi real failure-chain replay', () => {
       toolRecords: records,
       source: 'voice',
     });
-    expect(finalized.blocked).toBe(false);
-    expect(finalized.text).toBe(responseText);
+    expect(finalized.blocked).toBe(true);
+    expect(finalized.text).toContain('AutoCAD');
+    expect(finalized.text).toMatch(/还没完成|还没有完成|尚未完成|未完成|没有完成/u);
     expect(finalized.text).not.toContain('\u81ea\u68c0');
   });
 });

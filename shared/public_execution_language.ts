@@ -1,6 +1,7 @@
 export type PublicExecutionLanguage = 'zh' | 'en';
 
 export type PublicExecutionIssue =
+  | 'confirmation_required'
   | 'target_changed'
   | 'desktop_busy'
   | 'user_active'
@@ -28,17 +29,24 @@ const TIMEOUT_RE = /timed?\s*out|timeout|超时/iu;
 const CANCELLED_RE = /cancelled|canceled|request_cancelled|已取消|已停止/iu;
 const COMPLETED_RE = /(?:^|\n)\s*(?:状态\s*[:：]\s*已完成|Status\s*:\s*completed)/imu;
 
-function inferLanguage(value: string, requested?: PublicExecutionLanguage): PublicExecutionLanguage {
-  if (requested) return requested;
-  return /[\u3400-\u9fff]/u.test(value) ? 'zh' : 'en';
+// i18n-allow -- old program envelopes and model-only confirmation prompts.
+const INTERNAL_CONFIRMATION_RE = /(?:^|\n)\s*(?:这项操作还没有执行，需要你确认后才能继续。|Confirmation is required before this action can run\.|#{1,6}\s*Exact Pending Action Confirmation|Arguments \(secrets redacted\):|参数\s*[:：]\s*\{[^\n]*["'](?:task|max_steps|target_application)["']\s*:)/imu;
+
+// Recognize protocol markup, not ordinary mentions of tool or field names.
+const INTERNAL_TOOL_PROTOCOL_RE = /(?:<|&lt;)\s*\/?\s*(?:function_calls|tool_calls|invoke|parameter|tool_call|[A-Za-z][\w.-]*_[\w.-]+)(?=\s|\/?(?:>|&gt;)|$)/iu;
+
+export function containsInternalToolProtocol(value: unknown): boolean {
+  return INTERNAL_TOOL_PROTOCOL_RE.test(String(value || ''));
 }
 
 export function containsInternalExecutionLanguage(value: unknown): boolean {
-  return INTERNAL_EXECUTION_LANGUAGE_RE.test(String(value || ''));
+  const text = String(value || '');
+  return containsInternalToolProtocol(text) || INTERNAL_EXECUTION_LANGUAGE_RE.test(text) || INTERNAL_CONFIRMATION_RE.test(text);
 }
 
 export function classifyInternalExecutionIssue(value: unknown): PublicExecutionIssue {
   const text = String(value || '');
+  if (INTERNAL_CONFIRMATION_RE.test(text)) return 'confirmation_required';
   if (TARGET_CHANGED_RE.test(text)) return 'target_changed';
   if (USER_ACTIVE_RE.test(text)) return 'user_active';
   if (DESKTOP_BUSY_RE.test(text)) return 'desktop_busy';
@@ -60,10 +68,11 @@ export function sanitizePublicExecutionText(
 ): string {
   const text = String(value || '').trim();
   if (!text || !containsInternalExecutionLanguage(text)) return text;
-  const locale = inferLanguage(text, language);
+  const locale = language || (/[\u3400-\u9fff]/u.test(text) ? 'zh' : 'en');
   const issue = classifyInternalExecutionIssue(text);
   if (locale === 'zh') {
     // i18n-allow -- canonical Simplified Chinese customer copy.
+    if (issue === 'confirmation_required') return '这项操作还未执行。请先查看本次操作的目标和内容，再回复“确认”或“取消”。';
     if (issue === 'target_changed') return '刚才没有完成，因为操作后的窗口和目标不一致。请把目标窗口保持在前台，再让我重试。';
     if (issue === 'user_active') return '检测到你正在操作电脑，我先暂停了这一步，避免和你抢控制。你说“继续”后我会接着做。';
     if (issue === 'desktop_busy') return '桌面控制正被另一项操作占用，所以这一步还没完成。等当前操作结束后可以直接重试。';
@@ -73,6 +82,7 @@ export function sanitizePublicExecutionText(
     if (issue === 'completed') return '这一步已经完成。';
     return '刚才没有完成，我没有拿到能确认结果的反馈。你可以直接让我重试。';
   }
+  if (issue === 'confirmation_required') return 'This action has not run. Review its target and content, then reply “confirm” or “cancel”.';
   if (issue === 'target_changed') return 'That did not finish because the window no longer matched the target. Keep the target window in front, then ask me to retry.';
   if (issue === 'user_active') return 'I paused this step while you were using the computer so I would not interfere. Say “continue” when you want me to resume.';
   if (issue === 'desktop_busy') return 'Desktop control is busy with another operation, so this step did not finish. Retry after that operation ends.';
@@ -81,4 +91,37 @@ export function sanitizePublicExecutionText(
   if (issue === 'cancelled') return 'This operation was stopped. Unfinished steps will not continue.';
   if (issue === 'completed') return 'This step is complete.';
   return 'That did not finish because I could not confirm the result. You can ask me to retry.';
+}
+
+/** Exact runtime identities are private unless the original request or input source contains them. */
+export function privateExecutionReferences(text: string, identities: readonly (string | undefined)[], originalText: readonly string[]): string[] {
+  return identities.filter((id): id is string => Boolean(id && text.includes(id) && !originalText.some(source => source.includes(id))));
+}
+
+/** Exact-reference public text projection. Complete verified blocks survive inline private annotations. */
+export function projectExecutionReferenceText(answer: string, privateReferences: readonly string[], verifiedText: readonly string[]): string {
+  const verifiedRanges = verifiedText.filter(text => text
+    && !privateReferences.some(id => text.includes(id))).flatMap(text => {
+      const ranges: { start: number; end: number }[] = [];
+      for (let start = answer.indexOf(text); start >= 0; start = answer.indexOf(text, start + text.length)) {
+        ranges.push({ start, end: start + text.length });
+      }
+      return ranges;
+    }).sort((a, b) => a.start - b.start || b.end - a.end)
+    .reduce<{ start: number; end: number }[]>((ranges, range) => {
+      const previous = ranges[ranges.length - 1];
+      if (previous && range.start <= previous.end) previous.end = Math.max(previous.end, range.end);
+      else ranges.push({ ...range });
+      return ranges;
+    }, []);
+  let lineOffset = 0;
+  return privateReferences.length > 0
+    ? answer.split('\n').flatMap(line => {
+      const start = lineOffset, end = start + line.length;
+      lineOffset = end + 1;
+      if (!privateReferences.some(id => line.includes(id))) return [line];
+      return verifiedRanges.filter(range => range.start < end && range.end > start)
+        .map(range => answer.slice(Math.max(start, range.start), Math.min(end, range.end)));
+    }).join('\n').trim()
+    : answer;
 }

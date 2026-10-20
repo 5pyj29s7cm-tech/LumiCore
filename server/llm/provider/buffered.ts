@@ -22,14 +22,6 @@ export async function makeLLMCallDirect(
   ...getters: ProviderArguments
 ): Promise<NormalizedLLMResponse> {
   const [, getGemini, , getAnthropic] = getters;
-  const preparedContext = prepareModelRequestContext({
-    messages,
-    toolDeclarations,
-    inputTokenBudget: config.inputTokenBudget,
-    protectedToolNames: config.protectedToolNames,
-  });
-  messages = preparedContext.messages;
-  toolDeclarations = preparedContext.toolDeclarations;
   assertQwenAllowedByUserPrefs(config);
 
   // ── Privacy gate: strict mode blocks cloud providers ──
@@ -45,9 +37,10 @@ export async function makeLLMCallDirect(
   // OpenAI-compatible path: DeepSeek, Qwen, Ark, Ollama, LM Studio
   const extensionProvider = extensionProviderForCall(config);
   if (extensionProvider || config.provider === 'deepseek' || config.provider === 'openai' || config.provider === 'qwen' || config.provider === 'ark' || config.provider === 'ollama' || config.provider === 'lmstudio' || config.provider === 'xiaomi' || config.provider === 'kimi' || config.provider === 'glm' || config.provider === 'relay') {
-    const { client, supervisedLocal, localRequest, params } = await prepareCompatibleModelRequest(
+    const { client, supervisedLocal, params, preparedContext } = await prepareCompatibleModelRequest(
       messages, toolDeclarations, config, maxTokens, getters, extensionProvider, false,
     );
+    toolDeclarations = preparedContext.toolDeclarations;
     const outboundSourceSlot = providerSourceUserSlot(params.messages);
     const outboundEvidence = buildProviderOutboundMessagesEvidence({
       provider: config.provider,
@@ -92,9 +85,18 @@ export async function makeLLMCallDirect(
         throw error;
       }
       return config.provider === 'openai' ? parseOpenAIResponse(response) : parseOpenAICompatibleResponse(response, toolDeclarations);
-    }, preparedContext, (localRequest?.toolDeclarations || toolDeclarations)
+    }, preparedContext, toolDeclarations
       .map(declaration => declaration.function.name));
   }
+
+  const preparedContext = prepareModelRequestContext({
+    messages,
+    toolDeclarations,
+    inputTokenBudget: config.inputTokenBudget,
+    protectedToolNames: config.protectedToolNames,
+  });
+  messages = preparedContext.messages;
+  toolDeclarations = preparedContext.toolDeclarations;
 
   if (config.provider === 'gemini') {
     const client = getGemini();

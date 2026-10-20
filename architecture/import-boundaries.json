@@ -177,6 +177,12 @@
         "flushDBOrThrow"
       ],
       "reason": "Shared accepted-turn user and assistant durability fences only, transferred from MCP and REST entry owners. Preaccepted chat, voice and messaging retain their atomic terminal committers. No database root, table, SQL, read or write access."
+    },
+    "server/client/self/health.ts": {
+      "allowedExports": [
+        "getDatabasePersistenceStatus"
+      ],
+      "reason": "Read-only persistence telemetry for unified self-health; no database tables, roots, SQL or mutations."
     }
   },
   "approvedTableImporters": {
@@ -320,6 +326,18 @@
         "commitDatabaseTables"
       ],
       "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/conversation/chat_artifacts.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "interactions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Read-only detached request snapshot for the single public artifact projection; durable receipt owner/scope/input digest validation and original user provenance are enforced here. No writes, SQL, full database root, or authority to complete tasks."
     },
     "server/conversation/execution_facts.ts": {
       "tables": [

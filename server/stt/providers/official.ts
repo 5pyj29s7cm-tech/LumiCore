@@ -43,6 +43,7 @@ type OfficialAudioFormat = 'pcm' | 'wav' | 'mp3' | 'opus' | 'speex' | 'aac' | 'a
 
 const PROVIDER = 'relay-stt';
 const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
+const MAX_AUDIO_FRAME_BYTES = 64 * 1024;
 const MAX_PENDING_AUDIO_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MODEL = 'aliyun/qwen-audio-3.0-asr-flash-streaming';
 const SUPPORTED_FORMATS = new Set<OfficialAudioFormat>(['pcm', 'wav', 'mp3', 'opus', 'speex', 'aac', 'amr']);
@@ -264,6 +265,14 @@ export function parseOfficialSttMessage(value: unknown, model = DEFAULT_MODEL, e
   if (!text && !speechStarted) return { event };
   const beginMs = Number(sentence.begin_time);
   const endMs = Number(sentence.end_time);
+  const wordSegments: NonNullable<STTResult['segments']> = Array.isArray(sentence.words) ? sentence.words.map((word: any) => ({
+    text: `${typeof word?.text === 'string' ? word.text : ''}${typeof word?.punctuation === 'string' ? word.punctuation : ''}`,
+    beginMs: word?.begin_time,
+    endMs: word?.end_time,
+  })) : [];
+  const timedWords = wordSegments.length > 0 && wordSegments.every(segment => segment.text.trim()
+    && typeof segment.beginMs === 'number' && Number.isFinite(segment.beginMs) && segment.beginMs >= 0
+    && typeof segment.endMs === 'number' && Number.isFinite(segment.endMs) && segment.endMs >= segment.beginMs);
   return {
     event,
     result: {
@@ -273,7 +282,7 @@ export function parseOfficialSttMessage(value: unknown, model = DEFAULT_MODEL, e
       speechFinal: isFinal,
       model,
       ...(text ? {
-        segments: [{
+        segments: timedWords ? wordSegments : [{
           text,
           ...(Number.isFinite(beginMs) ? { beginMs } : {}),
           ...(Number.isFinite(endMs) ? { endMs } : {}),
@@ -407,7 +416,7 @@ export function createStream(
         }
       }
       if (parsed.event === 'task-finished') {
-        if (!finalEmitted) {
+        if (!finalEmitted || lastPartial) {
           finalEmitted = true;
           resultCallbacks.forEach(callback => callback({
             text: lastPartial,
@@ -433,7 +442,8 @@ export function createStream(
 
   ws.on('close', (code: number, reason: Buffer) => {
     options.signal?.removeEventListener('abort', abort);
-    const expected = closed || (finishSent && code === 1000);
+    // Sending finish-task does not prove the provider completed its task.
+    const expected = closed;
     pendingAudio.length = 0;
     pendingBytes = 0;
     if (!expected) {
@@ -486,7 +496,7 @@ export function createStream(
 }
 
 /**
- * One-utterance compatibility wrapper for callers that still submit an audio
+ * File compatibility wrapper for callers that still submit an audio
  * buffer. The official service only documents streaming STT, so this uses the
  * same production WebSocket path instead of the removed REST fallback.
  */
@@ -525,25 +535,46 @@ export async function transcribe(
     });
     return await new Promise<STTResult>((resolve, reject) => {
       let settled = false;
+      const sentences: STTResult[] = [];
       const finish = (result?: STTResult, error?: Error) => {
         if (settled) return;
         settled = true;
-        if (error) reject(error);
-        else resolve({ ...result!, isFinal: true });
+        if (error) {
+          reject(error);
+          session.abort?.();
+        } else resolve({ ...result!, isFinal: true });
       };
       session.onResult(result => {
-        if (result.isFinal) finish(result);
+        if (!settled && result.isFinal) sentences.push(result);
       });
       session.onError(error => finish(undefined, error));
+      session.onClose?.(() => {
+        if (settled) return;
+        const last = sentences[sentences.length - 1];
+        if (!last) {
+          finish(undefined, new Error('Lumi Official API STT closed without a completed transcript.'));
+          return;
+        }
+        const segments = sentences.flatMap(result => result.segments || []);
+        finish({ ...last, text: sentences.map(result => result.text).filter(Boolean).join('\n'),
+          ...(segments.length ? { segments } : {}), speechFinal: true });
+      });
       abort = () => finish(undefined, asError(control.signal.reason));
       control.signal.addEventListener('abort', abort, { once: true });
       control.signal.throwIfAborted();
-      session.sendAudio(audioBuffer);
-      session.end();
+      session.onReady?.(() => {
+        try {
+          for (let offset = 0; offset < audioBuffer.length && !settled; offset += MAX_AUDIO_FRAME_BYTES) {
+            control.signal.throwIfAborted();
+            session.sendAudio(audioBuffer.subarray(offset, offset + MAX_AUDIO_FRAME_BYTES));
+          }
+          if (!settled) session.end();
+        } catch (error) { finish(undefined, asError(error)); }
+      });
     });
   } finally {
     if (abort) control.signal.removeEventListener('abort', abort);
     control.dispose();
-    logger.debug('[Official-STT] one-utterance transcription finished');
+    logger.debug('[Official-STT] file transcription finished');
   }
 }

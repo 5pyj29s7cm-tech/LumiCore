@@ -264,8 +264,11 @@ describe('unified tool execution engine', () => {
       { target: 'desktop', apiToken: 'secret-value' },
       expect.anything(),
     );
+    expect(onToolStart).toHaveBeenCalledTimes(1);
+    expect(record.idempotencyKey).toBeTruthy();
     expect(onToolStart).toHaveBeenCalledWith({
       id: 'call-1',
+      idempotencyKey: record.idempotencyKey,
       name: 'read_demo',
       arguments: { target: 'desktop', apiToken: '[redacted]' },
     });

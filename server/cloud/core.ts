@@ -1,7 +1,7 @@
 /** Shared retry, circuit health, provider readiness and error classification. */
 
-import { withRetry, isCloudRetryable, withTimeout } from './retry';
-export { withRetry, isCloudRetryable, withTimeout, isCircuitClosed, isCircuitHealthy, recordSuccess, recordFailure, resetCircuit, getCircuitStatus, setCircuitBreakerConfig, getAvailableLLMProviders, getAvailableSTTProviders, getAvailableTTSProviders, LLM_PRIORITY, STT_PRIORITY, TTS_PRIORITY };
+import { withRetry, isCloudRetryable } from './retry';
+export { withRetry, isCloudRetryable, isCircuitClosed, isCircuitHealthy, recordSuccess, recordFailure, resetCircuit, getCircuitStatus, setCircuitBreakerConfig, getAvailableLLMProviders, getAvailableSTTProviders, getAvailableTTSProviders, LLM_PRIORITY, STT_PRIORITY, TTS_PRIORITY };
 export type { RetryOptions } from './retry';
 
 import { getAvailableLLMProviders, getAvailableSTTProviders, getAvailableTTSProviders, LLM_PRIORITY, STT_PRIORITY, TTS_PRIORITY } from './fallback';

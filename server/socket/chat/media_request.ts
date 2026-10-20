@@ -48,7 +48,8 @@ function acceptedVideoBrief(text: string, history: readonly MediaHistoryMessage[
   for (const item of [...recent].reverse()) {
     if (item.role !== 'user') continue;
     const brief = historyUserText(item);
-    if (mediaGenerationIntent(brief)?.target === 'generate_video') {
+    const intent = mediaGenerationIntent(brief);
+    if (intent?.target === 'generate_video' && intent.operation === 'create') {
       // A proposed script is creative data inside the same validated envelope,
       // never authority to call diagnostics or any other tool.
       // i18n-allow: Strip the assistant approval question from proposed creative content.
@@ -75,7 +76,9 @@ export function resolveChatVideoRequest(
   history: readonly MediaHistoryMessage[] = [],
 ): StructuredMediaRequest | null {
   if (analyzeMediaToolRouting(text).forbidGeneration) return null;
-  const prompt = mediaGenerationIntent(text)?.target === 'generate_video' ? text : acceptedVideoBrief(text, history);
+  const intent = mediaGenerationIntent(text);
+  if (intent?.target === 'generate_video' && intent.operation === 'mutate') return null;
+  const prompt = intent?.target === 'generate_video' ? text : acceptedVideoBrief(text, history);
   if (!prompt) return null;
   // i18n-allow: A video cover is an image deliverable, not a video-generation instruction.
   if (/(?:视频|short video|video|clip).{0,24}(?:封面|缩略图|海报|cover|thumbnail|poster)/iu.test(text)) return null;
@@ -104,9 +107,12 @@ export function resolveChatVideoRequest(
   const options = videoGenerationOptions(referenceImage ? preferences.imageToVideo : preferences.video);
   const portrait = shape ? /9\s*[:：比]\s*16|竖屏|竖版|portrait/iu.test(shape[0]) : /tiktok/iu.test(prompt); // i18n-allow: Explicit orientation before platform default.
   const ratio = portrait ? 9 / 16 : 16 / 9;
+  const quality = [...prompt.matchAll(/(480|720|1080)\s*p\b/giu)].at(-1)?.[1];
+  const longEdge = quality === '480' ? '832' : quality === '720' ? '1280' : '1920';
   const size = shape?.[1] ? shape[1] + 'x' + shape[2]
+    : quality ? (portrait ? quality + 'x' + longEdge : longEdge + 'x' + quality)
     : options?.sizes.find(value => { const [width, height] = value.split('x').map(Number); return Math.abs(width / height - ratio) < 0.02; })
-      || (portrait ? '720x1280' : '1280x720');
+      || (portrait ? '1080x1920' : '1920x1080');
   return normalizeStructuredMediaRequest({
     operation: referenceImage ? 'image_to_video' : 'text_to_video',
     prompt,

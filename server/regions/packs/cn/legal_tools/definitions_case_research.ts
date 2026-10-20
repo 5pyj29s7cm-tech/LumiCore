@@ -4,7 +4,7 @@ import { withLegalReceipt, legalCapability, legalEvidence } from "./tool_contrac
 import { caseStrategyHandler } from "./argument_drafting";
 import { caseWorkspaceHandler, caseWorkflowStatusHandler } from "./case_workspace";
 import { legalMessageIntakeToCaseHandler } from "./message_intake";
-import { defineLegalTool, stringField, booleanField, stringListField, CASE_ARCHIVE_FIELDS } from "./tool_contracts";
+import { LEGAL_TEMPORAL_FIELDS, defineLegalTool, stringField, booleanField, stringListField, CASE_ARCHIVE_FIELDS } from "./tool_contracts";
 
 export function case_researchTools(): ToolDefinition[] {
   return [
@@ -50,6 +50,7 @@ export function case_researchTools(): ToolDefinition[] {
     name: 'legal_case_workspace',
     description: '统一案件工作台 — 创建或更新案件空间，归集身份信息、事实、证据、争议焦点、法源、类案、文书包、立案状态，并输出下一步工具链。用于把会议、聊天、材料、诉讼文书和外部检索串成同一个案件闭环。',
     properties: {
+      ...LEGAL_TEMPORAL_FIELDS,
       ...CASE_ARCHIVE_FIELDS,
       title: stringField('caseName 的别名'),
       stage: stringField('阶段：consultation/filing/trial/judgment/enforcement/closed，或中文阶段'),
@@ -80,6 +81,7 @@ export function case_researchTools(): ToolDefinition[] {
     name: 'legal_case_workflow_status',
     description: '案件闭环状态评估 — 只读取已有案件或临时案件材料，不创建文书；输出材料入案、身份主体、事实时间线、证据三性、三段论、现行有效法律、类案来源、文书策略、立案协作、正式交付的完成度、阻断项、待补项和下一步推荐工具。适合聊天、语音、飞书/企微里询问“这个案子还缺什么/下一步做什么/能不能正式交付”。',
     properties: {
+      ...LEGAL_TEMPORAL_FIELDS,
       caseId: stringField('已有案件 ID；提供时优先读取该案件空间'),
       caseName: stringField('案件名称或简称；未提供 caseId 时按名称查找'),
       title: stringField('caseName 的别名'),
@@ -111,6 +113,7 @@ export function case_researchTools(): ToolDefinition[] {
     name: 'legal_message_intake_to_case',
     description: '远程法律消息入案 — 把微信、飞书、企微、短信或聊天里转发的案件材料、法院短信链接、通知链接、附件说明和沟通记录写入统一案件空间，归档原文、识别案号/法院/日期、半自动处理链接，并返回案件闭环状态和下一步。适合 Lumi bot 收到“把这个发给 Lumi 入案/归档到案件/法院短信链接/案件材料”时使用。',
     properties: {
+      ...LEGAL_TEMPORAL_FIELDS,
       ...CASE_ARCHIVE_FIELDS,
       platform: stringField('来源平台：feishu/wechat/wecom/sms/other，或中文“飞书/微信/企微/短信”'),
       sender: stringField('发送人、联系人或群名'),

@@ -2,6 +2,7 @@ import { CN_ACTION_CONTRACT_COPY } from '../../regions/messages/action_contract_
 import { LEGAL_ENTRY_PREFERRED_TOOLS } from "../legal_entry";
 import type { LumiActionContract } from './contracts';
 import { withDefaults } from './contracts';
+import { hasRequestedArtifactMutation } from '../tool_intent';
 
 export function buildCadGeometryExtractionContract(): LumiActionContract {
   return withDefaults({
@@ -56,21 +57,21 @@ export function buildReadOnlyArtifactInspectionContract(): LumiActionContract {
   return withDefaults({
     kind: 'artifact_work',
     label: 'Exact read-only file inspection',
-    coreAction: 'Read semantic content from the one exact absolute file path named by the user without mutating it.',
+    coreAction: 'Read complete source text without mutation: local files use the exact user-named absolute path; knowledge sources use the original current-turn fileIds in the current authorized scope. Answer only from the complete verified source text. For each question retain the original source qualifier and state only what it establishes: unproven P leaves P unknown, not proven not-P. Preserve the speaker, scope of negation and plans; an exact quote cannot justify a contrary conclusion.',
     preparationIsNotCompletion: [
       'listing a directory or searching for a possible file',
       'reading a model-selected path that the user did not name',
-      'returning file metadata without semantic content',
+      'returning only file metadata, knowledge inventory, or truncated excerpts without complete source text',
       'reading a source file before an unfinished create, write, or edit action',
     ],
     requiredEvidence: [
-      'verified read_file receipt for the same absolute path present in the accepted user task',
-      'non-empty semantic file content from that receipt',
+      'verified read_file receipt for the user-named absolute local path, or verified knowledge_file_stats mode=source_text receipt for the original fileIds in the current authorized scope',
+      'non-empty complete source text from that receipt, matching the current source revisions',
     ],
-    preferredTools: ['read_file'],
-    verificationTools: ['read_file'],
-    nextStep: 'Read only the exact user-anchored file and answer from its verified semantic content.',
-    caution: 'A basename, directory search, guessed path, metadata-only result, or preparatory read cannot complete this contract.',
+    preferredTools: ['read_file', 'knowledge_file_stats'],
+    verificationTools: ['read_file', 'knowledge_file_stats'],
+    nextStep: 'Use read_file for an exact user-named local absolute path, or knowledge_file_stats with the original current-turn fileIds for knowledge sources. A verified read proves retrieval only.',
+    caution: 'A knowledge fileId is not a local path. Never guess its directory. A local basename, directory search, guessed path, knowledge inventory, truncated source, or preparatory read cannot complete this contract.',
   });
 }
 
@@ -113,4 +114,31 @@ export function buildDesignDeliveryContract(): LumiActionContract {
     nextStep: 'Inspect the supplied brief and files, enumerate the requested deliverable groups, produce each through its real tool path, and verify the complete set before reporting completion.',
     caution: 'Concept files, scripts, previews, and local package integrity checks do not prove a professional design, AutoCAD, or Revit delivery was completed.',
   });
+}
+
+/** A single explicit existing-file handoff; excluded actions remain excluded, not a new production goal. */
+export function buildArtifactRetrievalContract(input: string): LumiActionContract | null {
+  // i18n-allow: bounded multilingual prohibition clauses, preserving later affirmative work.
+  const text = String(input || '').replace(/(?:不要|别|无需|不用|不需要|禁止|请勿|\bdo\s+not\b|\bdon't\b|\bwithout\b)[^，,。；;\n]*?(?=[，,。；;\n]|但是|但|然后|随后|之后|接着|\bbut\b|\bthen\b|$)/giu, ' ');
+  // i18n-allow: explicit return-as-attachment goal, existing-state language and bounded single-object scope.
+  if (!/^(?:\s*(?:请|麻烦)?(?:帮我)?(?:把|将|返回|取回|提供|交付)|\s*(?:please\s+)?(?:return|retrieve|provide)\b)/iu.test(text)
+    || !/(?:已有|现有|已经有|已(?:经)?(?:生成|制作|完成)|\bexisting\b|\balready\b|\bpreviously\b)/iu.test(text)
+    // i18n-allow: input grammar requiring an explicit attachment return.
+    || !/(?:附件[^。；;\n]{0,12}(?:返回|取回|提供|交付)|(?:返回|取回|提供|交付)[^。；;\n]{0,24}附件|\b(?:return|retrieve|provide)\b[^.;\n]{0,120}\battachment\b|\battachment\b[^.;\n]{0,40}\b(?:return|retrieve|provide)\b)/iu.test(text)
+    // i18n-allow: reject multi-object retrieval requests.
+    || /(?:所有|全部|多个|多份|两(?:个|份)|三个|三份|另一|另外|第二|\b(?:all|both|two|three|multiple|another|other|additional)\b)/iu.test(text)) return null;
+  // Past generation describes an existing object; affirmative new work cannot be discharged by retrieval.
+  // i18n-allow: existing-state and requested positive action grammar, not user-facing copy.
+  const remaining = text.replace(/已(?:经)?(?:生成|制作|完成)|\b(?:already|previously)\s+(?:generated|created|made|completed)\b/giu, ' ');
+  if (hasRequestedArtifactMutation(remaining) || /(?:调整|打开|发送|发给|发布|上传|提交|签署|签名|签字|签章|签付|盖章|付款|支付|缴费|转账|分析|总结|翻译|计算|审查|播放|运行|执行|安装|下载)|\b(?:generate|create|make|draft|write|modify|edit|change|update|export|save|open|send|publish|upload|submit|sign|pay|analyze|analyse|summarize|translate|calculate|review|play)(?:s|d|ed|ing)?\b|\b(?:generate|create|modify|send|publish|sign|pay|open|export)[_-][a-z]/iu.test(remaining)) return null;
+  const ids = [...new Set(text.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/giu)?.map(id => id.toLowerCase()) || [])];
+  // i18n-allow: explicit requested project revision number.
+  const revisions = [...new Set([...text.matchAll(/(?:第\s*(\d+)\s*版|\brevision\s*[:=#]?\s*(\d+))/giu)].map(match => Number(match[1] || match[2])))];
+  if (ids.length !== 1 || revisions.length > 1 || revisions.some(value => !Number.isSafeInteger(value) || value < 1)) return null;
+  return { ...buildArtifactWorkContract(), artifactMode: 'retrieve', artifactTarget: { id: ids[0], ...(revisions.length ? { revision: revisions[0] } : {}) },
+    label: 'Existing artifact retrieval', coreAction: 'Return only the explicitly requested existing selected artifact, verified against its owner, current source binding, exact identity and file hash.',
+    preparationIsNotCompletion: ['capability discovery', 'a file listing', 'file metadata alone', 'an ordinary status read without explicit artifact delivery'],
+    requiredEvidence: ['one current-turn verified retrieved receipt from a declared read-only artifact-delivery capability, matching the exact requested identity and revision'],
+    preferredTools: [], verificationTools: [], nextStep: 'Retrieve the existing selected output once and attach that verified file. Do not render, generate, modify, send externally or replay successful retrieval.',
+    caution: 'Retrieving an existing file proves only this handoff; it never proves new generation, content analysis, opening, signing, payment or external delivery.' };
 }

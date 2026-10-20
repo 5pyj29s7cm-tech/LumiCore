@@ -12,6 +12,7 @@ export function buildMediaGenerationContract(
   toolName: NonNullable<LumiActionContract['mediaGeneration']>['toolName'],
   text: string,
   request?: StructuredMediaRequest,
+  sourceVideoRequired = false,
 ): LumiActionContract {
   const countText = text.match(/(?:生成|创建|制作|画|绘制)\s*([一二两三四五六七八九十\d]+)\s*张/u)?.[1]; // i18n-allow: explicit media count.
   const counts: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 }; // i18n-allow: input numbers.
@@ -24,6 +25,7 @@ export function buildMediaGenerationContract(
     kind: 'media_generation', label: 'Verified media generation',
     mediaGeneration: {
       toolName, standalone,
+      ...(sourceVideoRequired ? { sourceVideoRequired: true } : {}),
       duration: request?.duration ?? requestedVideoDuration(brief),
       size: request?.size,
       count: request?.count ?? (countText ? counts[countText] || Number(countText) : 1),
@@ -56,7 +58,8 @@ export function evaluateMediaGenerationEvidence(
     .filter((receipt): receipt is NonNullable<typeof receipt> => Boolean(receipt));
   const receipt = [...receipts].reverse().find(candidate => candidate.toolName === requirement?.toolName);
   if (!requirement || !requirement.standalone) return { complete: false, receipt, reason: 'media_followup_unverified' as const };
-  if (!receipt) return { complete: false, receipt, reason: 'media_output_type_mismatch' as const };
+  // This adapter produces T2V/I2V artifacts; none proves an existing-video edit.
+  if (!receipt || requirement.sourceVideoRequired) return { complete: false, receipt, reason: 'media_output_type_mismatch' as const };
   if (requirement.toolName === 'generate_video' && requirement.audioRequired && receipt.settings.hasAudio !== true) {
     return { complete: false, receipt, reason: 'media_audio_requirement_unmet' as const };
   }

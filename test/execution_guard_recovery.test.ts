@@ -16,9 +16,10 @@ import {
 import type { ExecutionGuardRecoveryFinalization } from '../server/cognition/execution_guard_recovery';
 import type { ToolExecutionRecord } from '../server/tools/types';
 import { hasRequestedArtifactMutation } from '../server/cognition/tool_intent';
-import { sanitizeToolRecordsForPersistence } from '../server/cognition/user_output_protection';
+import { sanitizeToolRecordsForPersistence, sanitizeUserFacingExecutionOutput } from '../server/cognition/user_output_protection';
 import {
   clearAllPendingConfirmationsForTests,
+  formatPendingConfirmationPrompt,
   formatPendingConfirmationRequest,
   recordPendingConfirmation,
 } from '../server/tools/pending_confirmation';
@@ -582,7 +583,8 @@ describe('execution guard recovery', () => {
       );
       const confirmationRequest = formatPendingConfirmationRequest(pending);
       expect(confirmationRequest).toContain('C:\\isolated\\lumi-task-regression\\account.json');
-      expect(confirmationRequest).toContain('[redacted]');
+      expect(confirmationRequest).toContain('owner');
+      expect(confirmationRequest).not.toContain('clientSecret');
       expect(confirmationRequest).not.toContain('must-never-leak');
       expect(confirmationRequest).not.toContain('also-must-never-leak');
 
@@ -607,8 +609,27 @@ describe('execution guard recovery', () => {
         blocked: false,
         reason: 'waiting_confirmation',
       }, { task: 'Log in with the isolated account' });
-      expect(untrusted.text).not.toBe(confirmationRequest);
-      expect(untrusted.text).not.toContain('C:\\isolated\\account.json');
+      // Public prose no longer contains the raw argument envelope requiring a bypass.
+      expect(untrusted.text).toBe(confirmationRequest);
+      expect(untrusted.text).toContain(pending.target);
+    } finally {
+      clearAllPendingConfirmationsForTests();
+    }
+  });
+
+  it('never exempts a model-only prompt or legacy instruction dump as trusted confirmation text', () => {
+    clearAllPendingConfirmationsForTests();
+    try {
+      const pending = recordPendingConfirmation('confirmation-no-prompt-bypass', 'computer_use', {
+        task: 'Read the WPS window and wait for the next model instruction.', target_application: 'WPS', max_steps: 20,
+      }, 'voice', { actionIntent: '检查会议文档' });
+      const modelPrompt = formatPendingConfirmationPrompt(pending);
+      const legacy = `这项操作还没有执行，需要你确认后才能继续。\n操作：computer_use\n参数：${JSON.stringify(pending.safeArgs)}`;
+      for (const text of [modelPrompt, legacy]) {
+        const protectedText = sanitizeUserFacingExecutionOutput(text, { trustedConfirmationRequestText: text });
+        expect(protectedText).not.toBe(text);
+        expect(protectedText).not.toMatch(/computer_use|max_steps|target_application|next model instruction|Pending id|Arguments/u);
+      }
     } finally {
       clearAllPendingConfirmationsForTests();
     }

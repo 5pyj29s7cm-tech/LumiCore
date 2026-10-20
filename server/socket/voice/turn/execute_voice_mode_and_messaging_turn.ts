@@ -101,7 +101,7 @@ export async function executeVoiceModeAndMessagingTurn(context: NonNullable<Awai
       try {
         const foregroundExecution = await executeForegroundMessagingAction({
           action: foregroundMessagingAction, normalizedIntent: context.executionPipeline.normalizedIntent,
-          executionPlan: context.executionPipeline.executionPlan, registry: toolRegistry, correlationId,
+          registry: toolRegistry, correlationId,
           arguments: foregroundMessagingArgs, context: context.toolContext,
           onLifecycle: event => context.emitToolLifecycle({ correlationId: event.correlationId,
             name: event.name, arguments: event.arguments,

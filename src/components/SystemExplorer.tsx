@@ -664,7 +664,7 @@ function renderSystemExplorerContent(input: ReturnType<typeof useSystemExplorerC
       <section className={`rounded-2xl border p-5 ${statusColor(report.status)}`}>
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <div className="text-xs font-black uppercase tracking-[0.18em] opacity-70">{uiMessage('system-explorer.adaptation-score.52be51a16a', (isZh) ? 'zh' : 'en')}</div>
+            <div className="text-xs font-black uppercase tracking-[0.18em]">{uiMessage('system-explorer.adaptation-score.52be51a16a', (isZh) ? 'zh' : 'en')}</div>
             <div className="mt-1 text-3xl font-black text-white">
               {report.readyCount}/{report.totalCount} {uiMessage('system-explorer.ready.d472b01242', (isZh) ? 'zh' : 'en')}
             </div>

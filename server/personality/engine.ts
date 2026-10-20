@@ -375,7 +375,7 @@ export function generateSystemPrompt(
   if (options?.userId) {
     const promptDomain = options.domain === 'work' ? 'work' : 'personal';
     const promptOrgId = promptDomain === 'work' ? (options.orgId || '') : '';
-    const spCtx = generateSpatiotemporalContext(options.userId, promptDomain, promptOrgId);
+    const spCtx = generateSpatiotemporalContext(options.userId, promptDomain, promptOrgId, config.id);
     if (spCtx) blocks.push(spCtx);
     if (promptDomain === 'personal') {
       const desktopCtx = getDesktopContext(options.userId);

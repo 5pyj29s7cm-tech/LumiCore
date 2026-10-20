@@ -1,5 +1,6 @@
 import { ClientSurface } from '../ClientSurface';
 import { renderShellChrome } from './shell_chrome_view';
+import { DesktopModeSwitch } from './DesktopModeSwitch';
 import { renderDesktopCoreStage } from './core_stage_view';
 import { renderDesktopGrid } from './desktop_grid_view';
 import { renderMeetingWorkspace } from './meeting_workspace_view';
@@ -10,6 +11,7 @@ import { LazyPanelFallback } from "./window_shell";
 import { type DesktopIconDefinition } from "./launcher";
 
 import { type MeetingNote } from "./runtime_state";
+import type { MeetingRecord } from "./useMeetingTranscript";
 import { type ProactiveChatDetail } from "./proactive_presentation";
 
 import React from 'react';
@@ -17,7 +19,7 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 
 import { KnowledgeBaseEntry } from "../KnowledgeBaseEntry";
-import { Zap, X, ArrowLeft } from 'lucide-react';
+import { X, ArrowLeft } from 'lucide-react';
 
 import { DayInkLandscape } from "../DesktopShellAuxiliary";
 import { CursorGlow } from "../CursorGlow";
@@ -52,6 +54,8 @@ viewMode: "personal" | "world";
 desktopChrome: ReturnType<typeof getDesktopChromeMetrics>;
 isCompactDesktopLayout: boolean;
 isWallpaperMode: boolean;
+desktopExecutionPreference: ReturnType<typeof useApp>["desktopExecutionPreference"];
+setDesktopExecutionPreference: ReturnType<typeof useApp>["setDesktopExecutionPreference"];
 wallpaperPresentation: WallpaperPresentation;
 wallpaperWorkspace: WallpaperWorkspace;
 handleShellContextMenu: (e: React.MouseEvent) => void;
@@ -145,13 +149,23 @@ meetingNotesOpen: boolean;
 meetingPaused: boolean;
 legalMeetingCaseTitle: string;
 copyMeetingNotes: () => Promise<void>;
-downloadMeetingNotes: () => void;
+downloadMeetingNotes: () => Promise<void>;
+meetingExportPath: string;
+meetingExportBusy: boolean;
+meetingExportError: string;
+openMeetingExport: (folder?: boolean) => Promise<void>;
 setMeetingNotesOpen: React.Dispatch<React.SetStateAction<boolean>>;
 meetingNotes: MeetingNote[];
+meetingHistory: MeetingRecord[];
+meetingRecordId: string;
+meetingHistoryReadOnly: boolean;
+selectMeetingHistoryRecord: (id: string) => void;
+importMeetingHistoryFile: (file: File) => Promise<void>;
 meetingSpeakerCount: number;
-meetingStartedAt: number;
+meetingStartedAt: number | null;
 meetingReportGenerating: boolean;
 meetingReport: string;
+meetingReportError: string;
 formatMeetingTime: (value: number) => string;
 meetingNoteHasSpeakerInfo: (note: MeetingNote) => boolean;
 meetingSpeakerLabel: (note: Pick<MeetingNote, "speakerLabel" | "speakerMatched">) => string;
@@ -162,9 +176,6 @@ pendingOperationModeOption: {id: "meeting"; label: React.ReactNode; title: React
 setPendingOperationMode: React.Dispatch<React.SetStateAction<OperationMode>>;
 pendingOperationMode: OperationMode | null;
 confirmOperationModeChange: () => void;
-wallpaperWorkPromptVisible: boolean;
-enterWallpaperFromWorkPrompt: () => void;
-dismissWallpaperWorkPrompt: () => void;
 sensorPrimerSeen: boolean;
 finishSensorPrimer: () => void;
 showOnboarding: boolean;
@@ -207,7 +218,7 @@ setMemoryAvatars: React.Dispatch<React.SetStateAction<any[]>>;
 enterCreatedMemoryAvatar: (avatar: any) => void;
 };
 export function DesktopShellView(input: DesktopShellViewInput) {
-  const { resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, lang, personalScale, personalOpacity, syncRate, t, nexusReturnTarget, setSyncRate, openSurface, closeSurface, workDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, user, startStandardVoiceCall, endVoiceCallFromUI, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, wallpaperWorkPromptVisible, enterWallpaperFromWorkPrompt, dismissWallpaperWorkPrompt, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar, callState, audioLevel } = input;
+  const { resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, desktopExecutionPreference, setDesktopExecutionPreference, lang, personalScale, personalOpacity, syncRate, t, nexusReturnTarget, setSyncRate, openSurface, closeSurface, workDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, user, startStandardVoiceCall, endVoiceCallFromUI, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar, callState, audioLevel } = input;
 
   return (
     <div
@@ -445,45 +456,6 @@ export function DesktopShellView(input: DesktopShellViewInput) {
       </AnimatePresence>
 
       <CursorGlow />
-      <AnimatePresence>
-        {wallpaperWorkPromptVisible && !isWallpaperMode && !chatOpen && (
-          <motion.div
-            initial={{ opacity: 0, y: 18, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 18, scale: 0.96 }}
-            transition={{ duration: 0.24 }}
-            className="fixed bottom-28 left-1/2 z-[265] w-[min(520px,calc(100vw-2rem))] -translate-x-1/2 pointer-events-auto"
-          >
-            <div className="flex items-center gap-3 rounded-2xl border border-cyan-400/20 bg-zinc-950/92 px-3 py-3 shadow-2xl shadow-cyan-950/30 backdrop-blur-2xl sm:px-4">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-cyan-300/20 bg-cyan-300/10 text-cyan-200">
-                <Zap size={17} className="animate-pulse" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[11px] font-black uppercase tracking-[0.18em] text-cyan-200">
-                  {t.wallpaperWorkPromptTitle || (uiMessage('desktop-ui.native-desktop-handoff.ce61ef3fc2', (lang === 'zh') ? 'zh' : 'en'))}
-                </div>
-                <div className="mt-0.5 truncate text-xs font-medium text-white/55">
-                  {t.wallpaperWorkPromptDesc || (uiMessage('desktop-ui.lumi-has-started-working-and.da348f5f67', (lang === 'zh') ? 'zh' : 'en'))}
-                </div>
-              </div>
-              <button
-                onClick={enterWallpaperFromWorkPrompt}
-                className="flex shrink-0 items-center gap-1.5 rounded-lg border border-cyan-300/25 bg-cyan-300/15 px-3 py-2 text-xs font-black uppercase tracking-widest text-cyan-100 transition-colors hover:bg-cyan-300/25"
-              >
-                <Zap size={13} />
-                {t.enterWallpaper || (uiMessage('desktop-ui.enter.744e33700e', (lang === 'zh') ? 'zh' : 'en'))}
-              </button>
-              <button
-                onClick={dismissWallpaperWorkPrompt}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/45 transition-colors hover:bg-white/10 hover:text-white"
-                aria-label={t.close || 'Close'}
-              >
-                <X size={14} />
-              </button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
       {renderDesktopWindows(input)}
           </ClientSurface>
         </div>
@@ -509,6 +481,7 @@ export function DesktopShellView(input: DesktopShellViewInput) {
             isOpen={chatOpen}
             onClose={() => closeSurface('command-center')}
             layout="command-center"
+            desktopModeControl={<DesktopModeSwitch preference={desktopExecutionPreference} setPreference={setDesktopExecutionPreference} lang={lang} appearance={resolvedAppearanceMode} />}
             commandCenterView={commandCenterView}
             onCommandCenterViewChange={setCommandCenterView}
             onOpenNexus={() => openSurface('nexus', 'command-center')}

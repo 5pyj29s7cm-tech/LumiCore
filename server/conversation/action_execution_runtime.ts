@@ -20,6 +20,12 @@ interface ManagerActionTurnLease {
   abortController?: AbortController;
 }
 
+export interface PreparedConversationTurnUpgrade {
+  turnRowId: string;
+  signal: AbortSignal;
+  transcriptText: string;
+}
+
 export const managerActionTurnLeases = new Map<string, ManagerActionTurnLease>();
 export const managerActionTurnHeartbeatStops = new Map<string, () => void>();
 
@@ -124,6 +130,7 @@ export function acquireManagerActionTurnLease(input: {
   userId: string;
   requestId: string;
   reuseExistingLease: boolean;
+  preparedTurnUpgrade?: PreparedConversationTurnUpgrade;
 }): { acquired: true; ownerId: string } | { acquired: false; reason: 'busy' | 'stale' } {
   const key = managerActionTurnKey(input);
   // Recover the durable TTL first, then discard only a map owner that no
@@ -136,6 +143,17 @@ export function acquireManagerActionTurnLease(input: {
   const existingManagerLease = reconcileManagerActionTurnLeaseOwner(input);
   if (!input.reuseExistingLease && existingManagerLease) {
     return { acquired: false, reason: 'busy' };
+  }
+  if (input.preparedTurnUpgrade) {
+    const turn = getConversationActionTurn(input);
+    if (!input.reuseExistingLease || !existingManagerLease?.prepared
+      || existingManagerLease.abortController?.signal !== input.preparedTurnUpgrade.signal
+      || input.preparedTurnUpgrade.signal.aborted || turn?.status !== 'leased'
+      || turn.id !== input.preparedTurnUpgrade.turnRowId || turn.taskId
+      || turn.leaseOwnerId !== existingManagerLease.ownerId
+      || listConversationActionTurns({ conversationId: input.conversationId, userId: input.userId, statuses: ['leased'] })
+        .some(other => other.requestId !== input.requestId)) return { acquired: false, reason: 'stale' };
+    return { acquired: true, ownerId: existingManagerLease.ownerId };
   }
   if (input.reuseExistingLease && existingManagerLease?.prepared) {
     return { acquired: false, reason: 'busy' };

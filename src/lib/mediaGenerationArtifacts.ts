@@ -187,6 +187,9 @@ export function extractMediaGenerationArtifacts(
       url: location.url,
       path: location.path,
       fileName: fileNameFor(location.path || value),
+      ...(typeof payload.model === 'string' ? { model: payload.model } : {}),
+      ...(kind === 'video' && ['text_to_video', 'image_to_video'].includes(payload.generationMode)
+        ? { operation: payload.generationMode as 'text_to_video' | 'image_to_video' } : {}),
       ...(kind === 'video' && typeof (payload.actualSettings || payload.settings)?.hasAudio === 'boolean'
         ? { hasAudio: (payload.actualSettings || payload.settings).hasAudio } : {}),
     });

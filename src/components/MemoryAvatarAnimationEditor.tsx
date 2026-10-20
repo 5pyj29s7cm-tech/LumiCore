@@ -24,7 +24,7 @@ export function MemoryAvatarAnimationEditor({avatar,locale,disabled,onUpdated,on
       <label className="block text-xs text-white/65">{copy.interval}<input type="number" min={2} max={12} step={.5} value={config.blinkInterval} onChange={e=>setConfig(c=>({...c,blinkInterval:Number(e.target.value)}))} className="ml-3 w-16 rounded bg-[#192224] p-1" /></label>
       <label className="block text-xs text-white/65">{copy.breathing}<input className="ml-3" type="range" min={0} max={1} step={.05} value={config.breathing} onChange={e=>setConfig(c=>({...c,breathing:Number(e.target.value)}))}/></label>
       <label className="flex gap-2 text-xs text-white/65"><input type="checkbox" checked={config.backgroundMotion} onChange={e=>setConfig(c=>({...c,backgroundMotion:e.target.checked}))}/>{copy.background}</label>
-      <button type="button" disabled={!config.idleMediaId} onClick={()=>void save()} className="rounded-lg bg-[#c5baa2]/20 px-3 py-2 text-xs text-[#ddd4bf] disabled:opacity-40">{copy.save}</button>
-    </fieldset><p className="text-xs leading-5 text-white/40">{copy.missing}</p>{notice&&<p role={notice===copy.saved?'status':'alert'} className="text-xs text-[#ddd4bf]">{notice}</p>}
+      <button type="button" disabled={!config.idleMediaId} onClick={()=>void save()} className="rounded-lg bg-[#c5baa2]/20 px-3 py-2 text-xs text-foreground disabled:opacity-40">{copy.save}</button>
+    </fieldset><p className="text-xs leading-5 text-muted-foreground">{copy.missing}</p>{notice&&<p role={notice===copy.saved?'status':'alert'} className="text-xs text-foreground">{notice}</p>}
   </section>;
 }

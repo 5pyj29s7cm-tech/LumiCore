@@ -130,16 +130,3 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
-
-/**
- * Wraps an async function with a simple timeout guard.
- * Throws if the function takes longer than `ms`.
- */
-export function withTimeout<T>(fn: () => Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    fn(),
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms),
-    ),
-  ]);
-}

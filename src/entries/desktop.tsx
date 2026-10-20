@@ -51,7 +51,7 @@ export function DesktopApp() {
       case 'ecosystem': return <Suspense fallback={null}><SkillCenter t={shell.t} lang={shell.lang} /></Suspense>;
       case 'generate': return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Suspense fallback={null}><SkillCenter t={shell.t} lang={shell.lang} initialTab="generate" /></Suspense>;
       case 'docs': return <Suspense fallback={null}><Docs t={shell.t} /></Suspense>;
-      case 'founders': return <Suspense fallback={null}><FoundersSanctuary t={shell.t} user={shell.user} onBack={() => setActiveTab('home')} /></Suspense>;
+      case 'founders': return <Suspense fallback={null}><FoundersSanctuary t={shell.t} onBack={() => setActiveTab('home')} /></Suspense>;
       case 'profile': return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Suspense fallback={null}><Profile t={shell.t} /></Suspense>;
       case 'org': return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Suspense fallback={null}><OrgPortal /></Suspense>;
       case 'settings': return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Suspense fallback={null}><Settings t={shell.t} lang={shell.lang} setLang={shell.setLang} /></Suspense>;

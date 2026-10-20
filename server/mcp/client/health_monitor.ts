@@ -1,8 +1,9 @@
 import { MCPConnectionLifecycle } from "./connection_lifecycle";
-import { isProcessBacked, isInstallationPending } from "./readiness";
+import { isProcessBacked, isInstallationPending, isMissingRequiredApiKey } from "./readiness";
 import { mayReceiveMcpHealthUpdate, projectMcpServerHealth } from "../public_security";
 import type { MCPToolDef, CrashTracker, MCPServerConfig } from "./contracts";
 import { hasCurrentCachedToolInventory } from "./fingerprints";
+import { assertMCPPackageRunnerPolicy } from './package_paths';
 import type { MCPConfigurationAccess } from './contracts';
 import type { ManagedSkillRuntime } from './skill_runtime';
 
@@ -16,6 +17,7 @@ export class MCPHealthMonitor {
     const tracker = this.trackers.get(name) || { consecutiveCrashes: 0, lastCrashTime: '', lastSuccessfulConnect: '', restartTimer: null };
     tracker.consecutiveCrashes = 0;
     tracker.lastSuccessfulConnect = new Date().toISOString();
+    delete tracker.lastError;
     if (tracker.restartTimer) clearTimeout(tracker.restartTimer);
     tracker.restartTimer = null;
     this.trackers.set(name, tracker);
@@ -117,6 +119,14 @@ getServerHealth(): Record<string, { status: string; consecutiveCrashes: number; 
       const identityFailure = config[name]?.source === 'local'
         ? this.runtime.failures.get(name)
         : undefined;
+      let configurationError: string | undefined;
+      if (config[name]?.enabled) {
+        try {
+          if (isMissingRequiredApiKey(config[name])) throw new Error(`Required API key is not configured: ${config[name].apiKeyEnv || '(undeclared key)'}`);
+          if (isInstallationPending(name, config[name])) throw new Error('Skill activation transaction is pending.');
+          assertMCPPackageRunnerPolicy(config[name]);
+        } catch (error: any) { configurationError = String(error?.message || error); }
+      }
       const readyOnDemand = Boolean(
         config[name]?.enabled
         && !identityFailure
@@ -125,6 +135,7 @@ getServerHealth(): Record<string, { status: string; consecutiveCrashes: number; 
       );
       health[name] = {
         status: identityFailure ? 'failed'
+          : configurationError ? 'configuration_required'
           : isRestarting ? 'restarting'
           : this.connections.live.has(name) ? 'connected'
           : (tracker?.consecutiveCrashes ?? 0) >= 5 ? 'failed'
@@ -134,7 +145,7 @@ getServerHealth(): Record<string, { status: string; consecutiveCrashes: number; 
         consecutiveCrashes: tracker?.consecutiveCrashes || 0,
         lastCrashTime: tracker?.lastCrashTime || undefined,
         lastSuccessfulConnect: tracker?.lastSuccessfulConnect || undefined,
-        lastError: identityFailure || tracker?.lastError || undefined,
+        lastError: identityFailure || configurationError || tracker?.lastError || undefined,
       };
     }
     return health;

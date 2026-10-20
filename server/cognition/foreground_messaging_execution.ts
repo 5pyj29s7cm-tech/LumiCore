@@ -2,7 +2,6 @@ import type { ToolRegistry } from '../tools/registry';
 import type { ToolContext, ToolExecutionRecord } from '../tools/types';
 import { executeToolCall } from '../tools/execution_engine';
 import type { NormalizedActionIntent } from './normalized_action_intent';
-import type { CapabilityExecutionPlan } from './capability_execution_plan';
 
 export type ForegroundMessagingAction = 'read' | 'send';
 
@@ -44,24 +43,6 @@ export function buildForegroundMessagingArguments(
   const message = normalizeSlot(intent.payload);
   if (!contact || !message) return null;
   return { contact, message, applicationTarget: 'wechat', useVirtualCursor: true };
-}
-
-function validatePlanBinding(
-  action: ForegroundMessagingAction,
-  plan: CapabilityExecutionPlan,
-): string {
-  const toolName = action === 'read' ? 'wechat_read_recent_chat' : 'wechat_send_message';
-  if (plan.decisionAuthority !== 'semantic_planner' || plan.scriptAuthority !== 'adapter_only') {
-    return 'Foreground messaging requires semantic-planner authority.';
-  }
-  if (plan.fallbackPolicy.allowLegacyRoute !== false) return 'Legacy messaging routes are forbidden.';
-  if (!plan.nodes.some(node => node.toolName === toolName)) {
-    return `Capability execution plan did not authorize candidate '${toolName}'.`;
-  }
-  if (action === 'send' && (!plan.risk.requiresConfirmation || !plan.risk.failClosed)) {
-    return 'External messaging commit is missing fail-closed confirmation policy.';
-  }
-  return '';
 }
 
 function normalizeSlot(value: unknown): string {
@@ -111,7 +92,6 @@ function validateSemanticBinding(
 export async function executeForegroundMessagingAction(input: {
   action: ForegroundMessagingAction;
   normalizedIntent: NormalizedActionIntent;
-  executionPlan: CapabilityExecutionPlan;
   arguments: Record<string, any>;
   registry: ToolRegistry;
   context: ToolContext;
@@ -124,23 +104,6 @@ export async function executeForegroundMessagingAction(input: {
     : 'wechat_send_message';
   const correlationId = input.correlationId
     || `${input.correlationPrefix || 'foreground-messaging'}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const planReason = validatePlanBinding(input.action, input.executionPlan);
-  if (planReason) {
-    return {
-      action: input.action,
-      correlationId,
-      toolName,
-      record: {
-        id: correlationId,
-        name: toolName,
-        arguments: input.arguments,
-        result: '',
-        error: planReason,
-      },
-      parsed: {},
-      verified: false,
-    };
-  }
   try {
     input.onLifecycle?.({
       phase: 'start',

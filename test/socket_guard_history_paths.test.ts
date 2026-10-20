@@ -1,43 +1,18 @@
 import './helpers';
 import { describe, expect, it } from 'vitest';
 import {
-  buildClientSurfaceContinuationBridge,
   normalizeChatHistoryRecord,
 } from '../server/socket/chat';
 import { normalizeVoiceHistoryRecord } from '../server/socket/voice';
+import { sanitizePublicExecutionText } from '../shared/public_execution_language';
 
 describe('socket guard-history delivery paths', () => {
-  it('does not turn marked or legacy guard text into client-surface continuation', () => {
-    const marked = buildClientSurfaceContinuationBridge('继续', [{
-      role: 'assistant',
-      message: '客户端状态还没有拿到。',
-      cognitiveIntent: 'work_product_guard',
-    }]);
-    const legacy = buildClientSurfaceContinuationBridge('继续', [{
-      role: 'assistant',
-      message: '我还没有真正操作客户端，这一轮没有记录到成功的工具执行。',
-    }]);
-
-    expect(marked).toBe('');
-    expect(legacy).toBe('');
-  });
-
-  it('preserves real client-surface continuity', () => {
-    const bridge = buildClientSurfaceContinuationBridge('继续', [{
-      role: 'user',
-      message: '打开客户端的中枢世界',
-    }]);
-
-    expect(bridge).toContain('Internal client-surface continuation context');
-    expect(bridge).toContain('client_get_state');
-  });
-
-  it('drops marked and legacy assistant guard records from voice history', () => {
+  it('retains the public failure while isolating marked and legacy guard protocol', () => {
     expect(normalizeVoiceHistoryRecord({
       role: 'assistant',
       message: '客户端状态还没有拿到。',
       cognitiveIntent: 'work_product_guard',
-    })).toEqual([]);
+    })).toEqual([{ role: 'assistant', content: '客户端状态还没有拿到。' }]);
     expect(normalizeVoiceHistoryRecord({
       role: 'assistant',
       message: '我还没有真正操作客户端，这一轮没有记录到成功的工具执行。',
@@ -59,8 +34,9 @@ describe('socket guard-history delivery paths', () => {
     ];
 
     for (const report of reports) {
-      expect(normalizeChatHistoryRecord({ role: 'assistant', message: report }, { serverOwned: true })).toEqual([]);
-      expect(normalizeVoiceHistoryRecord({ role: 'assistant', message: report })).toEqual([]);
+      const publicReply = [{ role: 'assistant', content: sanitizePublicExecutionText(report) }];
+      expect(normalizeChatHistoryRecord({ role: 'assistant', message: report }, { serverOwned: true })).toEqual(publicReply);
+      expect(normalizeVoiceHistoryRecord({ role: 'assistant', message: report })).toEqual(publicReply);
       expect(normalizeVoiceHistoryRecord({
         role: 'user',
         message: '继续刚才的任务',

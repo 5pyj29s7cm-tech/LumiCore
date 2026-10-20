@@ -45,14 +45,6 @@ export async function makeLLMCallStreamingDirect(
   ...getters: ProviderArguments
 ): Promise<NormalizedLLMResponse> {
   const [, getGemini, , getAnthropic] = getters;
-  const preparedContext = prepareModelRequestContext({
-    messages,
-    toolDeclarations,
-    inputTokenBudget: config.inputTokenBudget,
-    protectedToolNames: config.protectedToolNames,
-  });
-  messages = preparedContext.messages;
-  toolDeclarations = preparedContext.toolDeclarations;
   assertQwenAllowedByUserPrefs(config);
 
   // ── Privacy gate ──
@@ -69,9 +61,10 @@ export async function makeLLMCallStreamingDirect(
   // ── DeepSeek / OpenAI / Qwen / Ark / Ollama / LM Studio (OpenAI-compatible streaming) ──
   const extensionProvider = extensionProviderForCall(config);
   if (extensionProvider || config.provider === 'deepseek' || config.provider === 'openai' || config.provider === 'qwen' || config.provider === 'ark' || config.provider === 'ollama' || config.provider === 'lmstudio' || config.provider === 'xiaomi' || config.provider === 'kimi' || config.provider === 'glm' || config.provider === 'relay') {
-    const { client, supervisedLocal, localRequest, params } = await prepareCompatibleModelRequest(
+    const { client, supervisedLocal, params, preparedContext } = await prepareCompatibleModelRequest(
       messages, toolDeclarations, config, maxTokens, getters, extensionProvider, true,
     );
+    toolDeclarations = preparedContext.toolDeclarations;
     // The official relay currently fails its SSE endpoint after an empty
     // handshake frame.  Use the reliable JSON response by default; callers
     // may explicitly opt in after verifying a relay deployment's streaming
@@ -169,7 +162,7 @@ export async function makeLLMCallStreamingDirect(
           }
           if (chunk.usage) streamUsage = chunk.usage;
         }
-        supervisor.assertSemanticContent();
+        supervisor.assertSemanticContent({ ...completionMetadata(finishReason), usage: extractUsage({ usage: streamUsage }) });
         legacyProtocolFilter.flush();
 
         const usage = extractUsage({ usage: streamUsage });
@@ -277,9 +270,13 @@ export async function makeLLMCallStreamingDirect(
         if (extensionProvider) throw extensionProviderFailure(config.provider, error);
         throw error;
       }
-    }, preparedContext, (localRequest?.toolDeclarations || toolDeclarations)
+    }, preparedContext, toolDeclarations
       .map(declaration => declaration.function.name));
   }
+
+  const preparedContext = prepareModelRequestContext({ messages, toolDeclarations, inputTokenBudget: config.inputTokenBudget, protectedToolNames: config.protectedToolNames });
+  messages = preparedContext.messages;
+  toolDeclarations = preparedContext.toolDeclarations;
 
   // ── Gemini streaming ──
   if (config.provider === 'gemini') {

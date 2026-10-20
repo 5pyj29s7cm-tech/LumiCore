@@ -2,7 +2,7 @@ import { normalizeConversationActionState, RECONFIRMATION_REQUIRED_BLOCKER } fro
 import { mergeTaskReceipts, taskCompletionFromReceipts, toolRecordSucceeded, conversationTaskStatusOwnsExecutionLease, isTerminalConversationTaskStatus } from "../../cognition/task_execution_ledger";
 import { inspectPersistedToolExecutionReceipt } from "../../tools/persisted_execution_receipt";
 import type { ToolExecutionRecord } from "../../tools/types";
-import { ensureTables, parseObject, sanitizeState } from './serialization';
+import { ensureTables, parseObject, sanitizeState, taskPersistenceUnknownMarker } from './serialization';
 import type { ConversationActionTaskRow, ConversationActionReceiptRow } from './contracts';
 import { syncConversationActionTaskLedger, finalizeConversationActionTask } from './task_lifecycle';
 import { conversationActionStateFromTask } from './queries';
@@ -259,24 +259,31 @@ export function repairContradictoryConversationActionReceipts(db: any): number {
       receipts,
       state.taskCapsule,
     );
-    const status = completion.complete ? 'completed' : task.status;
+    const finalization = parseObject(context.taskFinalization);
+    const sameRequestNegativeFinalization = ['blocked', 'cancelled', 'failed', 'persistence_unknown'].includes(finalization.outcome)
+      && Boolean(finalization.requestId)
+      && records.some(record => record.requestId === finalization.requestId);
+    const canComplete = completion.complete
+      && !sameRequestNegativeFinalization
+      && !taskPersistenceUnknownMarker(task);
+    const status = canComplete ? 'completed' : task.status;
     const nextState = normalizeConversationActionState({
       ...state,
       receipts,
       status,
       unfinished: !isTerminalConversationTaskStatus(status),
-      latestBlocker: completion.complete ? '' : state.latestBlocker,
+      latestBlocker: canComplete ? '' : state.latestBlocker,
       activeRequestId: conversationTaskStatusOwnsExecutionLease(status)
         ? state.activeRequestId
         : undefined,
-      completionSource: completion.complete ? 'tool_receipt' : state.completionSource,
+      completionSource: canComplete ? 'tool_receipt' : state.completionSource,
       revision: Math.max(state.revision || 0, task.revision || 0) + 1,
       updatedAt: task.updatedAt,
     });
     if (nextState) context.actionState = sanitizeState(nextState);
     task.context = JSON.stringify(context);
     task.status = status;
-    if (completion.complete) {
+    if (canComplete) {
       task.blocker = '';
       task.activeRequestId = '';
       task.completionSource = 'tool_receipt';

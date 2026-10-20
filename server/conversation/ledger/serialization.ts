@@ -57,7 +57,7 @@ export function redactArguments(args: Record<string, any>): Record<string, any> 
 }
 
 export function redactGoal(goal: string, intent: NormalizedActionIntent): string {
-  if (intent.sideEffectClass !== 'external_commit' || !intent.payload) return String(goal || '').slice(0, 700);
+  if (intent.sideEffectClass !== 'external_commit' || !intent.payload) return String(goal || '').trim();
   return `${intent.kind}:${intent.target || '(unresolved target)'} payload_sha256=${digest(intent.payload)}`;
 }
 

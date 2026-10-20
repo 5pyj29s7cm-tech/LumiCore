@@ -1,22 +1,34 @@
 import path from 'node:path';
-import { artifactPathFromRecord, isArtifactProducerRecord } from '../tools/artifact_evidence';
+import { artifactPathFromRecord, isArtifactDeliveryRecord, artifactReadbackTextSources } from '../tools/artifact_evidence';
+import { isCanonicalToolExecutionRecord } from '../tools/canonical_execution_record';
 import { isVerifiedCurrentTurnRecord } from './result_finalizer_support';
-import type { ToolExecutionRecord } from '../tools/types';
-import { toolRecordSucceeded } from '../tools/receipt_payload';
+import type { ToolExecutionRecord, ToolContext } from '../tools/types';
+import { parseNestedJson, parseStoredArray, toolRecordSucceeded } from '../tools/receipt_payload';
 import { CN_USER_OUTPUT_PROTECTION_MESSAGES } from "../regions/messages/user_output_protection_messages";
 import {
   containsInternalExecutionLanguage,
+  privateExecutionReferences,
   sanitizePublicExecutionText,
 } from '../../shared/public_execution_language';
 
-export interface UserFacingOutputProtectionOptions {
+export function inspectPublicExecutionReferences(input: Pick<ToolContext, 'requestId' | 'taskId' | 'completionRequest'> & { task: string; toolCalls: ToolExecutionRecord[]; source?: string }, answer: string) {
+  const requests = input.completionRequest ? [input.completionRequest.currentText, input.completionRequest.rootText || ''] : [input.task];
+  const currentRecords = input.toolCalls.filter(record => isCanonicalToolExecutionRecord(record) && isVerifiedCurrentTurnRecord({taskText:input.task,responseText:answer,source:input.source || 'chat',requestId:input.requestId,taskId:input.taskId},record));
+  const { sourceText, verifiedText } = artifactReadbackTextSources(currentRecords, requests);
+  const privateIds = [input.requestId, input.taskId, ...input.toolCalls.map(record => record.id), ...(input.completionRequest?.history || []).map(item => item.id)];
+  const privateReferences = privateExecutionReferences(answer, privateIds, [...requests, ...sourceText]);
+  return { requests, currentRecords, sourceText, verifiedText, privateReferences, privateReference: privateReferences.length > 0 };
+}
+
+export interface UserFacingOutputProtectionOptions extends Pick<ToolContext, 'requestId' | 'taskId' | 'completionRequest'> {
   task?: string;
   toolRecords?: ToolExecutionRecord[];
   /**
    * Exact output of `formatPendingConfirmationRequest(pending)`. This is an
    * equality-bound envelope, not a reason-based bypass: arbitrary
    * `waiting_confirmation` prose must still pass the ordinary native-output
-   * filters. Secrets are redacted again before the trusted text is returned.
+   * filters. Internal model instructions are always filtered, including within
+   * this envelope. Secrets are redacted again before trusted text is returned.
    */
   trustedConfirmationRequestText?: string;
 }
@@ -34,8 +46,7 @@ const RAW_WINDOW_RE = /["']?(?:window_id|process_name|executable_path)["']?\s*[:
 const RAW_DIRECTORY_RE = /["']?(?:modifiedMs|isDirectory|fileType)["']?\s*[:=]|(?:["']path["']\s*:\s*["'][A-Za-z]:\\[^"']+["'])/iu;
 // i18n-allow -- Chinese task-list header recognition; not user-visible copy.
 const RAW_TASKLIST_RE = /(?:Image Name\s+PID\s+Session Name|映像名称\s+PID\s+会话名)|(?:^[^\r\n]{1,80}\.exe\s+\d+\s+(?:Console|Services)\s+\d+\s+[\d,]+\s+K\s*$)/imu;
-// i18n-allow -- Chinese internal checkpoint recognition; not user-visible copy.
-const VERIFIED_CHECKPOINT_RE = /(?:已核验的执行结果|Verified execution results|immutable tool receipts|terminal=verified|verification=verified)/iu;
+const VERIFIED_CHECKPOINT_RE = /(?:immutable tool receipts|terminal=verified|verification=verified)/iu;
 const SECRET_DETAIL_RE = /((?:password|passphrase|secret|token|api.?key|authorization|cookie|credential))\s*[:=]\s*\S+/giu;
 const STRUCTURED_SECRET_DETAIL_RE = /(["'](?:password|passphrase|secret|token|api.?key|authorization|cookie|credential)["']\s*:\s*["'])[^"']+/giu;
 const GENERIC_STRUCTURED_FIELD_RE = /(["']?([A-Za-z][A-Za-z0-9_-]{0,80})["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}\]]+)/gu;
@@ -49,7 +60,7 @@ function isSensitivePersistenceKey(value: string): boolean {
   const key = String(value || '').replace(/[^a-z0-9]/giu, '').toLowerCase();
   if (!key) return false;
   // Token accounting is ordinary telemetry, not a credential.
-  if (/^(?:max|total|input|output|prompt|completion|reasoning|cached|estimated)?tokens?(?:count|used|usage|budget|limit)?$/u.test(key)) {
+  if (key !== 'token' && /^(?:max|total|input|output|prompt|completion|reasoning|cached|estimated)?tokens?(?:count|used|usage|budget|limit)?$/u.test(key)) {
     return false;
   }
   return key === 'authorization'
@@ -112,11 +123,10 @@ function hasHighStructuredDensity(value: string): boolean {
   return structural / value.length > 0.035;
 }
 
-export function containsUnsafeToolPayload(value: unknown): boolean {
+function containsUnsafeToolPayload(value: unknown): boolean {
   const raw = stringify(value);
   if (!raw) return false;
-  return containsInternalExecutionLanguage(raw)
-    || DATA_URL_RE.test(raw)
+  return DATA_URL_RE.test(raw)
     || IMAGE_BASE64_FIELD_RE.test(raw)
     || LARGE_BASE64_RE.test(raw)
     || INTERNAL_RECEIPT_RE.test(raw)
@@ -219,6 +229,7 @@ function looksLikeLargeBase64(value: string): boolean {
 
 function compactPersistedToolValue(value: unknown, key = '', depth = 0): unknown {
   if (depth > 6) return '[nested value omitted]';
+  if (key === 'hasPassword' && typeof value === 'boolean') return value;
   if (key && isSensitivePersistenceKey(key)) return '[redacted]';
   if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') {
     return value;
@@ -230,19 +241,19 @@ function compactPersistedToolValue(value: unknown, key = '', depth = 0): unknown
     if (DATA_URL_RE.test(value) || looksLikeLargeBase64(value)) {
       return `[binary payload omitted: ${value.length} chars]`;
     }
-    const redacted = redactSensitive(value);
-    if (redacted.length <= MAX_PERSISTED_STRING) return redacted;
-    const parsed = parseJson(redacted);
+    const parsed = parseJson(value);
     if (parsed !== null) {
       const compacted = compactPersistedToolValue(parsed, key, depth + 1);
       const serialized = JSON.stringify(compacted);
       if (serialized.length <= MAX_PERSISTED_STRING) return serialized;
       return JSON.stringify({
         kind: 'structured_result_summary',
-        originalChars: redacted.length,
+        originalChars: value.length,
         resultOmitted: true,
       });
     }
+    const redacted = redactSensitive(value);
+    if (redacted.length <= MAX_PERSISTED_STRING) return redacted;
     const tailLength = 400;
     return `${redacted.slice(0, MAX_PERSISTED_STRING - tailLength - 48)}\n[stored result truncated: ${redacted.length} chars]\n${redacted.slice(-tailLength)}`;
   }
@@ -265,16 +276,6 @@ const DESKTOP_FILE_COLLECTION_KEYS = ['files', 'entries', 'items', 'children', '
 const DESKTOP_PROCESS_COLLECTION_KEYS = ['processes', 'items', 'results', 'windows'] as const;
 const TARGET_DOCUMENT_RE = /\.(?:docx?|xlsx?|pptx?|pdf|wps|et|dps|txt|md|rtf|csv)(?:$|[\s"'])/iu;
 const AUTHORING_PROCESS_RE = /(?:^|[\\/])(?:wps|wpp|et|wpsoffice|winword|excel|powerpnt)(?:\.exe)?$/iu;
-
-function parseNestedJson(value: unknown): unknown {
-  let parsed = value;
-  for (let depth = 0; depth < 3 && typeof parsed === 'string'; depth += 1) {
-    const next = parseJson(parsed);
-    if (next === null) break;
-    parsed = next;
-  }
-  return parsed;
-}
 
 function compactEvidenceString(value: unknown, limit = 600): string {
   return redactSensitive(String(value || ''))
@@ -340,7 +341,7 @@ function selectDesktopEvidenceEntries(
 }
 
 function desktopCollection(value: unknown, keys: readonly string[]): { entries: unknown[]; key: string } | null {
-  const parsed = parseNestedJson(value);
+  const parsed = parseNestedJson(value, 3);
   if (Array.isArray(parsed)) return { entries: parsed, key: '' };
   if (!parsed || typeof parsed !== 'object') return null;
   const object = parsed as Record<string, unknown>;
@@ -369,13 +370,8 @@ function compactDesktopCollectionResult(
   });
   let payload = makePayload();
   let text = JSON.stringify(payload);
-  while (text.length > MAX_PERSISTED_STRING && entries.length > 1) {
+  while (text.length > MAX_PERSISTED_STRING && entries.length > 0) {
     entries = entries.slice(0, -1);
-    payload = makePayload();
-    text = JSON.stringify(payload);
-  }
-  if (text.length > MAX_PERSISTED_STRING) {
-    entries = [];
     payload = makePayload();
     text = JSON.stringify(payload);
   }
@@ -484,11 +480,8 @@ function compactToolRecordForPersistence(record: unknown): unknown {
  * and unbounded adapter returns must never be copied into conversation rows.
  */
 export function sanitizeToolRecordsForPersistence(value: unknown): any[] | undefined {
-  let records = value;
-  for (let depth = 0; depth < 2 && typeof records === 'string' && records.trim(); depth += 1) {
-    try { records = JSON.parse(records); } catch { return undefined; }
-  }
-  if (!Array.isArray(records) || records.length === 0) return undefined;
+  const records = parseStoredArray(value, 2);
+  if (records.length === 0) return undefined;
   return records.slice(-MAX_PERSISTED_TOOL_RECORDS)
     .map(record => compactPersistedToolValue(compactToolRecordForPersistence(record)));
 }
@@ -502,46 +495,27 @@ function boundedLabel(value: unknown): string {
 
 /** Names from verified writes only; safe to reuse in output and historical progress projections. */
 export function verifiedSavedArtifactNames(records: ToolExecutionRecord[], turn: { requestId?: string; taskId?: string } = {}): string[] {
-  return [...new Set(records.filter(record => isArtifactProducerRecord(record)
+  return [...new Set(records.filter(record => isArtifactDeliveryRecord(record)
     && isVerifiedCurrentTurnRecord({ taskText: '', responseText: '', source: 'artifact-output', ...turn }, record))
     .map(artifactPathFromRecord).filter(Boolean).map(file => boundedLabel(file.split(/[\\/]/u).at(-1))))].filter(Boolean).slice(0, 5) as string[];
 }
 
-function collectDirectoryEntries(value: unknown, output: string[], depth = 0): void {
-  if (depth > 4 || output.length >= 20 || value === null || value === undefined) return;
+function collectDesktopLabels(value: unknown, output: string[], kind: 'files' | 'processes', depth = 0): void {
+  if (depth > 4 || output.length >= (kind === 'files' ? 20 : 30) || value === null || value === undefined) return;
   if (Array.isArray(value)) {
-    for (const item of value) collectDirectoryEntries(item, output, depth + 1);
+    for (const item of value) collectDesktopLabels(item, output, kind, depth + 1);
     return;
   }
   if (typeof value !== 'object') return;
   const record = value as Record<string, unknown>;
-  const candidate = record.name || record.fileName || record.path || record.fullPath;
-  const label = boundedLabel(candidate);
-  if (label && !output.includes(label)) output.push(label);
+  const label = boundedLabel(kind === 'files'
+    ? record.name || record.fileName || record.path || record.fullPath
+    : record.process_name || record.processName || record.name || record.executable);
+  if (label && !output.includes(label)
+    && (kind === 'files' || /(?:\.exe$|^[\p{L}\p{N} ._-]{2,80}$)/iu.test(label))) output.push(label);
+  const keys: readonly string[] = kind === 'files' ? DESKTOP_FILE_COLLECTION_KEYS : DESKTOP_PROCESS_COLLECTION_KEYS;
   for (const [key, nested] of Object.entries(record)) {
-    if (/^(?:files|entries|items|children|results)$/iu.test(key)) {
-      collectDirectoryEntries(nested, output, depth + 1);
-    }
-  }
-}
-
-function collectProcessNames(value: unknown, output: string[], depth = 0): void {
-  if (depth > 4 || output.length >= 30 || value === null || value === undefined) return;
-  if (Array.isArray(value)) {
-    for (const item of value) collectProcessNames(item, output, depth + 1);
-    return;
-  }
-  if (typeof value !== 'object') return;
-  const record = value as Record<string, unknown>;
-  const candidate = record.process_name || record.processName || record.name || record.executable;
-  const label = boundedLabel(candidate);
-  if (label && /(?:\.exe$|^[\p{L}\p{N} ._-]{2,80}$)/iu.test(label) && !output.includes(label)) {
-    output.push(label);
-  }
-  for (const [key, nested] of Object.entries(record)) {
-    if (/^(?:processes|items|results|windows)$/iu.test(key)) {
-      collectProcessNames(nested, output, depth + 1);
-    }
+    if (keys.includes(key.toLowerCase())) collectDesktopLabels(nested, output, kind, depth + 1);
   }
 }
 
@@ -591,12 +565,12 @@ function humanSummary(
     /^(?:desktop_list_files|list_directory|desktop_files)$/iu.test(String(record.name || ''))
     && toolRecordSucceeded(record)
   ));
-  const directory = directoryRecords.length > 0;
+  const directory = directoryRecords.length > 0 && RAW_DIRECTORY_RE.test(raw);
   if (directory) {
     const entries: string[] = [];
     // Do not turn a failed listing, a model JSON candidate, or a file's
     // isDirectory:false metadata into evidence that a directory was read.
-    for (const value of resultValues(directoryRecords)) collectDirectoryEntries(value, entries);
+    for (const value of resultValues(directoryRecords)) collectDesktopLabels(value, entries, 'files');
     const visible = entries.slice(0, 5);
     const count = entries.length;
     if (zh) {
@@ -613,7 +587,7 @@ function humanSummary(
     || RAW_TASKLIST_RE.test(raw);
   if (processList) {
     const processes: string[] = [];
-    for (const value of values) collectProcessNames(value, processes);
+    for (const value of values) collectDesktopLabels(value, processes, 'processes');
     for (const match of raw.matchAll(/^\s*([^\s]+\.exe)\s+\d+\s+/gimu)) {
       const label = boundedLabel(match[1]);
       if (label && !processes.includes(label)) processes.push(label);
@@ -653,15 +627,12 @@ export function sanitizeUserFacingExecutionOutput(
   const trustedConfirmationRequestText = String(
     options.trustedConfirmationRequestText || '',
   ).trim();
-  if (trustedConfirmationRequestText && raw === trustedConfirmationRequestText) {
-    return redacted;
-  }
   if (containsInternalExecutionLanguage(redacted)) {
-    return sanitizePublicExecutionText(redacted, isChinese(redacted) ? 'zh' : 'en');
+    return sanitizePublicExecutionText(redacted);
   }
-  const oversizedToolOutput = raw.length > 8_000 && (options.toolRecords || []).length > 0;
+  if (trustedConfirmationRequestText && raw === trustedConfirmationRequestText) return redacted;
   const oversizedUnscopedOutput = raw.length > 50_000;
-  if (!containsUnsafeToolPayload(raw) && !oversizedToolOutput && !oversizedUnscopedOutput) return redacted;
+  if (!containsUnsafeToolPayload(raw) && !oversizedUnscopedOutput) return redacted;
   return humanSummary(redacted, options).slice(0, 1_200);
 }
 

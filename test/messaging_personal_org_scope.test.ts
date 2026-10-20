@@ -1,5 +1,6 @@
+import { observedMessagingOptions } from './organization_model_observer_fixture';
 import { commitFixturePersonalOrganizationScope } from './messaging_binding_fixture';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeApp } from './helpers';
 import { addMember, createOrg } from '../server/org/db';
 import * as LegalCases from '../server/org/legal_cases';
@@ -14,6 +15,10 @@ import {
   handleRemoteOrgCommand,
 } from '../server/messaging/routes';
 import type { IncomingMessage } from '../server/messaging/types';
+import { processWithPersonality } from '../server/regions/packs/cn/messaging_routes';
+import * as modelExecution from '../server/regions/packs/cn/messaging_turn/model_execution';
+import { closeConversation } from '../server/conversation/manager';
+import { conversationForMessagingTurn } from '../server/regions/packs/cn/messaging_persistence';
 
 function message(userId: string, text: string, partial: Partial<IncomingMessage> = {}): IncomingMessage {
   return {
@@ -29,6 +34,20 @@ function message(userId: string, text: string, partial: Partial<IncomingMessage>
     timestamp: new Date().toISOString(),
     ...partial,
   };
+}
+
+
+async function admittedNativeCommand(input: IncomingMessage): Promise<string | null> {
+  const intercepted = vi.spyOn(modelExecution, 'prepareMessagingModelTurn').mockImplementationOnce(async context => ({
+    terminal: (await handleRemoteOrgCommand(context.msg, context.remoteToolContext)) || '', data: undefined, deliver: undefined,
+  }));
+  try { return await processWithPersonality(input); } finally {
+    intercepted.mockRestore();
+    // This unit fixture intercepts delivery to inspect the native receipt itself.
+    // Close that fixture conversation rather than fabricating a completed whole task.
+    const conversation = conversationForMessagingTurn(input);
+    if (conversation) closeConversation(conversation.id, 'Native handler unit fixture finished.', input.boundUserId);
+  }
 }
 
 describe('personal Lumi organization scope', () => {
@@ -189,7 +208,7 @@ describe('personal Lumi organization scope', () => {
     expect(await handleRemoteOrgCommand(incoming)).toBeNull();
     expect(LegalCases.listCases(org.id, '', 20, userId)).toHaveLength(0);
 
-    const missingTarget = await handleRemoteOrgCommand({
+    const missingTarget = await admittedNativeCommand({
       ...incoming,
       messageId: `${incoming.messageId}-missing-target`,
       text: '把附件归档到案件：不存在的案件',
@@ -197,7 +216,7 @@ describe('personal Lumi organization scope', () => {
     expect(missingTarget).toContain('没有创建新案件');
     expect(LegalCases.listCases(org.id, '', 20, userId)).toHaveLength(0);
 
-    const explicitlyCreated = await handleRemoteOrgCommand({
+    const explicitlyCreated = await admittedNativeCommand({
       ...incoming,
       messageId: `${incoming.messageId}-create`,
       text: '新建案件并归档这份附件',
@@ -224,7 +243,7 @@ describe('personal Lumi organization scope', () => {
       stage: 'filing',
     });
     const exactBefore = exact.materials.length;
-    const exactReply = await handleRemoteOrgCommand(message(userId, '把附件归档到案件：张三诉李四合同纠纷', {
+    const exactReply = await admittedNativeCommand(message(userId, '把附件归档到案件：张三诉李四合同纠纷', {
       boundOrgId: org.id,
       attachments: [attachment],
     }));
@@ -243,7 +262,7 @@ describe('personal Lumi organization scope', () => {
     });
     const firstBefore = firstAmbiguous.materials.length;
     const secondBefore = secondAmbiguous.materials.length;
-    const ambiguousReply = await handleRemoteOrgCommand(message(userId, '把附件归档到案件：甲乙合同纠纷', {
+    const ambiguousReply = await admittedNativeCommand(message(userId, '把附件归档到案件：甲乙合同纠纷', {
       boundOrgId: org.id,
       attachments: [{ ...attachment, id: 'ambiguous-archive-file' }],
     }));
@@ -267,13 +286,13 @@ describe('personal Lumi organization scope', () => {
       dispatchIncomingMessage(incoming, {
         enrich: async value => value,
         reply: async () => undefined,
-      }, {
+      }, observedMessagingOptions({
         onMessage: async value => {
           clearTimeout(timeout);
           resolve(value);
           return { platform: value.platform, text: 'ok' };
         },
-      });
+      }));
     });
 
     expect(routed).toMatchObject({ boundUserId: userId, boundOrgId: org.id });

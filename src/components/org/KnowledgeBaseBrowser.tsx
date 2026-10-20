@@ -27,6 +27,9 @@ import { useT } from '../../lib/useT';
 import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
 import { knowledgeCategoryLabels } from '../../i18n/locales/knowledgeCategories';
 import type { KnowledgeStats as ServerKnowledgeStats } from '../../../server/org/kb';
+import { useFileDrop } from '../../hooks/useFileDrop';
+import { importKnowledgeFiles, type KnowledgeFileSource } from '../../lib/knowledgeFileImport';
+import { fileImportCopy } from '../../i18n/locales/fileImport';
 
 type ArticleStatus = 'draft' | 'published' | 'archived' | string;
 
@@ -312,33 +315,31 @@ function useKnowledgeBaseBrowserState() {
   const goNew = () => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'kb-edit' } }));
   const goEdit = (articleId: string) => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'kb-edit', articleId } }));
 
-  const handleImportFiles = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = Array.from(event.target.files || []);
-    if (selectedFiles.length === 0) return;
+  const uploadRequest = React.useRef<AbortController | null>(null);
+  useEffect(() => () => { uploadRequest.current?.abort(); }, []);
+  const handleImportFiles = async (source: React.ChangeEvent<HTMLInputElement> | KnowledgeFileSource) => {
+    const selectedFiles = Array.isArray(source) ? source : Array.from(source.currentTarget.files || []);
+    if (!Array.isArray(source)) source.currentTarget.value = '';
+    if (!selectedFiles.length || uploadRequest.current) return;
+    const controller = new AbortController();
+    uploadRequest.current = controller;
 
     setUploading(true);
     setError('');
     try {
-      const formData = new FormData();
-      selectedFiles.forEach(file => formData.append('files', file));
-
-      const res = await fetch('/api/files/upload?domain=work', {
-        method: 'POST',
-        body: formData,
-        credentials: 'include',
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.error || formatUiMessage('knowledge-base-browser.import-failed-value0.540b256d69', { value0: res.status }));
-      }
+      const data = await importKnowledgeFiles(selectedFiles as KnowledgeFileSource, path => path + '?domain=work', controller.signal);
 
       const uploadedFiles = Array.isArray(data.files) ? data.files as UploadedKnowledgeFile[] : [];
       const syncedCount = uploadedFiles.filter(file => file.ingested || file.orgArticleId).length;
       const partialCount = uploadedFiles.filter(file => file.partial || file.extractionStatus === 'partial').length;
       const failedCount = uploadedFiles.filter(file => file.syncError).length;
-      const totalCount = uploadedFiles.length || selectedFiles.length;
+      const totalCount = uploadedFiles.length;
+      const failed = data.failed;
+      const failureMessage = failed.length ? fileImportCopy[isZh ? 'zh' : 'en'].failed + ' ' + failed.map(file => file.fileName || file.path).join(', ') : '';
 
-      toast.success(formatUiMessage('knowledge-base-browser.imported-value0-file-s-value1.8df0548713', { value0: totalCount, value1: { en: syncedCount ? `, synced ${syncedCount} article(s)` : '', zh: syncedCount ? `，同步 ${syncedCount} 篇知识` : '' }, value2: { en: partialCount ? `, ${partialCount} partial` : '', zh: partialCount ? `，部分吸收 ${partialCount} 个` : '' }, value3: { en: failedCount ? `, ${failedCount} pending` : '', zh: failedCount ? `，${failedCount} 个待处理` : '' } }));
+      const message = formatUiMessage('knowledge-base-browser.imported-value0-file-s-value1.8df0548713', { value0: totalCount, value1: { en: syncedCount ? `, synced ${syncedCount} article(s)` : '', zh: syncedCount ? `，同步 ${syncedCount} 篇知识` : '' }, value2: { en: partialCount ? `, ${partialCount} partial` : '', zh: partialCount ? `，部分吸收 ${partialCount} 个` : '' }, value3: { en: failedCount ? `, ${failedCount} pending` : '', zh: failedCount ? `，${failedCount} 个待处理` : '' } });
+      if (failed.length || partialCount || failedCount) toast.warning(message + (failureMessage ? '\n' + failureMessage : ''));
+      else toast.success(message);
       window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
         detail: {
           domain: 'work',
@@ -348,22 +349,28 @@ function useKnowledgeBaseBrowserState() {
       window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
 
       await loadKnowledgeBase();
+      controller.signal.throwIfAborted();
+      if (failureMessage) setError(failureMessage);
       const firstArticleId = uploadedFiles.find(file => file.orgArticleId)?.orgArticleId;
       if (firstArticleId) {
-        const articleRes = await fetch(`/api/org/kb/articles/${firstArticleId}`, { credentials: 'include' });
+        const articleRes = await fetch(`/api/org/kb/articles/${firstArticleId}`, { credentials: 'include', signal: controller.signal });
         if (articleRes.ok) {
-          setSelectedArticle(await articleRes.json());
+          const article = await articleRes.json();
+          controller.signal.throwIfAborted();
+          setSelectedArticle(article);
         }
       }
     } catch (err: any) {
+      if (controller.signal.aborted) return;
       const message = err.message || String(err);
       setError(message);
       toast.error(message || uiMessage('knowledge-base-browser.import-failed.f8f58fcf4e'));
     } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (uploadRequest.current === controller) uploadRequest.current = null;
+      if (!controller.signal.aborted) setUploading(false);
     }
   };
+  const drop = useFileDrop(handleImportFiles, uploading);
 
   const handleReindex = async (articleId: string) => {
     setIndexingId(articleId);
@@ -382,7 +389,7 @@ function useKnowledgeBaseBrowserState() {
       setIndexingId(null);
     }
   };
-  return { t, fileInputRef, handleImportFiles, loadKnowledgeBase, loading, uploading, goNew, error, effectiveStats, searchQuery, setSearchQuery, searching, categoryFilter, setCategoryFilter, categoryOptions, isZh, statusFilter, setStatusFilter, sortMode, setSortMode, searchResults, articles, setSelectedArticle, visibleArticles, selectedArticle, healthById, selectedHealth, handleReindex, indexingId, goEdit, selectedTags, maintenanceQueue };
+  return { drop, t, fileInputRef, handleImportFiles, loadKnowledgeBase, loading, uploading, goNew, error, effectiveStats, searchQuery, setSearchQuery, searching, categoryFilter, setCategoryFilter, categoryOptions, isZh, statusFilter, setStatusFilter, sortMode, setSortMode, searchResults, articles, setSelectedArticle, visibleArticles, selectedArticle, healthById, selectedHealth, handleReindex, indexingId, goEdit, selectedTags, maintenanceQueue };
 }
 
 export function KnowledgeBaseBrowser() {
@@ -390,11 +397,11 @@ export function KnowledgeBaseBrowser() {
 }
 
 function renderKnowledgeBaseBrowser(input: ReturnType<typeof useKnowledgeBaseBrowserState>) {
-  const { t, fileInputRef, handleImportFiles, loadKnowledgeBase, loading, uploading, goNew, error, effectiveStats, searchQuery, setSearchQuery, searching, categoryFilter, setCategoryFilter, categoryOptions, isZh, statusFilter, setStatusFilter, sortMode, setSortMode, searchResults, articles, setSelectedArticle, visibleArticles, selectedArticle, healthById, selectedHealth, handleReindex, indexingId, goEdit, selectedTags, maintenanceQueue } = input;
+  const { drop, t, fileInputRef, handleImportFiles, loadKnowledgeBase, loading, uploading, goNew, error, effectiveStats, searchQuery, setSearchQuery, searching, categoryFilter, setCategoryFilter, categoryOptions, isZh, statusFilter, setStatusFilter, sortMode, setSortMode, searchResults, articles, setSelectedArticle, visibleArticles, selectedArticle, healthById, selectedHealth, handleReindex, indexingId, goEdit, selectedTags, maintenanceQueue } = input;
 
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 p-5 text-white">
+    <div {...drop.props} className={`flex h-full min-h-0 flex-col gap-4 p-5 text-white ${drop.dragging ? 'ring-2 ring-inset ring-blue-400' : ''}`}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
@@ -453,7 +460,7 @@ function renderKnowledgeBaseBrowser(input: ReturnType<typeof useKnowledgeBaseBro
         <Metric icon={<AlertCircle size={16} />} label={uiMessage('knowledge-base-browser.needs-care.bf16070a77')} value={effectiveStats.missingIndexArticles + effectiveStats.staleArticles} tone="text-amber-200" />
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[380px_minmax(0,1fr)_280px]">
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-3">
         <section className="lumi-panel flex min-h-[420px] flex-col overflow-hidden rounded-lg">
           <div className="space-y-3 border-b border-white/[0.08] p-3">
             <div className="relative">
@@ -606,7 +613,7 @@ function renderKnowledgeBaseBrowser(input: ReturnType<typeof useKnowledgeBaseBro
                     )}
                   </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex w-full max-w-full flex-wrap items-center gap-2">
                   <button
                     onClick={() => handleReindex(selectedArticle.id)}
                     disabled={indexingId === selectedArticle.id}

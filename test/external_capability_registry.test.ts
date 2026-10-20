@@ -20,7 +20,7 @@ import { executeToolCall } from '../server/tools/execution_engine';
 import { ToolRegistry, resetExternalCommitRuntimeCacheForTests } from '../server/tools/registry';
 import { attachAutonomousHostAuthority } from '../server/tools/host_execution_authority';
 import { buildLumiExecutionPipeline } from '../server/cognition/execution_pipeline';
-import { buildAutonomousCapabilityPipeline } from '../server/autonomy/task_executor';
+import { autonomousTurnPlanningData } from '../server/autonomy/executor/tool_policy';
 import { buildLumiRuntimeCapabilityContext } from '../server/cognition/capability_context';
 
 const OWNER = 'external-capability-owner';
@@ -682,7 +682,7 @@ describe('reviewed external capability packages', () => {
       description: 'Open the reviewed customer video tool.',
       source: 'user_request' as const,
     };
-    expect(buildAutonomousCapabilityPipeline(autonomousTask, 10, automaticRegistry).modelToolProjection.toolNames)
+    expect(buildLumiExecutionPipeline(autonomousTurnPlanningData(autonomousTask, 10, automaticRegistry)).modelToolProjection.toolNames)
       .not.toContain(automaticProxy);
     const premature = await executeToolCall({
       registry: automaticRegistry,
@@ -702,7 +702,7 @@ describe('reviewed external capability packages', () => {
       registry: automaticRegistry,
       context: ownerContext(),
     });
-    expect(buildAutonomousCapabilityPipeline(autonomousTask, 10, automaticRegistry).modelToolProjection.toolNames)
+    expect(buildLumiExecutionPipeline(autonomousTurnPlanningData(autonomousTask, 10, automaticRegistry)).modelToolProjection.toolNames)
       .toContain(automaticProxy);
     const unbranded = await executeToolCall({
       registry: automaticRegistry,

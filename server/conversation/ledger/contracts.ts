@@ -57,6 +57,7 @@ export interface PersistedCapabilityExecutionPlan {
   nodes: Array<{
     nodeId: string;
     type: string;
+    terminalStatus?: NonNullable<ToolExecutionRecord['envelope']>['status'];
     capabilityId: string;
     toolName?: string;
     lane: string;
@@ -73,7 +74,7 @@ export interface PersistedCapabilityExecutionPlan {
   risk: CapabilityExecutionPlan['risk'];
   fallbackPolicy: CapabilityExecutionPlan['fallbackPolicy'];
   contextRefs: CapabilityExecutionPlan['contextRefs'];
-  decisionAuthority: 'semantic_planner';
+  decisionAuthority: 'semantic_planner' | 'registry_bound_call';
   scriptAuthority: 'adapter_only';
   persistedAt: string;
 }

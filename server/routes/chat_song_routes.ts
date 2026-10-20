@@ -1,20 +1,14 @@
-import { providerGetterArguments } from "../llm/provider_getters";
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { createRequestAbortController } from '../http/request_abort';
-import { makeLLMCall } from '../llm/providers';
-import { getUserPreferredLLMConfig } from '../llm/user_preferences';
 import { getUserPreferredGenerationModels } from '../llm/generation_preferences';
-import { modelRoutingErrorReason } from '../llm/model_routing_receipts';
 import { isStrictPrivacy } from '../config/privacy';
 import type { mountCreativeRoutes } from './creative_routes';
-import { CHAT_SONG_RENDER_COPY as copy, chatSongDraftPrompt, chatSongImagePrompt, chatSongSingingPrompt } from '../regions/packs/cn/chat_song';
-import { chatSongLyrics, chatSongSongCurrent } from '../../shared/chat_song';
-import { groupChatSongDraft } from '../../shared/chat_song_layout';
+import { chatSongSongCurrent } from '../../shared/chat_song';
 import {
-  ChatSongError, listChatSongProjects, getChatSongProject, createChatSongProject, changeChatSongProject,
-  editChatSongProject, lockChatSongScript, attachChatSongAsset, selectChatSongAudio, confirmChatSongAudio,
-  setChatSongTimings, normalizeChatSongLines, exportChatSongPackage, getChatSongRender,
+  ChatSongError, listChatSongProjects, getChatSongProject, createChatSongProject,
+  applyChatSongAction, draftChatSongDialogue, chatSongHandoff, exportChatSongPackage, getChatSongRender, getChatSongAnimation,
+  searchChatSongProjectReactions, chatSongProjectReactionPreview,
 } from '../creative/chat_song';
 import { renderChatSongVideo } from '../creative/chat_song_render';
 
@@ -35,55 +29,34 @@ export function mountChatSongRoutes(router: Router, getters: Parameters<typeof m
   router.get(base, handle(async (req, res) => res.json({ projects: listChatSongProjects(req.user!.uid) })));
   router.post(base, handle(async (req, res) => res.status(201).json(await createChatSongProject(req.user!.uid, req.body))));
   router.get(`${base}/:id`, handle(async (req, res) => res.json(getChatSongProject(req.user!.uid, String(req.params.id)))));
-  router.patch(`${base}/:id`, handle(async (req, res) => res.json(await changeChatSongProject(req.user!.uid, String(req.params.id), req.body?.revision, project => editChatSongProject(project, req.body?.project)))));
+  router.patch(`${base}/:id`, handle(async (req, res) => res.json(await applyChatSongAction(req.user!.uid, String(req.params.id), req.body?.revision, 'save', req.body?.project))));
   router.post(`${base}/:id/action`, handle(async (req, res) => {
-    const { action, revision, value } = req.body || {};
-    const project = await changeChatSongProject(req.user!.uid, String(req.params.id), revision, async draft => {
-      if (action === 'lock-script') lockChatSongScript(draft);
-      else if (action === 'attach-asset') await attachChatSongAsset(req.user!.uid, draft, value);
-      else if (action === 'select-song') await selectChatSongAudio(req.user!.uid, draft, value);
-      else if (action === 'remove-asset') draft.assets = draft.assets.filter(asset => asset.id !== value);
-      else if (action === 'confirm-song') confirmChatSongAudio(draft, value);
-      else if (action === 'set-timings') setChatSongTimings(draft, value);
-      else throw new ChatSongError(400, 'Unknown project action.');
-    });
-    res.json(project);
+    const { action, revision, value } = req.body || {}, request = createRequestAbortController(req, res);
+    try { res.json(await applyChatSongAction(req.user!.uid, String(req.params.id), revision, action, value, request.signal)); }
+    finally { request.dispose(); }
   }));
   router.post(`${base}/:id/draft`, handle(async (req, res) => {
-    const project = getChatSongProject(req.user!.uid, String(req.params.id));
-    if (req.body?.revision !== project.revision) throw new ChatSongError(409, 'Save or reload the current project first.');
     const request = createRequestAbortController(req, res);
-    try {
-      const config = getUserPreferredLLMConfig(req.user!.uid, { maxTokens: 4000, domain: 'personal', source: 'chat-song-draft' });
-      if (isStrictPrivacy() || config.provider !== 'relay') throw new ChatSongError(409, 'Choose Lumi Official API in model settings. Cloud creation is unavailable in local-only privacy mode.');
-      const response = await makeLLMCall([{ role: 'user', content: chatSongDraftPrompt(project) }], [],
-        { ...config, thinkingMode: 'disabled', responseFormat: 'json_object', selectionMode: 'pinned', fallbackCandidates: [], allowCloudFallback: false, signal: request.signal },
-        ...providerGetterArguments(getters)).catch(error => {
-          request.signal.throwIfAborted();
-          throw new ChatSongError(modelRoutingErrorReason(error) === 'timeout' ? 504 : 502, copy.draftUnavailable);
-        });
-      request.signal.throwIfAborted();
-      if (response.streamIncomplete || (response.finishReason && response.finishReason !== 'stop')) throw new ChatSongError(502, 'The model returned an incomplete draft. Your saved dialogue has not changed.');
-      let output: unknown;
-      try { output = JSON.parse(String(response.text || '').replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, '')); }
-      catch { throw new ChatSongError(502, 'The model returned an incomplete draft. Your saved dialogue has not changed.'); }
-      const lines = groupChatSongDraft(normalizeChatSongLines((output as any)?.lines));
-      if (lines.length < 2 || !lines.some(line => line.role === 'A') || !lines.some(line => line.role === 'B')) throw new ChatSongError(502, 'The draft must include both speakers.');
-      res.json({ revision: project.revision, lines });
-    } finally { request.dispose(); }
+    try { res.json(await draftChatSongDialogue(req.user!.uid, String(req.params.id), req.body?.revision, getters, request.signal)); }
+    finally { request.dispose(); }
   }));
-  router.get(`${base}/:id/handoff`, handle(async (req, res) => {
-    const project = getChatSongProject(req.user!.uid, String(req.params.id));
-    const prompts = ['background', 'avatarA', 'avatarB'].map(kind => ({ kind, lineId: '', prompt: chatSongImagePrompt(project, kind) }));
-    for (const line of project.lines.filter(line => line.reaction)) prompts.push({ kind: 'reaction', lineId: line.id, prompt: chatSongImagePrompt(project, 'reaction', line.id) });
-    for (const line of project.lines) prompts.push({ kind: 'clip', lineId: line.id, prompt: chatSongImagePrompt(project, 'clip', line.id) });
-    res.json({ lyrics: chatSongLyrics(project.lines), singing: chatSongSingingPrompt(project), prompts });
+  router.post(`${base}/:id/reactions/search`, handle(async (req, res) => {
+    const request = createRequestAbortController(req, res);
+    try { res.json(await searchChatSongProjectReactions(req.user!.uid, String(req.params.id), req.body?.revision, req.body?.lines, request.signal,
+      req.body?.dataRoutingPolicy === 'local_only' ? 'local_only' : undefined)); }
+    finally { request.dispose(); }
   }));
+  router.get(`${base}/:id/reactions/:candidateId/preview`, handle(async (req, res) => {
+    const image = chatSongProjectReactionPreview(req.user!.uid, String(req.params.id), String(req.params.candidateId));
+    res.setHeader('Cache-Control', 'private, no-store'); res.type('png').send(image.bytes);
+  }));
+  router.get(`${base}/:id/handoff`, handle(async (req, res) => res.json(chatSongHandoff(getChatSongProject(req.user!.uid, String(req.params.id))))));
   router.post(`${base}/:id/media-preflight`, handle(async (req, res) => {
     const project = getChatSongProject(req.user!.uid, String(req.params.id));
     const lane = req.body?.mode === 'video' ? 'video' : 'image';
+    if (lane === 'video' && project.brief.outputStyle !== 'animation') throw new ChatSongError(409, 'The selected chat format is composed locally from images. Select animation before requesting model video generation.');
     if (req.body?.revision !== undefined && req.body.revision !== project.revision) throw new ChatSongError(409, 'Reload the current project before generating media.');
-    if (lane === 'video' && !chatSongSongCurrent(project)) throw new ChatSongError(409, 'Select and confirm the song before generating video.');
+    if (lane === 'video' && !chatSongSongCurrent(project)) throw new ChatSongError(409, 'Select a song for the current finalized dialogue before generating video.');
     if (isStrictPrivacy() || getUserPreferredGenerationModels(req.user!.uid)[lane].provider !== 'relay') throw new ChatSongError(409, 'Choose Lumi Official API for this generation role in model settings. Local-only privacy mode must be off.');
     res.json({ ok: true });
   }));
@@ -92,7 +65,11 @@ export function mountChatSongRoutes(router: Router, getters: Parameters<typeof m
     if (req.body?.revision !== project.revision) throw new ChatSongError(409, 'Reload the current project before exporting.');
     res.json(await exportChatSongPackage(req.user!.uid, project));
   }));
-  router.get(`${base}/:id/render`, handle(async (req, res) => res.json({ render: getChatSongRender(req.user!.uid, String(req.params.id)) })));
+  router.get(`${base}/:id/render`, handle(async (req, res) => {
+    const userId = req.user!.uid, id = String(req.params.id), render = getChatSongRender(userId, id);
+    try { res.json({ render, animation: getChatSongAnimation(userId, id) }); }
+    catch (error) { if (!(error instanceof ChatSongError)) throw error; res.json({ render, animation: null, animationError: error.message }); }
+  }));
   router.post(`${base}/:id/render`, handle(async (req, res) => {
     const request = createRequestAbortController(req, res);
     try { res.json({ render: await renderChatSongVideo(req.user!.uid, String(req.params.id), req.body?.revision, request.signal) }); }

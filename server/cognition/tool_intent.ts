@@ -1,5 +1,7 @@
+import { hasExplicitNoToolInstruction } from './no_tool_instruction';
+export { hasExplicitNoToolInstruction } from './no_tool_instruction';
 import type { ActionIntentAnalysis } from './normalized_action_intent';
-import { withoutNegatedLookupClauses, isStoredMemoryRecallQuestion } from './normalized_action_intent';
+import { CLIENT_STATE_INSPECTION_REQUEST, withoutNegatedLookupClauses, isStoredMemoryRecallQuestion } from './normalized_action_intent';
 import { withoutLocationLiterals } from './location_literals';
 import {
   detectRequestedOperationMode,
@@ -56,47 +58,35 @@ export interface ToolIntentDecisionTrace {
     autonomousTask: boolean;
   };
 }
-const EXPLICIT_NO_TOOL_PATTERNS: RegExp[] = [
-  // i18n-allow: a complete current-turn "do not execute yet" clause, not a prohibition on one named operation.
-  /(?:^|[，,。！？!?；;\n])\s*(?:(?:但|但是|不过)\s*)?(?:请)?(?:先|暂时|现在)?(?:不要|别|不用|无需|禁止|请勿)\s*(?:再|继续)?(?:执行|动手|操作)(?:了)?\s*(?=$|[，,。！？!?；;\n])/u,
-  /(?:^|[.,;!?\n])\s*(?:please\s+)?(?:do\s+not|don't)\s+(?:execute|act|proceed|do\s+it)(?:\s+(?:yet|now))?\s*(?=$|[.,;!?\n])/iu,
-  // i18n-allow: discussion-only planning requests, not user-facing copy.
-  /(?:^|[。！？；;，,：:]|\s)(?:请)?(?:现在|这次|先)?(?:只|仅)(?:告诉我|说说|说明|解释)(?:你)?(?:准备|打算|计划)?(?:怎么做|如何做|怎样做|执行步骤|计划|方案)/u,
-  /\b(?:first\s+)?(?:only|just)\s+(?:tell\s+me|explain|describe)\s+(?:how\s+you\s+(?:would|plan\s+to)|(?:the|your)\s+plan)\b/iu,
-  /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u7528)\s*(?:\u518d)?(?:\u6267\u884c|\u8fdb\u884c|\u505a)\s*(?:\u4efb\u4f55|\u65b0\u7684?|\u5176\u4ed6|\u5176\u5b83)?\s*(?:\u64cd\u4f5c|\u52a8\u4f5c|\u4efb\u52a1)/u,
-  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  /(?:不要|别|无需|不需要|不用|禁止|请勿|勿)\s*(?:再|继续|再次)?\s*(?:调用|使用|执行|启动)?\s*(?:(?:任何|这些|外部|新(?:的)?|其他|其它)\s*){0,3}(?:工具|插件|技能|脚本)(?!(?:说明|介绍|解释|清单|列表|文档))/u,
-  /不\s*(?:再|继续)?\s*(?:调用|使用|执行|启动)\s*(?:(?:任何|这些|外部|新(?:的)?|其他|其它)\s*){0,3}(?:工具|插件|技能|脚本)/u,
-  /(?:只|仅)\s*(?:回复|回答|解释|复述|确认)\s*[,，、]?\s*(?:不要|别|无需|不用)\s*(?:调用|使用|执行)?\s*(?:工具|插件|技能|脚本)/u,
-  /\b(?:do\s+not|don't|without|no)\s+(?:call(?:ing)?|use|using|run(?:ning)?|execute|executing)?\s*(?:any\s+)?(?:tools?|plugins?|skills?|scripts?)\b/i,
-  /\b(?:reply|answer|explain|repeat)\s+only\b[^.!?\n]{0,24}\b(?:no|without)\s+(?:tools?|plugins?|skills?|scripts?)\b/i,
-];
 
-/** A hard, current-turn veto shared by chat and voice tool routing. */
-export function hasExplicitNoToolInstruction(text: string): boolean {
-  const normalized = String(text || '').trim();
-  if (!normalized) return false;
-  if (/(?:不是|并非|并不是)\s*(?:不要|别|不用|无需).{0,8}(?:工具|插件|技能|脚本)/u.test(normalized)) {
-    return false;
-  }
-  return EXPLICIT_NO_TOOL_PATTERNS.some(pattern => pattern.test(normalized));
-}
 
-const EXPLICIT_NO_MUTATION_PATTERNS: RegExp[] = [
+const EXPLICIT_NO_LOCAL_MUTATION_PATTERNS: RegExp[] = [
   // i18n-allow: Chinese prohibition input recognition, not user-visible copy.
-  /(?:不要|不|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续)?\s*(?:修改|改动|改写|写入|保存|覆盖|创建|新建|生成|删除|发送|提交|操作)(?:这|该|当前|任何|原)?(?:个|份)?\s*(?:文件|文档|内容|页面|系统|数据)?/u,
+  /(?:不要|不|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续)?\s*(?:修改|改动|写入|保存|覆盖|删除|操作|(?:改写|创建|新建|生成|起草|撰写|制作|整理成|做一份|给我一份)(?:(?:这|该|当前|任何|原|新)?(?:个|份)?\s*(?:文件|文档|内容|页面|系统|数据|图片|图像|视频|草稿|它)|(?=\s*(?:$|[，,。！？!?；;、\n]|或|和|及))))/u,
   /(?:保持|保留)\s*(?:原|源)?(?:文件|文档|数据)(?:原样|不变)|(?:原|源)(?:文件|文档|数据)\s*(?:不动|不变|保持原样)/u, // i18n-allow: Chinese preservation input recognition.
-  /\b(?:do\s+not|don't|without)\s+(?:modify|edit|write|save|overwrite|create|delete|send|submit|change)\b/iu,
+  /\b(?:do\s+not|don't|without)\s+(?:(?:modify|edit|write|save|overwrite|delete|change)\b|(?:create|generate|draft)\b(?=\s*(?:(?:(?:the|this|that|any|all|new|original|current)\s+)?(?:files?|documents?|content|pages?|systems?|data|images?|pictures?|videos?|drafts?|it)\b|$|[.,;!?\n])))/iu,
 ];
+
+// The same existing prohibition verbs are scoped to external effects, not all local creation.
+const EXPLICIT_NO_EXTERNAL_COMMIT_PATTERNS: RegExp[] = [
+  // i18n-allow: existing Chinese send/submit prohibition, scoped by effect.
+  /(?:不要|不|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续)?\s*(?:发送|提交)/u,
+  // i18n-allow: existing English send/submit prohibition, scoped by effect.
+  /\b(?:do\s+not|don't|without)\s+(?:send|submit)\b/iu,
+];
+const EXPLICIT_NO_MUTATION_PATTERNS = [...EXPLICIT_NO_LOCAL_MUTATION_PATTERNS, ...EXPLICIT_NO_EXTERNAL_COMMIT_PATTERNS];
+
+export function explicitNoMutationScope(text: string): { local: boolean; external: boolean } {
+  const normalized = String(text || '').trim();
+  // i18n-allow: preserve the existing double-negative input boundary.
+  if (!normalized || /(?:不是|并非|并不是)\s*(?:不要|别|不用|无需).{0,12}(?:修改|改动|写入|保存|创建|生成|操作)/u.test(normalized)) return { local: false, external: false };
+  return { local: EXPLICIT_NO_LOCAL_MUTATION_PATTERNS.some(pattern => pattern.test(normalized)), external: EXPLICIT_NO_EXTERNAL_COMMIT_PATTERNS.some(pattern => pattern.test(normalized)) };
+}
 
 /** A current-turn veto for side-effecting tools while preserving read-only inspection. */
 export function hasExplicitNoMutationInstruction(text: string): boolean {
-  const normalized = String(text || '').trim();
-  if (!normalized) return false;
-  if (/(?:不是|并非|并不是)\s*(?:不要|别|不用|无需).{0,12}(?:修改|改动|写入|保存|创建|生成|操作)/u.test(normalized)) {
-    return false;
-  }
-  return EXPLICIT_NO_MUTATION_PATTERNS.some(pattern => pattern.test(normalized));
+  const scope = explicitNoMutationScope(text);
+  return scope.local || scope.external;
 }
 
 /** The positive artifact operation, with prohibited operations removed. */
@@ -106,7 +96,7 @@ export function hasRequestedArtifactMutation(text: string): boolean {
     withoutLocationLiterals(String(text || '')),
   );
   // i18n-allow: multilingual task-operation recognition, not user-facing copy.
-  return /(?:创建|新建|写入|编辑|修改|更新|追加|替换|删除|重命名|移动|复制|保存|另存|导出|生成|覆盖)|\b(?:creat(?:e|es|ed|ing)|writ(?:e|es|ing|ten)|edit(?:s|ed|ing)?|modif(?:y|ies|ied|ying)|updat(?:e|es|ed|ing)|append(?:s|ed|ing)?|replac(?:e|es|ed|ing)|delet(?:e|es|ed|ing)|remov(?:e|es|ed|ing)|renam(?:e|es|ed|ing)|mov(?:e|es|ed|ing)|copy|copies|copied|copying|sav(?:e|es|ed|ing)|export(?:s|ed|ing)?|generat(?:e|es|ed|ing)|overwrit(?:e|es|ing|ten))\b/iu.test(positive);
+  return /(?:创建|新建|写入|编辑|修改|更新|追加|替换|删除|重命名|移动|复制|保存|另存|导出|生成|起草|撰写|制作|整理成|做一份|给我一份|覆盖)|\b(?:creat(?:e|es|ed|ing)|writ(?:e|es|ing|ten)|edit(?:s|ed|ing)?|modif(?:y|ies|ied|ying)|updat(?:e|es|ed|ing)|append(?:s|ed|ing)?|replac(?:e|es|ed|ing)|delet(?:e|es|ed|ing)|remov(?:e|es|ed|ing)|renam(?:e|es|ed|ing)|mov(?:e|es|ed|ing)|copy|copies|copied|copying|sav(?:e|es|ed|ing)|export(?:s|ed|ing)?|generat(?:e|es|ed|ing)|draft(?:s|ed|ing)?|overwrit(?:e|es|ing|ten))\b/iu.test(positive);
 }
 
 const CLIENT_NAVIGATION_VERBS = /(?:\u6253\u5f00|\u8fdb\u5165|\u53bb|\u770b\u770b|\u5207\u6362|\u5207\u5230|\u6362\u5230|\u542f\u52a8|\u5f00\u542f|\u5f00\u59cb|\u5c55\u5f00|\u9000\u51fa|\u6536\u8d77|\u5173\u95ed|\u5173\u6389|\u56de\u5230|\u8fd4\u56de|\b(?:open|show|enter|switch|start|expand|exit|hide|close|collapse|return|go back)\b)/iu;
@@ -254,7 +244,6 @@ CLIENT_ACTION_ONLY_PATTERNS.push(/(?:\u6253\u5f00|\u8fdb\u5165|\u53bb|\u770b\u77
 // informational in wording but still require the safe client_get_state tool.
 // Keep this separate from broad capability questions so ordinary conversation
 // does not unexpectedly gain desktop access.
-const CLIENT_STATE_INSPECTION_REQUEST = /(?:(?:介绍|说明|讲讲|告诉我|查看|检查).{0,24}(?:Lumi\s*)?客户端.{0,24}(?:每一?个|各个|所有|全部)?(?:页面|界面|模块)|(?:Lumi\s*)?客户端.{0,24}(?:每一?个|各个|所有|全部)(?:页面|界面|模块).{0,24}(?:干什么|作用|功能|用途|介绍|说明))/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 
 CLIENT_ACTION_INTENT_PATTERNS.push(CLIENT_STATE_INSPECTION_REQUEST);
 CLIENT_ACTION_ONLY_PATTERNS.push(CLIENT_STATE_INSPECTION_REQUEST);
@@ -384,7 +373,6 @@ export function isUserCorrectionOrExplanationQuestion(text: string, analysis?: A
     // Product-behaviour corrections such as “不要动不动就进入介绍客户端的界面”
     // are feedback, not requests to navigate the client right now.
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    /^(?:你|lumi)?[，,\s]*(?:能不能|不要|别|以后不要|别再|不准再)[^。！？!?\n]{0,80}(?:动不动|总是|老是|每次|随便|擅自)[^。！？!?\n]{0,80}(?:进入|打开|切换|跳到|回复|回答|说|讲)/iu,
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
     /^(?:你|lumi)[，,\s]*(?:刚才|刚刚|之前|上一轮|上一次)?[^。！？!?\n]{0,24}(?:为什么|怎么|为何|干嘛|做什么|干什么)[^。！？!?\n]{0,60}(?:这么久|这么慢|才回|才回复|打开|启动|运行|执行|操作|做了|干了)/iu,
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.

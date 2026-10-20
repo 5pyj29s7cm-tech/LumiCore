@@ -10,6 +10,9 @@ import { MemoryTreeScene, layoutTree3D } from './MemoryTree';
 import type { MemoryNode as MemNode, FileEntry } from './MemoryTree';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import type { ChatAttachmentRequest } from '@/lib/chatAttachmentReferences';
+import { useFileDrop } from '../hooks/useFileDrop';
+import { importKnowledgeFiles, type KnowledgeFileSource } from '../lib/knowledgeFileImport';
+import { fileImportCopy } from '../i18n/locales/fileImport';
 
 interface MemoryTree { node: MemNode; children: MemoryTree[]; }
 
@@ -54,7 +57,6 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
   const treeRevision = React.useRef(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [cardPos, setCardPos] = useState<{ x: number; y: number } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [bulkIngesting, setBulkIngesting] = useState(false);
   const [ingestingFiles, setIngestingFiles] = useState<Set<string>>(() => new Set());
@@ -63,6 +65,11 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
   const [obsidianVaults, setObsidianVaults] = useState<ObsidianVault[]>([]);
   const [obsidianSyncing, setObsidianSyncing] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const uploadRequest = React.useRef<AbortController | null>(null);
+  useEffect(() => {
+    setUploading(false);
+    return () => { uploadRequest.current?.abort(); uploadRequest.current = null; };
+  }, [isOpen]);
   const scopedFileUrl = useCallback((path: string) => {
     const separator = path.includes('?') ? '&' : '?';
     return `${path}${separator}domain=${encodeURIComponent(domain)}`;
@@ -86,7 +93,7 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
       domain: file.domain || domain,
       orgId: file.orgId,
       fileId: file.id,
-      fileName: file.displayName || file.name || file.id,
+      fileName: file.sourceTitle || file.displayName || file.name || file.id,
       path: file.path,
       rawSize: file.rawSize,
       kind: 'file',
@@ -170,7 +177,7 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
     });
     if (!q) return sorted;
     return sorted.filter(file => [
-      file.displayName || file.name,
+      file.sourceTitle || file.displayName || file.name,
       file.name,
       file.source || '',
       file.status || '',
@@ -323,30 +330,32 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
     } catch { toast.error(t.kbUpdateFailed || 'Update failed'); }
   };
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  const handleUpload = async (source: React.ChangeEvent<HTMLInputElement> | KnowledgeFileSource) => {
+    const files = Array.isArray(source) ? source : Array.from(source.currentTarget.files || []);
+    if (!Array.isArray(source)) source.currentTarget.value = '';
+    if (!isOpen || !files.length || uploadRequest.current) return;
+    const controller = new AbortController();
+    uploadRequest.current = controller;
     setUploading(true);
     try {
-      const formData = new FormData();
-      for (let i = 0; i < files.length; i++) formData.append('files', files[i]);
-      const res = await fetch(scopedFileUrl('/api/files/upload'), { method: 'POST', body: formData, credentials: 'include' });
-      if (res.ok) {
-        const d = await res.json();
-        const uploaded = d.files?.length || files.length;
+        const d = await importKnowledgeFiles(files as KnowledgeFileSource, scopedFileUrl, controller.signal);
+        const uploaded = d.files.length;
         const absorbed = (d.files || []).filter((file: any) => file.ingested).length;
         const partial = (d.files || []).filter((file: any) => file.partial || file.extractionStatus === 'partial').length;
         const needsAttention = (d.files || []).filter((file: any) => file.syncError || ['failed', 'unsupported'].includes(String(file.extractionStatus || ''))).length;
-        toast.success(`${t.kbUploadedFiles || 'Uploaded'}: ${uploaded}${absorbed ? ` | ${t.kbIngested || 'Absorbed'}: ${absorbed}` : ''}${partial ? ` | Partial: ${partial}` : ''}${needsAttention ? ` | Needs review: ${needsAttention}` : ''}`);
+        const failed = d.failed;
+        const message = `${t.kbUploadedFiles || 'Uploaded'}: ${uploaded}${absorbed ? ` | ${t.kbIngested || 'Absorbed'}: ${absorbed}` : ''}${partial ? ` | Partial: ${partial}` : ''}${needsAttention ? ` | Needs review: ${needsAttention}` : ''}`;
+        if (failed.length || partial || needsAttention) toast.warning(message + (failed.length ? ` | ${fileImportCopy[isZh ? 'zh' : 'en'].failed} ${failed.map(file => file.fileName || file.path).join(', ')}` : ''));
+        else toast.success(message);
         notifyKnowledgeUpdated((d.files || []).map((file: any) => ({ id: file.id, name: file.name, displayName: file.displayName })));
         fetchAll();
-      } else toast.error(t.kbUploadFailed || 'Upload failed');
-    } catch { toast.error(t.kbUploadFailed || 'Upload failed'); }
+    } catch (error: any) { if (!controller.signal.aborted) toast.error(error?.message || t.kbUploadFailed || 'Upload failed'); }
     finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (uploadRequest.current === controller) uploadRequest.current = null;
+      if (!controller.signal.aborted) setUploading(false);
     }
   };
+  const drop = useFileDrop(handleUpload, !isOpen || uploading);
 
   const handleOpenKnowledgeFolder = async () => {
     try {
@@ -456,7 +465,7 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
   }, [isOpen, onClose, selectedId]);
 
   const totalFiles = files.length;
-  return { memories, isOpen, treeNodes, branchCurves, search, selectedId, setSelectedId, setCardPos, loading, t, loadError, visibleFiles, totalFiles, absorbedFileCount, pendingFileCount, isZh, partialFileCount, needsAttentionFileCount, files, fileIsAbsorbed, ingestingFiles, handleIngest, setSearch, fileSearchResults, searchResults, fileInputRef, handleUpload, uploading, handleOpenKnowledgeFolder, setObsidianOpen, obsidianOpen, obsidianVaults, ingestableFiles, handleIngestAll, bulkIngesting, onClose, fetchObsidianStatus, obsidianSyncing, obsidianPath, setObsidianPath, handleObsidianConnect, syncObsidianVault, handleObsidianDisconnect, selectedNode, selectedFileData, selectedMemoryData, cardPos, handleDelete, handleToggleProtect, handleChangeTier, handleEdit, referenceKnowledgeFileInChat };
+  return { drop, memories, isOpen, treeNodes, branchCurves, search, selectedId, setSelectedId, loading, t, loadError, visibleFiles, totalFiles, absorbedFileCount, pendingFileCount, isZh, partialFileCount, needsAttentionFileCount, files, fileIsAbsorbed, ingestingFiles, handleIngest, setSearch, fileSearchResults, searchResults, fileInputRef, handleUpload, uploading, handleOpenKnowledgeFolder, setObsidianOpen, obsidianOpen, obsidianVaults, ingestableFiles, handleIngestAll, bulkIngesting, onClose, fetchObsidianStatus, obsidianSyncing, obsidianPath, setObsidianPath, handleObsidianConnect, syncObsidianVault, handleObsidianDisconnect, selectedNode, selectedFileData, selectedMemoryData, handleDelete, handleToggleProtect, handleChangeTier, handleEdit, referenceKnowledgeFileInChat };
 }
 
 function KnowledgeBaseScope(props: Parameters<typeof useKnowledgeBaseScopeState>[0]) {
@@ -464,7 +473,7 @@ function KnowledgeBaseScope(props: Parameters<typeof useKnowledgeBaseScopeState>
 }
 
 function renderKnowledgeBaseScope(input: ReturnType<typeof useKnowledgeBaseScopeState>) {
-  const { memories, isOpen, treeNodes, branchCurves, search, selectedId, setSelectedId, setCardPos, loading, t, loadError, visibleFiles, totalFiles, absorbedFileCount, pendingFileCount, isZh, partialFileCount, needsAttentionFileCount, files, fileIsAbsorbed, ingestingFiles, handleIngest, setSearch, fileSearchResults, searchResults, fileInputRef, handleUpload, uploading, handleOpenKnowledgeFolder, setObsidianOpen, obsidianOpen, obsidianVaults, ingestableFiles, handleIngestAll, bulkIngesting, onClose, fetchObsidianStatus, obsidianSyncing, obsidianPath, setObsidianPath, handleObsidianConnect, syncObsidianVault, handleObsidianDisconnect, selectedNode, selectedFileData, selectedMemoryData, cardPos, handleDelete, handleToggleProtect, handleChangeTier, handleEdit, referenceKnowledgeFileInChat } = input;
+  const { drop, memories, isOpen, treeNodes, branchCurves, search, selectedId, setSelectedId, loading, t, loadError, visibleFiles, totalFiles, absorbedFileCount, pendingFileCount, isZh, partialFileCount, needsAttentionFileCount, files, fileIsAbsorbed, ingestingFiles, handleIngest, setSearch, fileSearchResults, searchResults, fileInputRef, handleUpload, uploading, handleOpenKnowledgeFolder, setObsidianOpen, obsidianOpen, obsidianVaults, ingestableFiles, handleIngestAll, bulkIngesting, onClose, fetchObsidianStatus, obsidianSyncing, obsidianPath, setObsidianPath, handleObsidianConnect, syncObsidianVault, handleObsidianDisconnect, selectedNode, selectedFileData, selectedMemoryData, handleDelete, handleToggleProtect, handleChangeTier, handleEdit, referenceKnowledgeFileInChat } = input;
 
   const totalMemories = memories.filter(m => m.nodeType !== 'branch').length;
   const totalBranches = memories.filter(m => m.nodeType === 'branch').length;
@@ -472,9 +481,10 @@ function renderKnowledgeBaseScope(input: ReturnType<typeof useKnowledgeBaseScope
   if (!isOpen) return null;
   return (
         <div
+          {...drop.props}
           data-knowledge-base
           data-theme-scope="dark"
-          className="lumi-below-topbar fixed inset-x-0 bottom-0 z-[90]"
+          className={`lumi-below-topbar fixed inset-x-0 bottom-0 z-[90] ${drop.dragging ? 'ring-2 ring-inset ring-emerald-400' : ''}`}
           style={{
             background: 'radial-gradient(ellipse at 50% 30%, #0f0f23 0%, #080812 40%, #020205 100%)',
           }}
@@ -485,11 +495,7 @@ function renderKnowledgeBaseScope(input: ReturnType<typeof useKnowledgeBaseScope
             curves={branchCurves}
             searchQuery={search}
             highlightedNodeId={selectedId}
-            onNodeClick={(id, sx, sy) => {
-              if (!id) { setSelectedId(null); setCardPos(null); return; }
-              setSelectedId(prev => prev === id ? null : id);
-              setCardPos(prev => prev ? null : { x: sx, y: sy });
-            }}
+            onNodeClick={(id) => setSelectedId(prev => prev === id ? null : id)}
             onNodeDoubleClick={(id) => setSelectedId(id)}
           />
 
@@ -567,7 +573,7 @@ function renderKnowledgeBaseScope(input: ReturnType<typeof useKnowledgeBaseScope
                     return (
                     <div
                       key={f.id}
-                      onClick={() => { setSelectedId(f.id); setCardPos(null); }}
+                      onClick={() => setSelectedId(f.id)}
                       className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left transition-all group cursor-pointer ${
                         selectedId === f.id
                           ? 'bg-white/10 border border-white/15 shadow-[0_0_20px_rgba(59,130,246,0.08)]'
@@ -584,7 +590,7 @@ function renderKnowledgeBaseScope(input: ReturnType<typeof useKnowledgeBaseScope
                         <File size={13} className="text-blue-400/60 shrink-0" />
                       )}
                       <div className="flex-1 min-w-0">
-                        <span className="text-xs text-white/70 truncate block">{f.displayName || f.name}</span>
+                        <span className="text-xs text-white/70 truncate block">{f.sourceTitle || f.displayName || f.name}</span>
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                           {f.source && (
                             <span className="text-[10px] font-black uppercase tracking-[0.12em] text-white/25">{f.source}</span>
@@ -669,7 +675,7 @@ function renderKnowledgeBaseScope(input: ReturnType<typeof useKnowledgeBaseScope
                           >
                             <File size={12} className="text-blue-400/50 shrink-0 group-hover:text-blue-300 transition-colors" />
                             <span className="text-xs text-white/60 group-hover:text-white/80 transition-colors truncate">
-                              {f.displayName || f.name}
+                              {f.sourceTitle || f.displayName || f.name}
                             </span>
                             <span className="ml-auto text-[10px] font-black uppercase tracking-[0.12em] text-white/24">{t.kbFiles || 'file'}</span>
                           </button>
@@ -707,7 +713,7 @@ function renderKnowledgeBaseScope(input: ReturnType<typeof useKnowledgeBaseScope
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     disabled={uploading}
-                    title={t.kbImport || (uiMessage('knowledge-base.import-files.dbcb99aedf', (isZh) ? 'zh' : 'en'))}
+                    title={fileImportCopy[isZh ? 'zh' : 'en'].drop}
                     aria-label={t.kbImport || (uiMessage('knowledge-base.import-files.dbcb99aedf', (isZh) ? 'zh' : 'en'))}
                     className="group flex h-9 min-w-9 items-center justify-center gap-2 rounded-xl px-2.5 text-[11px] font-bold text-emerald-100/72 transition-all hover:bg-emerald-300/10 hover:text-emerald-100 disabled:pointer-events-none disabled:opacity-60 xl:px-3"
                   >
@@ -910,8 +916,7 @@ function renderKnowledgeBaseScope(input: ReturnType<typeof useKnowledgeBaseScope
               isCore: selectedNode.tier === 'core_identity',
               isBranch: selectedNode.type === 'branch',
             } : null}
-            position={cardPos}
-            onClose={() => { setSelectedId(null); setCardPos(null); }}
+            onClose={() => setSelectedId(null)}
             onDelete={handleDelete}
             onIngest={handleIngest}
             onToggleProtect={handleToggleProtect}

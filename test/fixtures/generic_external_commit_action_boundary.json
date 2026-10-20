@@ -1,0 +1,116 @@
+{
+  "sourceCases": [
+    {
+      "id": "actual-plaintiff",
+      "text": "请对已保存的虚构案件“虚构原告固定诉请验收1018_f03cde11”（caseId=own-plaintiff-native-immutable-e90f77ca-eeee-44d4-b135-667ef03cde11）生成半自动诉讼文书工作包，使用现有 legal_generate_litigation_packet。使用该案件已保存的身份、当事人与明确诉请及四份原始材料，不编辑案件档案，不转述或另填已有档案字段；写出本案Markdown和DOCX工作稿并归档，只需完成这一个文书包，不提交、不签署、不盖章或对外发送。\n\n本次原始要求：\n仅用于程序验收的虚构案件，无真实委托，不提交、不签名、不盖章、不对外发送。\n本次我方为虚构霁川设备有限公司，拟作为原告；对方为虚构墨汀制造有限公司，拟作为被告。请求虚构墨汀制造有限公司交付合同项下设备，仅生成律师工作稿，不主张退款、欠款余额或另加违约金。\n甲方称合同总价80万元，自己已支付20万元，合同记载付款后30日交货；付款是否足以触发交货期限、付款和交货的实际日期、设备名称/型号/数量、交付方式、收款主体及对方履行情况均待核实。\n未提供验收条款不代表合同没有约定，未提供催告记录不代表催告没有发生。\n统一社会信用代码、住所、法定代表人、法院、律所、律师、代理阶段、费用、授权期限、特别授权选择、送达地址、手机和电子送达意愿均未提供；不得补造。未给案件事实/程序法律基准日期，不能以本次创建或导出日期替代。",
+      "external": false
+    },
+    {
+      "id": "actual-nda",
+      "text": "请依据以下当事人原始要求，起草“无偿双向保密协议”的完整合同工作稿。使用现有 legal_draft_contract，稿件名称“虚构保密拟议状态验收1018_87a9dbea”。仅在本次聊天给出完整正文，不归档、不新建案件、不发送、不提交、不签署。只完成这份合同工作稿。\n\n当事人原始要求：\n以下全部为程序验收用虚构条件，不是真实交易：虚构星汐资料有限公司与虚构砚河评估有限公司拟开展双向保密合作。双方互负保密义务，合作无偿，不设付款、实物交付验收或担保义务。仅处理双方在合作评估中披露且明确标示的保密资料；公开信息不在范围内。保密期限为签署后两年。具体签署日期、争议解决地点、签章代表和违约损失数额均未确认，必须保持待双方确认。不得自称已签署、已查验主体登记、法条已核验或具备正式使用条件。",
+      "external": false
+    },
+    {
+      "id": "actual-defendant",
+      "text": "请对已保存的虚构案件“虚构被告固定答辩验收1018_56febf66”（caseId=own-defendant-native-immutable-13acea33-36c2-41b4-a50b-5ab556febf66）生成半自动诉讼文书工作包，使用现有 legal_generate_litigation_packet。使用该案件已保存的被告身份、当事人、明确答辩目标及五份原始材料（我方原始要求一份、对方四份材料），不编辑案件档案，不转述或另填已有档案字段；写出本案Markdown和DOCX工作稿并归档，只需完成这一个文书包，不提交、不签署、不盖章或对外发送。\n\n本次原始要求：\n仅用于程序验收的虚构案件，无真实委托，不提交、不签名、不盖章、不对外发送。\n本次我方为虚构墨汀制造有限公司，拟作为被告；虚构霁川设备有限公司拟作为原告。原告请求交付合同项下设备；我方需按材料作条件答辩，不主动添加退款、反诉、60万元欠款或违约金诉请。\n合同文字摘录载总价80万元、付款后30日交货；原告自称已支付20万元。乙方尚未核实付款真实性、收款主体、合同对应关系、实际付款和交货日期、付款是否触发交货期限，不能把未核实改为未付款、无约定或无到期。\n设备名称/型号/数量、交付地点方式、签署日期、完整条款与履行情况待核实。未提供验收/催告材料不代表没有约定/没有发生。聊天仅文字摘录，不是亲见截图或原始载体，不写成已交货或承认违约。\n双方统一信用代码、住所、代表人、法院、律所、律师、代理阶段、费用、授权期限、特别授权选择、送达资料均未提供；不补造，不从导出日补法律适用基准或事件日期。",
+      "external": false
+    },
+    {
+      "id": "conditional-source",
+      "text": "付款是否足以触发交货期限，均待核实。",
+      "external": false
+    },
+    {
+      "id": "material-later-clause",
+      "text": "分析材料；付款是否足以触发交货期限，均待核实。",
+      "external": false
+    },
+    {
+      "id": "relative-term-source",
+      "text": "合同摘录：\n付款后30日交货。",
+      "external": false
+    },
+    {
+      "id": "known-source-fact",
+      "text": "请分析付款期限和支付条款，给我风险建议。",
+      "external": false
+    },
+    {
+      "id": "negative-payment",
+      "text": "不要付款给供应商100元。",
+      "external": false
+    },
+    {
+      "id": "retrospective",
+      "text": "刚才付款给供应商的情况是什么？",
+      "external": false
+    },
+    {
+      "id": "history-not-authority",
+      "text": "请分析当前材料。\n## Recent action continuation context\n付款给供应商100元。",
+      "external": false
+    }
+  ],
+  "positiveCases": [
+    {
+      "id": "imperative",
+      "text": "请付款给测试收款人20元。",
+      "external": true
+    },
+    {
+      "id": "bare-payment",
+      "text": "付款给供应商100元。",
+      "external": true
+    },
+    {
+      "id": "bare-pay-obligation",
+      "text": "支付款项。",
+      "external": true
+    },
+    {
+      "id": "bare-transfer",
+      "text": "转账给测试账户20元。",
+      "external": true
+    },
+    {
+      "id": "mixed-payment",
+      "text": "先读取账单，付款给供应商100元。",
+      "external": true
+    },
+    {
+      "id": "english-imperative",
+      "text": "Please pay test recipient 20 dollars.",
+      "external": true
+    },
+    {
+      "id": "signature",
+      "text": "签署这份合同。",
+      "external": true
+    },
+    {
+      "id": "submission",
+      "text": "提交合同。",
+      "external": true
+    },
+    {
+      "id": "mixed-signature",
+      "text": "先读取文件，然后签署合同。",
+      "external": true
+    },
+    {
+      "id": "mixed-submission",
+      "text": "先读取文件，然后提交合同。",
+      "external": true
+    },
+    {
+      "id": "history-positive",
+      "text": "请付款给供应商100元。\n## Recent action continuation context\n之前不要付款给任何人。",
+      "external": true
+    }
+  ],
+  "actualDefendant": {
+    "text": "请对已保存的虚构案件“虚构被告显式委托人验收1019_46ece50d”（caseId=own-defendant-client-party-72c0a60f-4e50-48c6-87f3-faa5ea422f32）生成半自动诉讼文书工作包，使用现有 legal_generate_litigation_packet。使用该案件已保存的被告身份、当事人、明确答辩目标及五份原始材料（我方原始要求一份、对方四份材料），不编辑案件档案，不转述或另填已有档案字段；写出本案Markdown和DOCX工作稿并归档，只需完成这一个文书包，不提交、不签署、不盖章或对外发送。\n\n本次原始要求：\n仅用于程序验收的虚构案件，无真实委托，不提交、不签名、不盖章、不对外发送。\n本次我方为虚构墨汀制造有限公司，拟作为被告；虚构霁川设备有限公司拟作为原告。原告请求交付合同项下设备；我方需按材料作条件答辩，不主动添加退款、反诉、60万元欠款或违约金诉请。\n合同文字摘录载总价80万元、付款后30日交货；原告自称已支付20万元。乙方尚未核实付款真实性、收款主体、合同对应关系、实际付款和交货日期、付款是否触发交货期限，不能把未核实改为未付款、无约定或无到期。\n设备名称/型号/数量、交付地点方式、签署日期、完整条款与履行情况待核实。未提供验收/催告材料不代表没有约定/没有发生。聊天仅文字摘录，不是亲见截图或原始载体，不写成已交货或承认违约。\n双方统一信用代码、住所、代表人、法院、律所、律师、代理阶段、费用、授权期限、特别授权选择、送达资料均未提供；不补造，不从导出日补法律适用基准或事件日期。",
+    "textSha256": "2a6070521c3037b9abb87e87982ea22f6c9dead035cac84144f6e950b40e6055",
+    "sourcePath": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/legal-20-closure-20261018/documents/defendant-explicit-client-party-native-prepared/defendant/execution/input.json"
+  }
+}

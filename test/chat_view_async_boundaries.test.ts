@@ -273,3 +273,63 @@ describe('chat uploads stay attached to their originating view', () => {
     });
   }
 });
+
+describe('chat screenshot clipboard delivery', () => {
+  function pasteHarness(focus: 'input' | 'body' | 'other' = 'input') {
+    const h = uploadHarness();
+    const input = { value: 'Existing draft', focus: vi.fn() }, body = {}, other = {};
+    const setDraftText = vi.fn();
+    const upload = vi.fn((_kind: string, files: File[]) => h.upload(files));
+    const paste = callback('pasteIntoCommandInput', {
+      document: { activeElement: focus === 'input' ? input : focus === 'body' ? body : other, body, documentElement: {} },
+      messageInputRef: { current: input }, setDraftText, runChatAttachmentUpload: upload,
+    });
+    return { ...h, paste, upload, input, setDraftText };
+  }
+  const image = () => new File(['synthetic screenshot'], 'image.png', { type: 'image/png' });
+  const event = (files: File[] = [], items: unknown[] = [], text = '') => ({
+    clipboardData: { files, items, getData: vi.fn(() => text) }, preventDefault: vi.fn(),
+  });
+  const received = () => ({ ok: true, json: async () => ({ files: [{
+    fileId: 'synthetic-screenshot', fileName: 'image.png', kind: 'image', path: 'C:/audit-synthetic/image.png',
+  }] }) });
+
+  it.each(['input', 'body'] as const)('attaches a screenshot through the existing upload from %s without duplicating the clipboard item', async focus => {
+    const h = pasteHarness(focus), file = image(), item = { kind: 'file', getAsFile: vi.fn(() => file) };
+    const e = event([file], [item], 'image alt text');
+    h.paste(e);
+    expect(h.upload).toHaveBeenCalledTimes(1); expect(h.upload).toHaveBeenCalledWith('files', [file]);
+    expect(item.getAsFile).not.toHaveBeenCalled(); expect(e.preventDefault).toHaveBeenCalledOnce();
+    expect(h.setDraftText).not.toHaveBeenCalled(); expect(h.input.value).toBe('Existing draft');
+    h.response.resolve(received()); await settle();
+    expect(h.pendingAttachmentsRef.current).toMatchObject([{ fileId: 'synthetic-screenshot', kind: 'image' }]);
+  });
+
+  it('accepts file items when the screenshot is absent from clipboardData.files', async () => {
+    const h = pasteHarness(), file = image();
+    h.paste(event([], [{ kind: 'string', getAsFile: () => { throw Error('Text is not a file'); } },
+      { kind: 'file', getAsFile: () => null }, { kind: 'file', getAsFile: () => file }]));
+    expect(h.upload).toHaveBeenCalledWith('files', [file]);
+    h.response.resolve(received()); await settle(); expect(h.pendingAttachmentsRef.current).toHaveLength(1);
+  });
+
+  it('preserves native text paste and selection in the focused input, and keeps unfocused text paste', () => {
+    const focused = pasteHarness(), e = event([], [], 'New text'); focused.paste(e);
+    expect(e.preventDefault).not.toHaveBeenCalled(); expect(focused.setDraftText).not.toHaveBeenCalled();
+    const unfocused = pasteHarness('body'), background = event([], [], 'New text'); unfocused.paste(background);
+    expect(unfocused.setDraftText).toHaveBeenCalledWith('Existing draftNew text');
+    expect(unfocused.input.focus).toHaveBeenCalledOnce(); expect(unfocused.upload).not.toHaveBeenCalled();
+  });
+
+  it('leaves paste in another focused control alone', () => {
+    const h = pasteHarness('other'), e = event([image()]); h.paste(e);
+    expect(h.upload).not.toHaveBeenCalled(); expect(e.preventDefault).not.toHaveBeenCalled();
+    expect(h.input.focus).not.toHaveBeenCalled();
+  });
+
+  it('does not attach a late pasted screenshot to another conversation', async () => {
+    const h = pasteHarness(); h.paste(event([image()])); h.registry.invalidate();
+    expect(h.signal()?.aborted).toBe(true); h.response.resolve(received()); await settle();
+    expect(h.pendingAttachmentsRef.current).toHaveLength(0);
+  });
+});

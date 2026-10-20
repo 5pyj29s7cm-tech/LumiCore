@@ -1,6 +1,6 @@
 {
   "name": "lumi-skill-cad-drafting",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "Source-verified CAD tracing with staged geometry extraction, receipt-based handoff, resumable visible AutoCAD MCP playback, and exact entity-count verification.",
   "type": "module",
   "main": "index.ts",

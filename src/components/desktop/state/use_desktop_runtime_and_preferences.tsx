@@ -15,7 +15,7 @@ import type { useDesktopCaptureAndIdentity } from './use_desktop_capture_and_ide
 import { IDLE_AWAY_SECONDS, RETURN_IDLE_SECONDS } from './shared';
 
 export function useDesktopRuntimeAndPreferences(previousBindings: ReturnType<typeof useDesktopCaptureAndIdentity>) {
-  const { isTauri, wakeEnabled, sensorPrimerSeen, setClientPermissions, setClientRuntime, closeToBackgroundSyncRef, socket, startCallRef, selectedVoiceId, voiceScopeOptions, ownerVoiceGateOpen, callState, interrupt, backgroundFaceRecognitionOptedIn, cameraAccessEnabled, workDomain, voiceprint, user, isMuted, volume, callError, meetingStartedAt, legalMeetingCaseTitle, meetingReport, meetingNotes, formatMeetingNoteForExport, lang, meetingIdentityRef, setMeetingReport, meetingStorageKeys, setMeetingReportGenerating, orgConnection, aiConfig, lastLegalMeetingArchiveRef, setLegalMeetingCaseTitle, waitForMeetingRefinement, stopMeetingAudio, setMeetingNotesOpen, operationMode, endCall, setMeetingPaused, meetingVoiceActiveRef, meetingStartAttemptRef, setOperationMode, meetingPaused, renewMeetingIdentity, setMeetingNotes, setMeetingSpeakerCount, setMeetingStartedAt, lastMeetingTranscriptRef, setPendingOperationMode, pendingOperationMode, resetMeetingCapture, knowledgeRefreshSequenceRef, setKnowledgeRuntimeState, setOrganizationWorkspaceView, surfaceReturnTargetRef, windowCommand, dismissUtilitySurfaces, setActiveTab, openCommandCenter, setVolume } = previousBindings;
+  const { isTauri, wakeEnabled, sensorPrimerSeen, setClientPermissions, setClientRuntime, closeToBackgroundSyncRef, socket, startCallRef, selectedVoiceId, voiceScopeOptions, ownerVoiceGateOpen, callState, interrupt, backgroundFaceRecognitionOptedIn, cameraAccessEnabled, workDomain, voiceprint, user, isMuted, volume, callError, meetingStartedAt, legalMeetingCaseTitle, meetingReport, meetingReportGenerating, meetingNotes, formatMeetingNoteForExport, lang, meetingIdentityRef, setMeetingReport, meetingStorageKeys, setMeetingReportGenerating, orgConnection, aiConfig, lastLegalMeetingArchiveRef, setLegalMeetingCaseTitle, waitForMeetingRefinement, stopMeetingAudio, setMeetingNotesOpen, operationMode, endCall, setMeetingPaused, meetingVoiceActiveRef, meetingStartAttemptRef, setOperationMode, meetingPaused, renewMeetingIdentity, createMeetingRecord, selectMeetingRecord, importMeetingRecords, meetingHistoryReadOnly, meetingRecordId, meetingNotesOpen, setPendingOperationMode, pendingOperationMode, knowledgeRefreshSequenceRef, setKnowledgeRuntimeState, setOrganizationWorkspaceView, surfaceReturnTargetRef, windowCommand, dismissUtilitySurfaces, setActiveTab, openCommandCenter, setVolume } = previousBindings;
 
 
   useEffect(() => {
@@ -185,14 +185,12 @@ export function useDesktopRuntimeAndPreferences(previousBindings: ReturnType<typ
   useEffect(() => {
     if (callError) toast.error(callError);
   }, [callError]);
-  const { endMeetingAndReport, endVoiceCallFromUI, openMeetingModeWithConfirm, copyMeetingNotes, downloadMeetingNotes, formatMeetingTime, toggleMeetingCapturePaused, clearMeetingNotes, confirmOperationModeChange } = useMeetingWorkflow({
-    meetingStartedAt, legalMeetingCaseTitle, meetingReport, meetingNotes, formatMeetingNoteForExport, lang,
+  const { endMeetingAndReport, endVoiceCallFromUI, openMeetingModeWithConfirm, copyMeetingNotes, downloadMeetingNotes, meetingExportPath, meetingExportBusy, meetingExportError, openMeetingExport, formatMeetingTime, toggleMeetingCapturePaused, clearMeetingNotes, selectMeetingHistoryRecord, importMeetingHistoryFile, meetingReportError, confirmOperationModeChange } = useMeetingWorkflow({
+    meetingStartedAt, legalMeetingCaseTitle, meetingReport, meetingReportGenerating, meetingNotes, formatMeetingNoteForExport, lang,
     meetingIdentityRef, setMeetingReport, meetingStorageKeys, setMeetingReportGenerating, workDomain, orgConnection,
-    aiConfig, lastLegalMeetingArchiveRef, setLegalMeetingCaseTitle, user, waitForMeetingRefinement, stopMeetingAudio,
+    aiConfig, waitForMeetingRefinement, stopMeetingAudio,
     setMeetingNotesOpen, operationMode, endCall, setMeetingPaused, meetingVoiceActiveRef, meetingStartAttemptRef,
-    callState, setOperationMode, meetingPaused, renewMeetingIdentity, setMeetingNotes, setMeetingSpeakerCount,
-    setMeetingStartedAt, lastMeetingTranscriptRef, setPendingOperationMode, pendingOperationMode,
-    resetMeetingCapture
+    callState, setOperationMode, meetingPaused, renewMeetingIdentity, createMeetingRecord, selectMeetingRecord, importMeetingRecords, meetingHistoryReadOnly, meetingRecordId, meetingNotesOpen, setPendingOperationMode, pendingOperationMode
   });
 
   const refreshKnowledgeRuntimeState = useCallback(async () => {
@@ -328,6 +326,6 @@ export function useDesktopRuntimeAndPreferences(previousBindings: ReturnType<typ
   }, [setVolume]);
   return {
     ...previousBindings, endMeetingAndReport, wakeWord, endVoiceCallFromUI, openMeetingModeWithConfirm, facePresenceRequested, faceRecognition, presence,
-    copyMeetingNotes, downloadMeetingNotes, formatMeetingTime, toggleMeetingCapturePaused, clearMeetingNotes, confirmOperationModeChange
+    copyMeetingNotes, downloadMeetingNotes, meetingExportPath, meetingExportBusy, meetingExportError, openMeetingExport, formatMeetingTime, toggleMeetingCapturePaused, clearMeetingNotes, selectMeetingHistoryRecord, importMeetingHistoryFile, meetingReportError, confirmOperationModeChange
   } as const;
 }

@@ -1,3 +1,4 @@
+import { mediaGenerationCopy } from "../../i18n/locales/mediaGeneration";
 import { Sparkle, Loader2, Save } from "lucide-react";
 import { Button } from "../ui/button";
 import { useLumiOfficialCatalog } from "../../hooks/useLumiOfficialCatalog";
@@ -43,6 +44,13 @@ export function GenerativeModelsPage({ t }: { t: any }) {
   };
 
   const save = () => operation.run('saving', async signal => {
+    const copy = mediaGenerationCopy(t?.langCode === 'en' ? 'en' : 'zh');
+    for (const [field, models] of [['image', relayImageModels], ['imageEdit', relayImageEditModels], ['video', relayVideoModels], ['imageToVideo', relayImageToVideoModels]] as const) {
+      const selection = preferences[field];
+      if (selection.provider !== LUMI_OFFICIAL_PROVIDER_ID) continue;
+      if (!officialCatalog) throw new Error(copy.modelCatalogUnavailable);
+      if (!models.includes(selection.model)) throw new Error(copy.modelUnavailable);
+    }
     await persist(signal);
     return uiMessage('settings.generative-models-saved.478e2f8603');
   }, 'settings.failed-to-save-generative-models.12ea083f89');

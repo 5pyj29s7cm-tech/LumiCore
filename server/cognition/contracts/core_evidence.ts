@@ -19,7 +19,7 @@ import { hasVerifiedManifestCapabilityEvidence, hasVerifiedGenericDesktopMutatio
 import { hasRequestedMessagingFileEvidence, hasPublicPostEvidence } from './messaging_evidence';
 import { browserSessionObservation, hasAuthenticatedWebResultEvidence } from './browser_evidence';
 import { hasVerifiedCadGeometryExtractionEvidence, hasGroundedCadGeometryEvidence } from './cad_evidence';
-import { hasSourceInspectionEvidence, hasCreatedArtifact, hasArtifactVerification, getArtifactTaskProgress } from './artifact_evidence';
+import { resolveVerifiedArtifactRetrieval, hasSourceInspectionEvidence, hasCreatedArtifact, hasArtifactVerification, getArtifactTaskProgress } from './artifact_evidence';
 import { hasCustomerOperationsEvidence, hasEcommerceOperationsEvidence, hasDesignDeliveryEvidence } from './business_evidence';
 
 export function hasCoreActionEvidence(
@@ -143,6 +143,7 @@ export function hasCoreActionEvidence(
       || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
   if (contract.kind === 'artifact_work') {
+    if (contract.artifactMode === 'retrieve') return Boolean(resolveVerifiedArtifactRetrieval(taskText, contract, records, currentTurn));
     const resolvedTarget = acceptedTaskTarget || (taskCapsule?.target.path && taskCapsule.target.status !== 'rejected'
       && (!currentTurn?.taskId || taskCapsule.taskId === currentTurn.taskId)
       ? { target: taskCapsule.target, source: 'task' as const, sourceId: taskCapsule.taskId } : undefined);

@@ -564,7 +564,9 @@ async function assessLoginPage(page: Page, profile: WebLoginProfile): Promise<Lo
     hasUsernameField: Boolean(username),
     hasSubmitControl: Boolean(submit),
     hasChallengeControl: Boolean(challenge),
-    hasAuthenticatedControl: Boolean(authenticatedControl),
+    hasAuthenticatedControl: Boolean(authenticatedControl)
+      && (!getWebLoginSitePreset(profile.id)?.loginFrameSelector
+        || new URL(currentUrl).origin === new URL(profile.loginUrl).origin),
     navigatedAwayFromLogin: navigatedAwayFromLogin(currentUrl, profile.loginUrl),
   });
 }
@@ -578,6 +580,36 @@ async function waitForLoginCompletion(page: Page, profile: WebLoginProfile, wait
     await page.waitForTimeout(1000);
   }
   return assessLoginPage(page, profile);
+}
+
+async function navigateToLoginForm(page: Page, profile: WebLoginProfile, targetUrl: string, waitMs: number): Promise<boolean> {
+  await navigateWithinWebLoginProfile(page, profile, targetUrl);
+  const preset = getWebLoginSitePreset(profile.id);
+  if (!preset?.loginFrameSelector || new URL(page.url()).origin !== new URL(preset.loginUrl).origin) return false;
+  if ((await assessLoginPage(page, profile)).state === 'authenticated') return false;
+  const iframe = page.locator(preset.loginFrameSelector).first();
+  let frameUrl = '';
+  try {
+    const timeout = Math.min(Math.max(waitMs, 1000), 15000);
+    await iframe.waitFor({ state: 'visible', timeout });
+    const source = await page.waitForFunction((selector) => {
+      const frame = document.querySelector(selector);
+      return frame?.getAttribute('src')?.trim() || false;
+    }, preset.loginFrameSelector, { timeout });
+    frameUrl = String(await source.jsonValue());
+    await source.dispose();
+  } catch {
+    return false;
+  }
+  const target = normalizeUrl(frameUrl);
+  if (target.protocol !== 'https:') throw new Error('The embedded sign-in page must use HTTPS.');
+  assertWebLoginProfileAllowsUrl(profile, target.toString());
+  try {
+    await navigateWithinWebLoginProfile(page, profile, target.toString());
+  } catch {
+    throw new Error('The authorized embedded sign-in page could not be opened. Complete login in the visible browser.');
+  }
+  return true;
 }
 
 async function hasAutofilledValue(locator: Locator | null): Promise<boolean> {
@@ -727,7 +759,7 @@ function updateProfileLoginStatus(
 export async function runWebLogin(options: LoginRunOptions, scope?: WebLoginScope) {
   const target = options.url ? normalizeUrl(options.url).toString() : '';
   let profile = options.profileId
-    ? getProfile(options.profileId, scope)
+    ? readProfiles().find(item => item.id === options.profileId && profileMatchesScope(item, scope))
     : findWebLoginProfileForUrl(target, scope);
   // Built-in presets are safe, passwordless local session definitions. When
   // the user explicitly asks to log into a known site, materialize the preset
@@ -756,7 +788,7 @@ export async function runWebLogin(options: LoginRunOptions, scope?: WebLoginScop
     const waitMs = Math.min(Math.max(Number(options.waitForManualMs) || 45000, 3000), 180000);
     const keepOpenMs = Math.min(Math.max(Number(options.keepOpenMs) || DEFAULT_VISIBLE_SESSION_MS, 60_000), 24 * 60 * 60 * 1000);
     try {
-      await navigateWithinWebLoginProfile(page, profile, navigationTarget);
+      const openedLoginFrame = await navigateToLoginForm(page, profile, navigationTarget, waitMs);
       const fill = await fillLoginFlow(page, profile, options.autoSubmit !== false);
       const assessment = await waitForLoginCompletion(page, profile, waitMs);
       const status = assessment.state === 'authenticated' ? 'logged_in' : 'manual_required';
@@ -770,7 +802,7 @@ export async function runWebLogin(options: LoginRunOptions, scope?: WebLoginScop
         loginState: assessment.state,
         loginEvidence: assessment.reason,
         profile: publicProfile(updatedProfile),
-        url: page.url(),
+        url: openedLoginFrame ? new URL(page.url()).origin + new URL(page.url()).pathname : page.url(),
         filledUsername: fill.filledUsername,
         filledPassword: fill.filledPassword,
         submitted: fill.submitted,
@@ -870,7 +902,7 @@ export async function fetchWithWebLogin(url: string, scope?: WebLoginScope, prof
       await navigateWithinWebLoginProfile(page, profile, target);
       let assessment = await assessLoginPage(page, profile);
       if (assessment.state === 'login_required' && profile.passwordCipher) {
-        await navigateWithinWebLoginProfile(page, profile, profile.loginUrl);
+        await navigateToLoginForm(page, profile, profile.loginUrl, 20000);
         await fillLoginFlow(page, profile, true);
         await waitForLoginCompletion(page, profile, 20000);
         await navigateWithinWebLoginProfile(page, profile, target);

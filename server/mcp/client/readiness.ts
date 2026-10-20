@@ -21,7 +21,8 @@ export function isInstallationPending(name: string, config: MCPServerConfig): bo
     }
   }
 export function isMissingRequiredApiKey(config: MCPServerConfig): boolean {
-    if (!config.requiresApiKey || !config.apiKeyEnv) return false;
+    if (!config.requiresApiKey) return false;
+    if (!config.apiKeyEnv) return true;
     const fromEnv = process.env[config.apiKeyEnv]?.trim();
     if (fromEnv) return false;
     try {

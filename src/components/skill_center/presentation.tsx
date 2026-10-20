@@ -87,7 +87,7 @@ export function SkillStatusCallout({ availability, compact = false }: { availabi
         {icon}
         <span>{availability.label}</span>
       </div>
-      <p className={`${compact ? 'line-clamp-1 text-[11px]' : 'text-xs'} mt-1 leading-relaxed opacity-75`}>
+      <p className={`${compact ? 'line-clamp-1 text-[11px]' : 'text-xs'} mt-1 leading-relaxed`}>
         {availability.detail}
       </p>
     </div>

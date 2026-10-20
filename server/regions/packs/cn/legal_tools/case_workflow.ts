@@ -27,7 +27,6 @@ export function formatLegalWorkflowRows(steps: LegalCases.LegalCaseWorkflowStep[
     legalWorkflowStateLabel(step.state),
     step.summary,
     step.nextStep,
-    step.tool,
   ].map(value => String(value || '').replace(/\|/g, ' ')).join(' | ')).map(row => `| ${row} |`).join('\n');
 }
 
@@ -50,28 +49,9 @@ export function formatLegalWorkflowActionQueue(workflow: LegalCases.LegalCaseWor
   const clean = (value: unknown) => String(value || '').replace(/\|/g, ' ');
   return [
     '## 优先行动队列',
-    '| 顺位 | 模块 | 状态 | 下一步 | 推荐工具 |',
-    '| --- | --- | --- | --- | --- |',
-    ...queue.map((step, index) => `| ${index + 1} | ${clean(step.label)} | ${clean(legalWorkflowStateLabel(step.state))} | ${clean(step.nextStep)} | ${clean(step.tool)} |`),
-  ].join('\n');
-}
-
-export function formatStandardLegalCaseworkSequence(): string {
-  const rows = [
-    ['01', 'Intake / case space', 'Archive messages, meetings, identity material, evidence, notice links, and local files into one case before drafting.', 'legal_message_intake_to_case -> legal_case_workspace -> legal_import_materials_to_kb'],
-    ['02', 'Identity / facts', 'Confirm party identity, authority, service address, claims, jurisdiction, and a facts timeline.', 'legal_case_workspace -> legal_meeting_minutes_to_case'],
-    ['03', 'Major premise', 'Retrieve current effective law, explain the rule, and reinforce it with ranked similar cases.', 'legal_search_statute -> legal_external_research_plan -> legal_search_external_authorities'],
-    ['04', 'Minor premise', 'Map facts, evidence, proof purpose, burden of proof, authenticity, legality, relevance, and cross-examination risks.', 'legal_extract_dispute_focus -> legal_generate_litigation_packet'],
-    ['05', 'Conclusion / subsumption', 'Apply the rule to the facts and turn it into complaint, defense, cross-exam notes, argument, or legal opinion drafts.', 'legal_case_reasoning_matrix -> legal_generate_argument_or_opinion'],
-    ['06', 'Current-law gate', 'Before any formal document, verify citations and block repealed, invalid, or unverified statutes.', 'legal_generate_citation_verification_report -> legal_finalize_delivery_package'],
-    ['07', 'Filing handoff', 'Prepare court-platform fields and upload lists; do not submit, sign, pay, confirm service, or commit settlement automatically.', 'legal_prepare_filing_handoff'],
-    ['08', 'Delivery / archive', 'Generate the formal delivery package, source register, citation report, and organization knowledge archive.', 'legal_finalize_delivery_package -> legal_import_materials_to_kb'],
-  ];
-  return [
-    '## Standard Legal Casework Sequence',
-    '| Step | Stage | Required judgment | Tool chain |',
+    '| 顺位 | 模块 | 状态 | 下一步 |',
     '| --- | --- | --- | --- |',
-    ...rows.map(row => `| ${row.map(value => value.replace(/\|/g, ' ')).join(' | ')} |`),
+    ...queue.map((step, index) => `| ${index + 1} | ${clean(step.label)} | ${clean(legalWorkflowStateLabel(step.state))} | ${clean(step.nextStep)} |`),
   ].join('\n');
 }
 

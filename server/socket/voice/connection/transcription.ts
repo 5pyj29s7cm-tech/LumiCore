@@ -10,7 +10,6 @@ import { computeAdaptiveEndpointSilenceMs } from "../../../stt/adaptive_endpoint
 import { recordLatency } from "../../../monitor/latency_store";
 import { loadEmotionalState, updateEmotionalState, saveEmotionalState, loadHIMState, saveHIMState } from "../../../personality/state";
 import { himTick } from "../../../personality/him";
-import { normalizeSpeechCommand, speechCommandKey } from "../../../cognition/speech_normalization";
 import { isSpeechClearlyDirectedAwayFromLumi, isVoiceFiller, classifyActiveVoiceWorkInput } from "../../voice_turn_state";
 import { assessVoiceTranscriptForExecution } from "../../../cognition/voice_transcript_guard";
 import { buildTransportNeutralConfirmationScope, getPendingConfirmationDurably, isExplicitConfirmationReply } from "../../../tools/pending_confirmation";
@@ -158,7 +157,7 @@ export async function startVoiceTranscription(
               } catch { /* best-effort sentiment tracking */ }
             }
             session.accumulatedText += result.text;
-            const text = normalizeSpeechCommand(session.accumulatedText);
+            const text = session.accumulatedText.trim();
             session.accumulatedText = '';
             if (!text) return;
 
@@ -205,7 +204,7 @@ export async function startVoiceTranscription(
             }
             const transcriptSpeakerMeta = getVoiceprintSpeakerMeta(session);
             advanceVoiceprintUtterance(runtime.socket, session);
-            const commandKey = speechCommandKey(text);
+            const commandKey = text;
             const duplicateActiveFinal = isRepeatedVoiceFinal({
               commandKey,
               lastCommandKey: session.lastAcceptedCommandKey,
@@ -327,7 +326,7 @@ export async function startVoiceTranscription(
                     // step one whenever the user spoke again. Explicit
                     // correction/cancellation phrases still take their own
                     // branches above.
-                    const duplicate = session.inputQueue.some(item => speechCommandKey(item.text) === commandKey);
+                    const duplicate = session.inputQueue.some(item => item.text.trim() === commandKey);
                     if (!duplicate) session.inputQueue.push({
                       text,
                       queuedAt: new Date(asrFinalAt).toISOString(),
@@ -341,7 +340,7 @@ export async function startVoiceTranscription(
                     });
                     runtime.socket.emit('audio:work_queued', {
                       text,
-                      queuePosition: session.inputQueue.findIndex(item => speechCommandKey(item.text) === commandKey) + 1,
+                      queuePosition: session.inputQueue.findIndex(item => item.text.trim() === commandKey) + 1,
                       activeRequestId: workRequestId,
                     });
                     runtime.socket.emit("audio:confirm", { text });

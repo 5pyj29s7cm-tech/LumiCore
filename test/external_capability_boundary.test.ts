@@ -1,30 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { LumiExecutionDecision } from '../server/cognition/execution_decision';
-import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
+import { genericExternalCommit, normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 import {
-  applyExternalCapabilityBoundary,
-  validateExternalCapabilityBoundary,
+  restrictMediaGenerationTools,
 } from '../server/cognition/external_capability_boundary';
 import { executeForegroundMessagingAction } from '../server/cognition/foreground_messaging_execution';
 import { ToolRegistry } from '../server/tools/registry';
 import { buildModelCapabilityPolicy } from '../server/cognition/capability_selection';
 
-function messagingPlanFor(toolName: string): any {
-  return {
-    schemaVersion: 1,
-    planId: 'plan-test',
-    taskId: 'task-test',
-    intent: {},
-    nodes: [{ toolName }],
-    edges: [],
-    risk: { sideEffectClass: 'external_commit', requiresConfirmation: true, failClosed: true },
-    expectedEvidence: [],
-    fallbackPolicy: { allowLegacyRoute: false },
-    contextRefs: [],
-    decisionAuthority: 'semantic_planner',
-    scriptAuthority: 'adapter_only',
-  };
-}
+import { registerComputerUseTool } from '../server/tools/definitions/computer_use_tool';
+
+const desktopBoundaryCalls = vi.hoisted(() => ({ loop: vi.fn() }));
+vi.mock('../server/agents/computer_use', () => ({ computerUseLoop: desktopBoundaryCalls.loop }));
 
 function execution(toolNames: string[]): LumiExecutionDecision {
   return {
@@ -59,62 +46,49 @@ const manifest: any[] = [
 ];
 
 describe('accepted instruction / selected capability boundary', () => {
-  it('normalizes high-consequence external commits without relying on one action word', () => {
-    expect(normalizeActionIntent('把这份合同提交到供应商门户')).toMatchObject({
-      kind: 'external_submit', sideEffectClass: 'external_commit', operation: 'mutate',
-    });
-    expect(normalizeActionIntent('支付给供应商 500 元')).toMatchObject({
-      kind: 'payment', sideEffectClass: 'external_commit', operation: 'mutate',
-    });
+  it('refuses high-consequence selected desktop actions while preserving the original negated request', async () => {
+    const registry = new ToolRegistry(); registerComputerUseTool(registry);
+    const desktopRelay = vi.fn();
+    desktopBoundaryCalls.loop.mockReset().mockRejectedValue(new Error('OFFLINE_DESKTOP_LOOP_SENTINEL'));
+    const context = { userId: 'external-boundary-offline', domain: 'personal', source: 'offline', authenticated: true, authRole: 'admin', localExecution: true, executionBoundary: 'trusted_local' as const, userConfirmed: true, currentTurnExecutionRequested: true, desktopRelay, llmGetters: { getDeepSeek: () => null, getGemini: () => null } };
+    for (const { text, kind } of [
+      { text: '把这份合同提交到供应商门户', kind: 'external_submit' },
+      { text: '支付给供应商 500 元', kind: 'payment' },
+    ]) {
+      expect(genericExternalCommit(text)).toMatchObject({ kind, sideEffectClass: 'external_commit', operation: 'mutate' });
+      await expect(registry.execute('computer_use', { task: text }, { ...context, actionIntent: text })).rejects.toThrow('final external commit');
+    }
+    expect(desktopBoundaryCalls.loop).not.toHaveBeenCalled();
     expect(normalizeActionIntent('我没有让你提交这份合同')).not.toMatchObject({
       sideEffectClass: 'external_commit',
     });
+    await expect(registry.execute('computer_use', { task: '我没有让你提交这份合同' }, { ...context, actionIntent: '我没有让你提交这份合同' })).rejects.toThrow('OFFLINE_DESKTOP_LOOP_SENTINEL');
+    expect(desktopBoundaryCalls.loop).toHaveBeenCalledOnce();
+    expect(desktopBoundaryCalls.loop).toHaveBeenCalledWith('我没有让你提交这份合同', expect.any(Object));
+    expect(desktopRelay).not.toHaveBeenCalled();
   });
 
-  it('blocks every external tool when a read is misrouted as send', () => {
+  it('candidate send exposure does not fabricate an action-time grant or block the read route', () => {
     const routed = execution(['wechat_read_recent_chat', 'wechat_send_message']);
-    routed.selfRepairToolPolicy = { ...routed.baseToolPolicy };
-    routed.clientActionToolPolicy = { ...routed.baseToolPolicy };
-    const comparison = validateExternalCapabilityBoundary({
-      normalizedIntent: normalizeActionIntent('看一下张勇最近给我发什么消息了'),
-      execution: routed,
-      manifest,
-    });
-    const guarded = applyExternalCapabilityBoundary(routed, comparison);
-    expect(comparison.externalCommitBlocked).toBe(true);
-    expect(guarded.toolPolicy.forbiddenTools).toContain('wechat_send_message');
-    expect(buildModelCapabilityPolicy(guarded).forbiddenTools).toContain('wechat_send_message');
-    expect(buildModelCapabilityPolicy(guarded).allowedTools).not.toContain('wechat_send_message');
-    expect(guarded.toolRoute?.toolNames).toEqual(['wechat_read_recent_chat']);
-    for (const policy of [guarded.toolPolicy, guarded.baseToolPolicy, guarded.selfRepairToolPolicy!, guarded.clientActionToolPolicy!]) {
-      expect(policy.forbiddenTools).toContain('wechat_send_message');
-      expect(policy.allowedTools).not.toContain('wechat_send_message');
-      expect(policy.requireConfirmation).not.toContain('wechat_send_message');
-    }
-    expect(guarded.toolRoute?.forbiddenToolNames).toContain('wechat_send_message');
+    const guarded = restrictMediaGenerationTools({ normalizedIntent: normalizeActionIntent('看一下张勇最近给我发什么消息了'), execution: routed, manifest });
+    expect(guarded).toBe(routed);
+    expect(guarded.toolPolicy.requireConfirmation).toContain('wechat_send_message');
+    expect(guarded.toolRoute?.toolNames).toContain('wechat_read_recent_chat');
+    expect(guarded.promptOverlay).not.toContain('External Commit Authorization Boundary');
   });
 
-  it('allows an exact outbound route to proceed to strict confirmation', () => {
+  it('retains the actual outbound confirmation policy without inventing a preselected action', () => {
     const routed = execution(['wechat_send_message']);
-    const comparison = validateExternalCapabilityBoundary({
-      normalizedIntent: normalizeActionIntent('给张勇发「明天上午十点开会」'),
-      execution: routed,
-      manifest,
-    });
-    expect(comparison.aligned).toBe(true);
-    expect(comparison.externalCommitBlocked).toBe(false);
-    expect(applyExternalCapabilityBoundary(routed, comparison)).toBe(routed);
+    const guarded = restrictMediaGenerationTools({ normalizedIntent: normalizeActionIntent('给张勇发「明天上午十点开会」'), execution: routed, manifest });
+    expect(guarded).toBe(routed);
+    expect(guarded.toolPolicy.requireConfirmation).toContain('wechat_send_message');
   });
 
-  it('fails closed when normalized send has no matching routed commit route', () => {
+  it('does not turn a route with no actual send call into a failed external task', async () => {
     const routed = execution(['wechat_read_recent_chat']);
-    const comparison = validateExternalCapabilityBoundary({
-      normalizedIntent: normalizeActionIntent('给张勇发「明天见」'),
-      execution: routed,
-      manifest,
-    });
-    expect(comparison.externalCommitBlocked).toBe(true);
-    expect(comparison.blockedExternalTools).toContain('wechat_send_message');
+    expect(restrictMediaGenerationTools({ normalizedIntent: normalizeActionIntent('给张勇发「明天见」'), execution: routed, manifest })).toBe(routed);
+    const registry = new ToolRegistry();
+    await expect(registry.execute('wechat_send_message', { contact: '张勇', message: '明天见' }, { userId: 'unregistered-send-user' })).rejects.toThrow('not found in registry');
   });
 });
 
@@ -135,7 +109,6 @@ describe('shared foreground messaging execution', () => {
     } as any);
     const result = await executeForegroundMessagingAction({
       action: 'send',
-      executionPlan: messagingPlanFor('wechat_send_message'),
       normalizedIntent: normalizeActionIntent('看一下张勇最近给我发什么消息了'),
       arguments: { contact: '张勇', message: '最近给我发什么消息了' },
       registry,
@@ -162,7 +135,6 @@ describe('shared foreground messaging execution', () => {
     } as any);
     const result = await executeForegroundMessagingAction({
       action: 'send',
-      executionPlan: messagingPlanFor('wechat_send_message'),
       normalizedIntent: normalizeActionIntent('给张勇发「明天见」'),
       arguments: { contact: '张勇', message: '明天见' },
       registry,

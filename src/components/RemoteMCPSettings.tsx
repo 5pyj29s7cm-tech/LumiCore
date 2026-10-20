@@ -86,7 +86,7 @@ function RemoteDeviceEditor({ t }: { t: any }) {
     );
   }
 
-  if (loadError) return <div role="alert" className="space-y-3 text-sm text-red-300">{loadError}<Button onClick={() => syncDevices()}>{t.refresh || 'Refresh'}</Button></div>;
+  if (loadError) return <div role="alert" className="space-y-3 text-sm text-red-300">{loadError}<Button onClick={() => syncDevices()}>{t.refreshBtn || 'Refresh'}</Button></div>;
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -145,6 +145,7 @@ function RemoteDeviceEditor({ t }: { t: any }) {
                     <div className="flex items-center gap-2">
                       <p className="text-xs text-white/55 font-mono truncate max-w-md">{device.url}</p>
                       <a
+                        aria-label={`${t.desktopOpen || 'Open'} ${device.name}`}
                         href={device.url.replace(/^ws(s?):\/\//, 'http$1://')}
                         target="_blank"
                         rel="noopener noreferrer"
@@ -158,6 +159,7 @@ function RemoteDeviceEditor({ t }: { t: any }) {
 
                 <Button
                   disabled={saving}
+                  aria-label={`${t.delete || 'Delete'} ${device.name}`}
                   onClick={() => removeRow(i)}
                   className="bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 text-xs font-bold uppercase tracking-widest px-3 h-9 rounded-xl flex-shrink-0"
                 >

@@ -1,4 +1,5 @@
-import { canAutoApproveAction } from './action_constitution';
+import { canAutoApproveAction, requiresExternalDesktopConfirmation, requiresDesktopPresentationHandoff } from './action_constitution';
+import type { CapabilityManifestEntry } from './types';
 import {
   consumePendingConfirmationDurably, recordPendingConfirmationDurably,
   confirmationArgumentsMatch, pendingConfirmationMatchesExactProposal,
@@ -11,6 +12,7 @@ export interface TurnConfirmationInput {
   requestId: string;
   actionIntent: string;
   autoApprovalIntent?: string;
+  allowLocalFileWrites?: boolean;
   pending?: PendingToolConfirmation | null;
   consumeScope: () => PendingConfirmationScope | undefined;
   proposalScope: () => PendingConfirmationScope | undefined;
@@ -27,7 +29,7 @@ export function createTurnConfirmation(input: TurnConfirmationInput) {
   let created = false;
   let consumed = false;
   let busy = false;
-  return async (toolName: string, args: Record<string, any>): Promise<boolean> => {
+  return async (toolName: string, args: Record<string, any>, capability?: CapabilityManifestEntry): Promise<boolean> => {
     input.assertCurrent?.();
     if (created || busy || input.isCancelled?.()) return false;
     busy = true;
@@ -39,9 +41,9 @@ export function createTurnConfirmation(input: TurnConfirmationInput) {
         input.assertCurrent?.();
         return !input.isCancelled?.();
       }
-      if (!input.correctionRequiresFreshConfirmation
-        && canAutoApproveAction(toolName, args, { actionIntent: input.autoApprovalIntent ?? input.actionIntent })) return true;
       const scope = input.proposalScope();
+      if (!input.correctionRequiresFreshConfirmation
+        && canAutoApproveAction(toolName, args, { actionIntent: input.autoApprovalIntent ?? input.actionIntent, userId: input.userId, domain: scope?.domain, orgId: scope?.orgId, allowLocalFileWrites: input.allowLocalFileWrites }, capability)) return true;
       if (!scope) return false;
       if (input.exactWriteCorrection) {
         const call = input.recoveryCall?.();
@@ -51,6 +53,8 @@ export function createTurnConfirmation(input: TurnConfirmationInput) {
       }
       const pending = await recordPendingConfirmationDurably(input.userId, toolName, args, input.source, {
         ...scope, originRequestId: input.requestId, actionIntent: input.actionIntent,
+        externalDesktopHandoff: requiresDesktopPresentationHandoff(toolName, args, capability),
+        switchToExternalExecution: requiresExternalDesktopConfirmation(toolName, args, { userId: input.userId, domain: scope.domain, orgId: scope.orgId }, capability),
       });
       // Latch immediately after durable creation, including revoked-authority paths.
       created = true;

@@ -78,8 +78,8 @@ export async function refineMeetingTranscript(io: Server, socket: Socket, sessio
     writePcm16Wav(rawPath, wavPath);
     removeMeetingRecordingFiles(recording);
     const result = await transcribeAudioFile(fs.readFileSync(wavPath), {
-      fileName: path.basename(wavPath), language: 'zh', preferredProvider: 'qwen',
-      allowLocal: true, allowQwenFileStt: true, signal: controller.signal,
+      fileName: path.basename(wavPath), language: 'zh',
+      allowLocal: true, signal: controller.signal,
       onProgress: message => emit('meeting:refine_status', { status: 'transcribing', bytes, message }),
     });
     authorization.assertCurrent();

@@ -5,13 +5,13 @@ import { toast } from "sonner";
 import type { PetConfig } from "../../../pets/types";
 import { systemService } from "@/services/systemService";
 import { CLIENT_SETTINGS_SECTIONS, PERSONAL_CLIENT_LAUNCHER_IDS, PERSONAL_CLIENT_SURFACES, PERSONAL_CLIENT_SURFACE_ACTIONS, getOpenPersonalClientSurfaceIds } from "../../../../shared/client_surfaces";
-import { formatUiMessage, uiMessage } from "../../../i18n/uiMessages";
+import { uiMessage } from "../../../i18n/uiMessages";
 import { desktopWorkflowCopy } from "../../../i18n/locales/desktopWorkflows";
 import type { useDesktopNotificationsAndShortcuts } from './use_desktop_notifications_and_shortcuts';
 import type { SurfaceReturnTarget } from './shared';
 
 export function useDesktopSurfaceControls(previousBindings: ReturnType<typeof useDesktopNotificationsAndShortcuts>) {
-  const { canCustomizeLumiAppearance, lang, setSelectedPet, savePetPrefsToServer, equippedAccessories, t, setIsNotificationPanelOpen, windowCommand, setPersonalizationSection, openKnowledgeBase, openCommandCenter, openMemoryAvatar, inferSurfaceReturnTarget, dismissUtilitySurfaces, surfaceReturnTargetRef, setIsSearchOpen, setViewMode, setActiveTab, setNexusReturnTarget, knowledgeOpen, closeKnowledgeBase, closeMemoryAvatar, nexusReturnTarget, activeTab, setIsDesktopWidgetMode, isTauri, isWallpaperModeRef, chatOpen, wallpaperPresentationRef, applyWallpaperMode, endMeetingAndReport, isDesktopWidgetMode, openWindows, operationMode, orgConnection, resetMeetingCapture, setOperationMode, switchDomain, workDomain, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle, setSettingsSection, socket, callError, clientRuntime, viewMode, focusedWindow, settingsSection, isSearchOpen, memoryLabOpen, sanctuaryOpen, commandCenterView, isNotificationPanelOpen, meetingNotesOpen, isWallpaperMode, organizationWorkspaceView, clientPermissions, availableOrganizationWorkspaceViews, reportedKnowledgeRuntimeState, minimizedWindows, wallpaperPresentation, wallpaperWorkspace, callState, isMuted, meetingPaused, meetingNotes, meetingReport, meetingStartedAt, meetingReportGenerating, agentStatus, mcpActivities } = previousBindings;
+  const { canCustomizeLumiAppearance, lang, setSelectedPet, savePetPrefsToServer, equippedAccessories, t, setIsNotificationPanelOpen, windowCommand, setPersonalizationSection, openKnowledgeBase, openCommandCenter, openMemoryAvatar, inferSurfaceReturnTarget, dismissUtilitySurfaces, surfaceReturnTargetRef, setIsSearchOpen, setViewMode, setActiveTab, setNexusReturnTarget, knowledgeOpen, closeKnowledgeBase, closeMemoryAvatar, nexusReturnTarget, activeTab, setIsDesktopWidgetMode, isTauri, isWallpaperModeRef, chatOpen, wallpaperPresentationRef, applyWallpaperMode, endMeetingAndReport, meetingHistoryReadOnly, isDesktopWidgetMode, openWindows, operationMode, orgConnection, setOperationMode, switchDomain, workDomain, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle, setSettingsSection, socket, callError, clientRuntime, viewMode, focusedWindow, settingsSection, isSearchOpen, memoryLabOpen, sanctuaryOpen, commandCenterView, isNotificationPanelOpen, meetingNotesOpen, isWallpaperMode, organizationWorkspaceView, clientPermissions, availableOrganizationWorkspaceViews, reportedKnowledgeRuntimeState, minimizedWindows, wallpaperPresentation, wallpaperWorkspace, callState, isMuted, meetingPaused, meetingNotes, meetingReport, meetingStartedAt, meetingReportGenerating, agentStatus, mcpActivities } = previousBindings;
 
 
   const widgetTransitions = useRef<Promise<boolean>>(Promise.resolve(true));
@@ -171,7 +171,7 @@ export function useDesktopSurfaceControls(previousBindings: ReturnType<typeof us
   };
 
   useClientSurfaceActions({
-    activeTab, applyWallpaperMode, closeSurface, endMeetingAndReport, enterDesktopWidgetMode, exitDesktopWidgetMode, isDesktopWidgetMode, openCommandCenter, openSurface, openWindows, operationMode, orgConnection, resetMeetingCapture, setOperationMode, switchDomain, workDomain, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle, setSettingsSection, setPersonalizationSection
+    activeTab, applyWallpaperMode, closeSurface, endMeetingAndReport, meetingHistoryReadOnly, enterDesktopWidgetMode, exitDesktopWidgetMode, isDesktopWidgetMode, openCommandCenter, openSurface, openWindows, operationMode, orgConnection, setOperationMode, switchDomain, workDomain, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle, setSettingsSection, setPersonalizationSection
   });
 
   useEffect(() => {

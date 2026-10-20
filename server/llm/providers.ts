@@ -71,7 +71,7 @@ async function callRoutedModel(
         ? await makeLLMCallStreamingDirect(messages, toolDeclarations, directConfig, stream.onChunk, ...getters)
         : await makeLLMCallDirect(messages, toolDeclarations, directConfig, ...getters);
     }
-    const trace = result.routing || directRoutingTrace(config, 'succeeded');
+    const trace = result.routing || directRoutingTrace(config, 'succeeded', undefined, result);
     const routingReceiptId = persistRoutingTrace(
       config, trace, 'succeeded', startedAt, providerOutboundEvidenceFrom(result),
     );
@@ -94,7 +94,9 @@ export function makeLLMCall(
   config: LLMCallConfig,
   ...getters: ProviderArguments
 ): Promise<NormalizedLLMResponse> {
-  return callRoutedModel(messages, toolDeclarations, config, getters);
+  return callRoutedModel(messages, toolDeclarations,
+    config.relayStreaming ? { ...config, bufferStreamUntilCandidateSuccess: true } : config,
+    getters, config.relayStreaming ? { onChunk: () => {} } : undefined);
 }
 
 export function makeLLMCallStreaming(

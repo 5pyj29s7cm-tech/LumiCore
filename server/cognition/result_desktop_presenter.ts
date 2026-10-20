@@ -1,3 +1,4 @@
+import { playbackObservationText } from './action_media_evidence';
 import { extractDesktopLaunchTarget, extractSimpleDesktopOpenTarget, requestedMediaPlayerTarget, hasMediaPlaybackEvidence, hasRequestedDesktopOpenEvidence, hasVisualModelAvailabilityEvidence, requiresCurrentAuthoringDocumentInspection, requiresCurrentAppUiMutation, requiresVisualModelAvailabilityCheck, requiresVisibleAutoCadExecution, resolveVerifiedCurrentAuthoringDocumentEvidence } from './action_contract';
 import { parseReceiptObject, toolRecordTerminalPayload, toolRecordTerminalText } from '../tools/receipt_payload';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from "../regions/messages/execution_evidence_messages";
@@ -433,8 +434,7 @@ export function formatGoalSpecificDesktopResult(
     const opened = hasRequestedDesktopOpenEvidence(records, taskText, label);
     if (hasMediaPlaybackEvidence(records, taskText, { requestId: input.requestId, taskId: input.taskId })) {
       const proofRecord = [...records].reverse().find(record => record.name === 'computer_use'
-        && hasMediaPlaybackEvidence([record], taskText, { requestId: input.requestId, taskId: input.taskId })
-        && validatePlaybackVerification(parseReceiptObject(toolRecordTerminalPayload(record))?.playbackVerification, taskText));
+        && hasMediaPlaybackEvidence([record], taskText, { requestId: input.requestId, taskId: input.taskId }));
       const proof = proofRecord && parseReceiptObject(toolRecordTerminalPayload(proofRecord))?.playbackVerification;
       if (validatePlaybackVerification(proof, taskText)) {
         const goal = proof.target;
@@ -449,9 +449,9 @@ export function formatGoalSpecificDesktopResult(
         };
       }
       return {
-        text: zh
+        text: (proofRecord && playbackObservationText(proofRecord)) || (zh
           ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaPlaybackActive(label, video)
-          : `Opened ${label}; playback is active.`,
+          : `Opened ${label}; playback is active.`),
         blocked: false,
         reason: zh ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaPlaybackConfirmed : 'Playback state was confirmed.',
       };

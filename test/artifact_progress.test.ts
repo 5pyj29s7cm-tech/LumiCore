@@ -94,4 +94,20 @@ describe('one artifact checkpoint for continuation and completion', () => {
     expect(resolveArtifactReadbackCall(text, [saved], new Set(['read_docx']), turn)).toEqual({ name: 'read_docx', arguments: { filePath: 'D:/work/meeting.docx' } });
     expect(getArtifactTaskProgress(text, [saved, read('合同编号 LC-81')], turn)?.next).toBe('repair_content');
   });
+  it.each(['zh','en'])('keeps explicitly quoted multiline literal payloads whole for %s', language => {
+    const body='甲：The review is not complete.\n乙：这是一段虚构对白。';
+    const request=language==='zh'?'新建文件，只写入“'+body+'”。':'Create a file and exactly write "'+body+'".';
+    const requirements=artifactContentRequirements(request);
+    expect(requirements).toEqual([{kind:'text',value:body}]);
+    expect(checkArtifactContent(requirements,body)).toEqual([{kind:'text',value:body,status:'passed'}]);
+    expect(checkArtifactContent(requirements,body.split('\n')[0])).toEqual([{kind:'text',value:body,status:'missing'}]);
+  });
+  it('retains the original quoted-payload size and quote boundaries with line breaks', () => {
+    const body='a'.repeat(187)+'\nnot complete';
+    expect(body.length).toBe(200);
+    expect(artifactContentRequirements('新建文件，只写入“'+body+'”。')).toEqual([{kind:'text',value:body}]);
+    expect(artifactContentRequirements('新建文件，只写入“a'+body+'”。')).toEqual([]);
+    expect(artifactContentRequirements('新建文件，内容是“first”。随后说明“not complete”。')).toEqual([{kind:'text',value:'first'}]);
+  });
+
 });

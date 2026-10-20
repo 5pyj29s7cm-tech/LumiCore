@@ -14,6 +14,8 @@ import { withoutRuntimeOwnedRecoveryCall, hasPendingVerificationObligation } fro
 import { newToolInvocationBudget, stopForToolInvocationBudget, HARD_MAX_TOOL_INVOCATIONS_PER_MODEL_RESPONSE, HARD_MAX_TOOL_INVOCATIONS_PER_TURN } from './invocation_budget';
 import { getPrimaryUserText } from './summaries';
 import { resolveInteractiveToolConfig } from './model_budget';
+import { desktopControlPauseReason } from './projection';
+import { formatDesktopControlPausePresentation } from '../../regions/messages/desktop_control_messages';
 
 export function prepareToolLoop(messages: NormalizedMessage[], toolRegistry: ToolRegistry, config: LLMConfig, providerGetters: Partial<ProviderGetters>, onToolCall?: (record: ToolExecutionRecord) => unknown, maxIterations: number = 5, onStreamChunk?: StreamCallback, context?: ToolContext, modelBudget?: ToolLoopModelBudget, usageRecordSink?: LLMUsageRecord[], invocationBudgetState?: ToolInvocationBudgetState) {
 
@@ -29,9 +31,9 @@ export function prepareToolLoop(messages: NormalizedMessage[], toolRegistry: Too
   // No registry declaration hook or tool handler may observe that hidden
   // payload unless it becomes the validated arguments of write_file itself.
   const sanitizedToolExecutionContext = withoutRuntimeOwnedRecoveryCall(context);
-  const toolExecutionContext = sanitizedToolExecutionContext
+  const toolExecutionContext: ToolContext | undefined = sanitizedToolExecutionContext
     ? {
-        ...sanitizedToolExecutionContext,
+        ...sanitizedToolExecutionContext, dataRoutingPolicy: config.dataRoutingPolicy === 'local_only' || context?.dataRoutingPolicy === 'local_only' ? 'local_only' : config.dataRoutingPolicy,
         getCurrentToolRecords: () => executionLog.map(record => ({ ...record })),
         ...(sanitizedToolExecutionContext.modelToolProjection
           ? {
@@ -48,8 +50,12 @@ export function prepareToolLoop(messages: NormalizedMessage[], toolRegistry: Too
   const usageRecords: LLMUsageRecord[] = usageRecordSink || [];
   const invocationBudget: ToolInvocationBudgetState = invocationBudgetState || newToolInvocationBudget();
   function finish(text: string, completionGuard?: LLMResult['completionGuard']): LLMResult {
+    const pause = !completionGuard && desktopControlPauseReason(context)
+      && !context?.isCancelled?.() && !context?.executionSignal?.aborted && !config.signal?.aborted
+      ? formatDesktopControlPausePresentation(primaryTask) : undefined;
+    if (pause && text === pause.text) completionGuard = { ...pause, blocked: true };
     return { text, toolCalls: executionLog, usageRecords,
-      ...(arguments.length > 1 ? { completionGuard } : {}),
+      ...(arguments.length > 1 || completionGuard ? { completionGuard } : {}),
     };
   }
   const stopBudget = (boundary: 'model_response' | 'turn', rawPlannedCalls: number, normalizedPlannedCalls: number, invocableCalls: number) => stopForToolInvocationBudget({
@@ -80,7 +86,7 @@ export function prepareToolLoop(messages: NormalizedMessage[], toolRegistry: Too
   const requestedArtifact = requestedSingleArtifact(primaryTask);
   const compoundExecutionTask = executionBeforeWorkflowSave(primaryTask);
 
-  config = resolveInteractiveToolConfig(config, context?.actionIntent || primaryTask);
+  config = resolveInteractiveToolConfig({ ...config, dataRoutingPolicy: config.dataRoutingPolicy === 'local_only' || context?.dataRoutingPolicy === 'local_only' ? 'local_only' : config.dataRoutingPolicy }, context?.actionIntent || primaryTask);
 
   const acceptedFile = toolExecutionContext?.acceptedTaskTarget;
   if (toolSessionActive && acceptedFile?.source !== 'current_turn'

@@ -35,6 +35,8 @@ describe('retrieved context entity grounding', () => {
     expect(context).toContain('source=chat');
     expect(context).toContain('interaction=conversation-old-project-turn-7');
     expect(context).toContain('recorded=2026-08-17T18:02:28.511Z');
+    expect(context).toContain('recorded is the memory storage date, not the event date');
+    expect(context).toContain('Never infer the first dialogue or relationship duration from the oldest recalled item');
     expect(context).toContain('memory-confidence=0.93');
     expect(context).toContain('entity-binding=unconfirmed');
     expect(context).toContain('exact token');

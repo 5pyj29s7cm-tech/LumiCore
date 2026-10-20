@@ -21,11 +21,13 @@ export function createProactiveContextTasks(context: ScheduledBuiltinContext): S
     quiet: true,
     lastRun: null,
     executionClass: 'maintenance',
-    handler: async () => {
+    handler: async run => {
+      const signal = run?.signal || new AbortController().signal;
       const userIds = getAllUserIds();
       const messages: string[] = [];
 
       for (const userId of userIds) {
+        signal.throwIfAborted();
         try {
           const owner = { userId, domain: 'personal' as const, orgId: '' };
           const now = new Date();
@@ -83,9 +85,10 @@ Output ONLY the check-in message — no preamble, no labels.`;
               const result = await makeLLMCall(
                 [{ role: 'user', content: checkInPrompt }],
                 [],
-                getUserPreferredLLMConfig(userId, { maxTokens: 150, domain: 'personal', orgId: '', source: 'scheduler_proactive_lumi_scan' }),
+                { ...getUserPreferredLLMConfig(userId, { maxTokens: 150, domain: 'personal', orgId: '', source: 'scheduler_proactive_lumi_scan' }), signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) },
                 ...providerGetterArguments(getters),
               );
+              signal.throwIfAborted();
               const checkIn = result.text?.trim();
               if (checkIn && checkIn.length > 3) {
                 messages.push(`[${userId}] ${checkIn}`);
@@ -102,6 +105,7 @@ Output ONLY the check-in message — no preamble, no labels.`;
                 } as any, { tier: 'episodic', perspective: 'lumi_self', importance: 0.4, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
               }
             } catch {
+              signal.throwIfAborted();
               // LLM check-in failed — use a simple template
               messages.push(`[${userId}] 注意到一些变化 — ${anomalySignals.join('；')}`);
             }
@@ -183,9 +187,10 @@ Output ONLY the prediction message — no preamble, no labels.`;
               const predictionResult = await makeLLMCall(
                 [{ role: 'user', content: predictionPrompt }],
                 [],
-                getUserPreferredLLMConfig(userId, { maxTokens: 100, domain: 'personal', orgId: '', source: 'scheduler_predictive_assistant' }),
+                { ...getUserPreferredLLMConfig(userId, { maxTokens: 100, domain: 'personal', orgId: '', source: 'scheduler_predictive_assistant' }), signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) },
                 ...providerGetterArguments(getters),
               );
+              signal.throwIfAborted();
               const prediction = predictionResult.text?.trim();
               if (prediction && prediction.length > 5) {
                 messages.push(`[${userId}] 🔮 ${prediction}`);
@@ -203,10 +208,12 @@ Output ONLY the prediction message — no preamble, no labels.`;
               }
             }
           } catch (predErr: any) {
+            signal.throwIfAborted();
             // Predictive assistant failure is non-critical
             console.warn(`[PredictiveAssistant] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(predErr));
           }
         } catch (err: any) {
+          signal.throwIfAborted();
           console.warn(`[ProactiveScan] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }

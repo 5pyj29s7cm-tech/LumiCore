@@ -35,23 +35,15 @@ import {
   type LumiTurnDispatch,
   type LumiTurnDispatchInput,
 } from './turn_dispatch';
-import {
-  applyExternalCapabilityBoundary,
-  validateExternalCapabilityBoundary,
-  type LumiExternalCapabilityBoundary,
-} from './external_capability_boundary';
-import {
-  buildCapabilityExecutionPlan,
-  formatCapabilityExecutionPlanPrompt,
-  type CapabilityExecutionPlan,
-} from './capability_execution_plan';
-import { recordExternalCapabilityValidation } from '../runtime/capability_metrics';
+import { restrictMediaGenerationTools } from './external_capability_boundary';
+import type { CapabilityExecutionPlan } from './capability_execution_plan';
 import { observeLayaDecision } from '../runtime/laya_shadow';
-import { hasExplicitNoMutationInstruction } from './tool_intent';
+import { hasExplicitNoMutationInstruction, hasExplicitNoToolInstruction, explicitNoMutationScope } from './tool_intent';
 import { avatarAuthoringMutationInstruction } from './media_creation_intent';
 import { executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import type { PendingAssistantOfferContext } from './pending_assistant_offer';
-import type { ToolContext } from '../tools/types';
+import type { ToolContext, ServerBoundCapabilitySelection } from '../tools/types';
+import { frozenCapabilitySnapshot } from '../tools/definitions/workflow/capability_snapshot';
 import { resolveAcceptedTaskTarget } from '../conversation/task_target_anchor';
 import { resolveAcceptedFilePlan } from '../conversation/task_plan_reference';
 import { isPreservedSourceOutputTool, preservedSourceOutputScope, preservedSourceOutputTools, requestedSingleArtifact } from './artifact_write_scope';
@@ -67,7 +59,8 @@ export interface LumiExecutionPipeline {
   normalizedIntent: NormalizedActionIntent;
   turnIntent: LumiTurnDispatch;
   capabilityPlan: LumiCapabilityPlan;
-  executionPlan: CapabilityExecutionPlan;
+  executionPlan?: CapabilityExecutionPlan;
+  taskId?: string;
   execution: LumiExecutionDecision;
   authorizationPolicy: ToolPolicy;
   modelToolProjection: ReturnType<typeof buildModelToolProjection>;
@@ -82,7 +75,6 @@ export interface LumiExecutionPipeline {
   actionFollowupIntent: RecentActionFollowupIntent;
   taskRelation: ActiveTaskMessageResolution;
   intentTrace: LumiIntentTrace;
-  externalCapabilityBoundary: LumiExternalCapabilityBoundary;
 }
 
 export interface BuildLumiExecutionPipelineInput {
@@ -93,6 +85,8 @@ export interface BuildLumiExecutionPipelineInput {
   userText?: string;
   /** Explicit creation operation; still subject to ordinary authorization and current-turn vetoes. */
   structuredMediaRequest?: StructuredMediaRequest | null;
+  /** Complete server-owned pending choice. It can select a registered call, never widen policy. */
+  serverBoundCapability?: Readonly<ServerBoundCapabilitySelection>;
   dispatch: LumiTurnDispatchInput;
   /** An unbound remote sender can only narrow the shared dispatch to conversation. */
   unboundRemoteSender?: boolean;
@@ -130,6 +124,24 @@ function applyCurrentTurnNoMutationConstraint(
   // the confirmation gate, not the generic read-only filter, prevents the
   // side effect. Ordinary negative commands remain fully read-only.
   if (isExternalCommitConfirmationOnlyRequest(text)) return execution;
+  const prohibition = explicitNoMutationScope(text);
+  if (prohibition.external && !prohibition.local) {
+    // A ban on sending/submitting never grants opaque actions or existing-state mutation.
+    const retrievalOnly = analysis.contract(text).artifactMode === 'retrieve';
+    const forbidden = registry.getCapabilityManifest(undefined, { context: visibilityContext }).filter(entry => {
+      const declaredLocalCreate = !retrievalOnly && entry.operation === 'create'
+        && entry.metadataSources.operation === 'tool_definition' && entry.metadataSources.sideEffects === 'tool_definition'
+        && entry.sideEffects.length > 0 && entry.sideEffects.every(effect => effect.reversible === true
+          && ['none', 'local_read', 'local_write', 'local_state_change', 'network_read'].includes(effect.type));
+      const controlledObservation = entry.operation === 'observe'
+        && entry.sideEffects.every(effect => effect.type === 'local_read' || effect.reversible === true && (effect.type === 'network_read'
+          || effect.type === 'local_write' && entry.verification.required && entry.verification.strategy === 'artifact'
+            && Boolean(entry.verification.requiredArtifacts?.length || entry.verification.requiredArtifactCollections?.length)
+            && Boolean(entry.reconciliation?.reconcilesCapabilityIds?.length)));
+      return !declaredLocalCreate && !controlledObservation;
+    }).map(entry => entry.toolName);
+    return restrictLumiExecutionTools(execution, forbidden);
+  }
   if (analysis.authoring(text) === 'use') {
     // A prohibition on creating another run must still forbid run_workflow,
     // but does not revoke approval of one step in the existing run.
@@ -190,7 +202,12 @@ function applyCurrentTurnNoMutationConstraint(
     .filter(entry => !scopedTools.has(entry.toolName) && (!preservedOutput || !isPreservedSourceOutputTool(entry.toolName)) && (
       entry.operation === 'create'
       || entry.operation === 'mutate'
-      || entry.sideEffects.some(effect => effect.type !== 'local_read')
+      || entry.sideEffects.some(effect => effect.type !== 'local_read' && !(
+        entry.operation === 'observe' && effect.reversible === true && (effect.type === 'network_read'
+          || effect.type === 'local_write' && entry.verification.required && entry.verification.strategy === 'artifact'
+            && (entry.verification.requiredArtifacts?.length || entry.verification.requiredArtifactCollections?.length)
+            && entry.reconciliation?.reconcilesCapabilityIds?.length)
+      ))
     ))
     .map(entry => entry.toolName);
   const restricted = restrictLumiExecutionTools(execution, mutationTools);
@@ -253,20 +270,38 @@ export function buildLumiExecutionPipeline(
   const analysis = new TurnAnalysis(resolution);
   // Admit the structured requirements before dispatch first reads the shared contract.
   if (mediaRequest) analysis.contract(effectiveText, mediaContractForRequest(mediaRequest));
-  const taskRelation = acceptedPlan || mediaRequest
+  const bindingContext = {
+    executionBoundary: input.executionBoundary, userId: input.dispatch.userId,
+    domain: input.dispatch.domain === 'work' ? 'work' as const : 'personal' as const,
+    orgId: input.dispatch.orgId, source: input.dispatch.source || input.dispatch.channel,
+    autonomous: input.dispatch.operationMode === 'autonomous' || ['autonomy', 'scheduler'].includes(input.dispatch.channel),
+  };
+  const bound = input.serverBoundCapability;
+  if (bound) {
+    const definition = input.registry.get(bound.toolName);
+    const manifest = input.registry.getCapabilityManifestEntry(bound.toolName, input.personalityToolPolicy, bindingContext);
+    if (input.unboundRemoteSender || bound.scope.userId !== input.dispatch.userId
+      || bound.scope.domain !== bindingContext.domain || bound.scope.orgId !== (input.dispatch.orgId || '')
+      || bound.selectionText !== resolution.userText || !bound.sourceId || !bound.targetIdentity || !bound.argumentsDigest
+      || !definition || !manifest || manifest.capabilityId !== bound.capabilityId
+      || frozenCapabilitySnapshot(manifest, definition.parameters).contractHash !== bound.capabilityContractHash) {
+      throw new Error('The server-bound capability choice no longer matches this registered turn.');
+    }
+  }
+  const taskRelation = acceptedPlan || mediaRequest || bound
     ? resolveActiveTaskMessageRelation(effectiveText, null)
     : revalidateAcceptedTaskRelation(input.taskRelation || resolution.taskRelation, input.actionTaskState);
   const boundTaskState = taskRelation.taskId === input.actionTaskState?.taskId
     && (taskRelation.binding === 'active_task' || taskRelation.binding === 'previous_task') ? input.actionTaskState : undefined;
-  const actionFollowupIntent = acceptedPlan || mediaRequest ? 'none' : taskRelationFollowupIntent(taskRelation);
+  const actionFollowupIntent = acceptedPlan || mediaRequest || bound ? 'none' : taskRelationFollowupIntent(taskRelation);
   const queryTarget = resolution.queryTarget;
   const observationalFollowup = queryTarget === 'conversation_receipts'
     && (actionFollowupIntent === 'status' || actionFollowupIntent === 'repeat');
-  const trustedActionContinuation = !acceptedPlan && !mediaRequest && hasTrustedActionContinuation(input, taskRelation);
+  const trustedActionContinuation = !acceptedPlan && !mediaRequest && !bound && hasTrustedActionContinuation(input, taskRelation);
   const continuationContext = input.dispatch.continuationContext
     || (trustedActionContinuation ? formatActiveTaskRelationContext(taskRelation, input.actionTaskState) : '');
   const resolvedDispatch = buildLumiTurnDispatch({ ...input.dispatch, analysis, text: effectiveText, continuationContext, actionFollowupIntent,
-      continuationAppTarget: !mediaRequest && !acceptedPlan && taskRelation.binding !== 'stale'
+      continuationAppTarget: !mediaRequest && !acceptedPlan && !bound && taskRelation.binding !== 'stale'
         && input.actionTaskState && isCurrentContinuationTask(input.dispatch.text, input.actionTaskState)
         ? input.actionTaskState.appTarget : undefined });
   const dispatched = input.unboundRemoteSender
@@ -338,8 +373,13 @@ export function buildLumiExecutionPipeline(
       || ['autonomy', 'scheduler'].includes(input.dispatch.channel),
     source: input.dispatch.source || input.dispatch.channel,
   };
+  if (bound && !hasExplicitNoToolInstruction(resolution.userText)) {
+    turnIntent.flow.allowToolUseForTurn = true;
+    turnIntent.boundary = 'tool_action';
+  }
   const routedExecution = buildLumiExecutionDecision({
     flow: turnIntent.flow,
+    serverBoundToolName: bound?.toolName,
     analysis,
     text: decisionText,
     userText: resolution.userText,
@@ -354,15 +394,10 @@ export function buildLumiExecutionPipeline(
     visibilityContext,
   });
   const unrestrictedManifest = input.registry.getCapabilityManifest(routedExecution.toolPolicy, { context: visibilityContext });
-  const externalCapabilityBoundary = validateExternalCapabilityBoundary({
-    normalizedIntent,
-    execution: routedExecution,
-    manifest: unrestrictedManifest,
-  });
   const constraintText = trustedActionContinuation && !preservedSourceOutputScope(actionText) ? effectiveText : actionText;
   const execution = restrictLumiExecutionTools(
     applyCurrentTurnNoMutationConstraint(
-      applyExternalCapabilityBoundary(routedExecution, externalCapabilityBoundary),
+      restrictMediaGenerationTools({ normalizedIntent, execution: routedExecution, manifest: unrestrictedManifest }),
       input.registry,
       constraintText,
       visibilityContext,
@@ -445,24 +480,11 @@ export function buildLumiExecutionPipeline(
     schemaVersion: 1,
     capabilityIds,
     taskLedgerRequired: Boolean(
-      turnIntent.flow.completionEvidenceNeeded
-      || executionRequested
+      executionRequested
       || turnIntent.boundary === 'task_center'
       || turnIntent.boundary === 'work_takeover',
     ),
   };
-  const executionPlan = buildCapabilityExecutionPlan({
-    intent: normalizedIntent,
-    capabilityPlan,
-    execution,
-    manifest,
-    taskId: input.taskId || boundTaskState?.taskId,
-    sourcePaths: boundTaskState?.sourcePaths,
-  });
-  capabilityPlan.promptOverlay = [
-    capabilityPlan.promptOverlay,
-    formatCapabilityExecutionPlanPrompt(executionPlan),
-  ].filter(Boolean).join('\n\n');
   const intentTrace = buildLumiIntentTrace({
     normalizedActionIntent: normalizedIntent,
     dispatch: turnIntent,
@@ -470,14 +492,6 @@ export function buildLumiExecutionPipeline(
     text: input.traceText || decisionText,
     source: input.source || input.dispatch.source || input.dispatch.channel,
   }, analysis);
-  recordExternalCapabilityValidation(externalCapabilityBoundary.aligned, externalCapabilityBoundary.externalCommitBlocked);
-  if (!externalCapabilityBoundary.aligned) {
-    intentTrace.matchedRules.push({ layer: 'external_capability', name: 'instruction-capability-mismatch' });
-    intentTrace.reasons.push(`external capability boundary:${externalCapabilityBoundary.reason}`);
-    if (externalCapabilityBoundary.externalCommitBlocked) {
-      intentTrace.blockedBy.push('external_commit_route_divergence');
-    }
-  }
   // Observation is one-way and asynchronous. Laya cannot change this plan,
   // permissions, task ownership, completion receipts or the user's response.
   if (!input.isSanctuary) observeLayaDecision({
@@ -491,14 +505,13 @@ export function buildLumiExecutionPipeline(
     normalizedIntent,
     turnIntent,
     capabilityPlan,
-    executionPlan,
+    taskId: input.taskId || boundTaskState?.taskId,
     execution,
     authorizationPolicy,
     modelToolProjection,
     executionRequested,
     trustedActionContinuation,
     intentTrace,
-    externalCapabilityBoundary,
     actionFollowupIntent,
     taskRelation,
   };

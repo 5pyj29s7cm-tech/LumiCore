@@ -3,6 +3,7 @@ import { buildHistoricalFileObservations } from '../conversation/file_observatio
 import {
   isGuardGeneratedAssistantText,
   isGuardGeneratedConversationRecord,
+  projectGuardedAssistantText,
 } from '../conversation/guard_history';
 import {
   buildCompactToolEvidenceNote,
@@ -19,10 +20,7 @@ export function normalizeVoiceHistoryRecord(record: any): NormalizedMessage[] {
   if (record?.role === 'tool' || record?.mode === 'proactive' || record?.tool_call_id) return [];
   const role = record?.role === 'assistant' ? 'assistant' : record?.role === 'user' ? 'user' : '';
   if (!role) return [];
-  const unsafeAssistantProse = role === 'assistant' && (
-    isGuardGeneratedConversationRecord(record)
-    || isUnverifiedExecutionAssistantRecord(record)
-  );
+  const unsafeAssistantProse = role === 'assistant' && isUnverifiedExecutionAssistantRecord(record);
   const message = typeof record?.message === 'string' ? record.message.trim() : '';
   const response = typeof record?.response === 'string' ? record.response.trim() : '';
   const responseIsUnsafe = String(record?.cognitiveIntent || '').toLowerCase() === 'work_product_guard'
@@ -49,7 +47,9 @@ export function normalizeVoiceHistoryRecord(record: any): NormalizedMessage[] {
   // Tool-bearing prose may overstate or misread the receipt. Preserve the
   // evidence and its paired user request, but let the next model reason from
   // the bounded receipt ledger instead of replaying the old claim verbatim.
-  const safeMessage = unsafeAssistantProse
+  const safeMessage = isGuardGeneratedConversationRecord(record)
+    ? projectGuardedAssistantText(message)
+    : unsafeAssistantProse
     || untrustedAssistantReceiptMarker
     || (role === 'assistant' && (hasToolCalls || receiptNote))
     ? ''

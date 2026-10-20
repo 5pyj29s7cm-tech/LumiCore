@@ -1,4 +1,5 @@
 import { stableValue } from '../../shared/stable_json';
+import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/messages/execution_evidence_messages';
 import crypto from 'node:crypto';
 import { groupTaskReceipts, isDelegatedActionEvidenceArchive } from './task_execution_ledger';
 import { projectAutonomousTaskFinalization } from '../autonomy/task_finalization';
@@ -463,6 +464,11 @@ export function buildForegroundTaskCompletionFeedback(input: {
     reason: terminalReason,
     accepted: outcome === 'completed' && receipt.verification === 'verified',
   });
+  if (!input.status && input.finalization?.reason === 'media_generation_unknown') return {
+    ...feedback, status: 'unknown', completed: [], blockers: [],
+    nextSteps: [/[\u3400-\u9fff]/u.test(label) ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaGenerationPending
+      : 'The original generation task is retained. Query its status; do not generate again.'],
+  };
   const progress = input.finalization?.progress;
   return progress ? { ...feedback, ...progress,
     incomplete: outcome === 'completed' ? [] : progress.incomplete.length ? progress.incomplete : feedback.incomplete,

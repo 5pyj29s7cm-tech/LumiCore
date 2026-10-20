@@ -1,4 +1,5 @@
 import { type ProviderGetters as SharedProviderGetters, providerGetterArguments as getterArguments } from "./provider_getters";
+import { ModelAttemptDeadlineError } from './provider/deadlines';
 import type { NormalizedMessage, StreamCallback, LLMCallConfig } from './provider/contracts';
 import { makeLLMCallDirect } from './provider/buffered';
 import { makeLLMCallStreamingDirect } from './provider/streaming';
@@ -8,6 +9,7 @@ import {
 } from './local_models';
 import {
   modelRoutingErrorDigest,
+  modelAttemptCompletion,
   modelRoutingErrorReason,
   type ModelRouteAttempt,
   type ModelRoutingTrace,
@@ -74,8 +76,9 @@ function callArguments(config: DispatchConfig, provider: string, model: string) 
 
 
 function attemptErrorCategory(error: unknown): string {
+  const reason = modelRoutingErrorReason(error);
   const attached = String((error as any)?.cloudCategory || '').trim();
-  return attached || modelRoutingErrorReason(error);
+  return reason === 'empty_response' || reason === 'output_limit' ? reason : attached || reason;
 }
 
 function completedAttempt(
@@ -107,6 +110,7 @@ function completedAttempt(
     completedAt: new Date(completedAtMs).toISOString(),
     durationMs: Math.max(0, completedAtMs - startedAtMs),
     ...(outboundMessagesEvidence ? { outboundMessagesEvidence } : {}),
+    ...modelAttemptCompletion(options.response || (options.error instanceof ModelAttemptDeadlineError ? options.error : {})),
     ...(options.visibleOutputCommitted !== undefined
       ? { visibleOutputCommitted: options.visibleOutputCommitted }
       : {}),
@@ -256,58 +260,15 @@ function isLocalProvider(provider: string, userId?: string): boolean {
   return provider === 'ollama' || provider === 'lmstudio' || isRegisteredProviderLocal(provider, userId);
 }
 
-const ROUTE_REASON_PRIORITY: Readonly<Record<string, number>> = Object.freeze({
-  // Terminal policy/caller decisions are the most important explanation when
-  // they are the reason an attempted route stopped.
-  cancelled: 1_000,
-  privacy_policy_blocked: 950,
-  // Actionable provider failures outrank generic availability failures.
-  provider_auth_failed: 900,
-  quota_or_billing: 850,
-  timeout: 800,
-  provider_unreachable: 750,
-  model_unavailable: 700,
-  unsupported_provider_or_model: 650,
-  provider_call_failed: 600,
-  empty_response: 550,
-  unknown_error: 500,
-  candidate_failed: 450,
-  // Health/configuration skips only explain a route when no candidate was
-  // actually attempted and failed.
-  circuit_open: 400,
-  recent_probe_failed: 350,
-  runtime_client_unavailable: 300,
-  provider_not_configured: 250,
-  candidate_skipped: 200,
-});
-
 function routeAttemptReason(attempt: ModelRouteAttempt): string {
   return attempt.reason || (attempt.status === 'skipped' ? 'candidate_skipped' : 'candidate_failed');
 }
 
-/**
- * Select one stable top-level diagnostic without discarding the per-candidate
- * attempt history. A real failed call always outranks a candidate that was
- * merely skipped, so a trailing unconfigured optional provider cannot hide a
- * primary quota/auth/timeout/provider failure. Within the selected status we
- * use an explicit priority and preserve route order as the tie-breaker.
- */
+/** Preserve route order; a skipped candidate cannot replace an actual failure. */
 function dominantRouteReason(attempts: ModelRouteAttempt[]): string {
-  const failed = attempts.filter(attempt => attempt.status === 'failed');
-  const candidates = failed.length > 0
-    ? failed
-    : attempts.filter(attempt => attempt.status === 'skipped');
-  let selected = '';
-  let selectedPriority = Number.NEGATIVE_INFINITY;
-  for (const attempt of candidates) {
-    const reason = routeAttemptReason(attempt);
-    const priority = ROUTE_REASON_PRIORITY[reason] ?? 0;
-    if (priority > selectedPriority) {
-      selected = reason;
-      selectedPriority = priority;
-    }
-  }
-  return selected;
+  const first = attempts.find(attempt => attempt.status === 'failed')
+    || attempts.find(attempt => attempt.status === 'skipped');
+  return first ? routeAttemptReason(first) : '';
 }
 
 type RoutingCandidate = { provider: string; model: string };

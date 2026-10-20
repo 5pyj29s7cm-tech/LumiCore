@@ -346,15 +346,15 @@ describe('business views wait for the owning backend result', () => {
     account.user = null; view.rerender(<Field {...props} />); expect(screen.queryByRole('button', { name: 'Save key' })).toBeNull();
   });
 
-  it.each(['web', 'electron', 'tauri'])('opens the existing computer surface from %s without a separate vault or system query', async host => {
+  it.each(['web', 'electron', 'tauri'])('keeps removed kernel monitoring out of the %s device view without a separate vault or system query', async host => {
     if (host !== 'web') vi.stubGlobal(host === 'electron' ? 'lumiElectron' : '__TAURI_INTERNALS__', {});
     mocks.fetch.mockImplementation(async (url: string) => reply({ devices: url.endsWith('/remote-devices') ? {} : [], pairedDeviceIds: [] }));
     const listener = vi.fn(); window.addEventListener('lumi:client-action', listener);
     try {
       render(<DeviceSyncCenter t={{}} />); await screen.findByText('No remote devices configured'); const count = mocks.fetch.mock.calls.length;
-      fireEvent.click(screen.getByRole('button', { name: 'Kernel Monitor' }));
-      const action = listener.mock.calls[0][0].detail.action;
-      expect(action).toBe('open_computer_adaptation'); expect(getPersonalClientSurfaceByAction(action)?.target).toBe('kernel');
+      expect(screen.queryByRole('button', { name: 'Kernel Monitor' })).toBeNull();
+      expect(listener).not.toHaveBeenCalled();
+      expect(getPersonalClientSurfaceByAction('open_computer_adaptation')?.target).toBe('kernel');
       expect(mocks.fetch).toHaveBeenCalledTimes(count); expect(document.body.textContent).not.toMatch(/session:\/\/web\/vault|UNLOCKED|Open Web Vault|CONNECTED/);
     } finally { window.removeEventListener('lumi:client-action', listener); }
   });
@@ -496,7 +496,7 @@ describe('business views wait for the owning backend result', () => {
     expect(states).toEqual([platform]);
   });
 
-  it('owns sensor subscriptions for the device view and releases them on stop and close', async () => {
+  it('keeps removed mobile sensors inactive throughout the device view lifetime', async () => {
     const watchPosition = vi.fn().mockReturnValue(71), clearWatch = vi.fn();
     vi.stubGlobal('navigator', { geolocation: { watchPosition, clearWatch }, userAgent: 'synthetic-browser', platform: 'web' });
     vi.stubGlobal('DeviceMotionEvent', Event);
@@ -504,12 +504,10 @@ describe('business views wait for the owning backend result', () => {
     mocks.fetch.mockImplementation(async (url: string) => reply({ devices: url.endsWith('/remote-devices') ? {} : [], pairedDeviceIds: [] }));
     const view = render(<DeviceSyncCenter t={{}} />); await screen.findByText('No remote devices configured');
     expect(watchPosition).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'ENABLE' })); expect(watchPosition).toHaveBeenCalledOnce();
-    act(() => watchPosition.mock.calls[0][0]({ coords: { latitude: 32.1234, longitude: 119.1234, speed: 0 } }));
-    expect(screen.getByText('32.1234° N')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'STOP' })); expect(clearWatch).toHaveBeenCalledWith(71);
-    fireEvent.click(screen.getByRole('button', { name: 'ENABLE' })); expect(watchPosition).toHaveBeenCalledTimes(2);
-    view.unmount(); expect(clearWatch).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('button', { name: 'ENABLE' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'STOP' })).toBeNull();
+    expect(subscribe.mock.calls.filter(([name]) => name === 'devicemotion')).toEqual([]);
+    view.unmount(); expect(clearWatch).not.toHaveBeenCalled();
     expect(unsubscribe.mock.calls.filter(([name]) => name === 'devicemotion')).toEqual(subscribe.mock.calls.filter(([name]) => name === 'devicemotion'));
   });
 

@@ -79,20 +79,18 @@ export async function extractImageKnowledge(filePath: string, userId: string, si
     const buffer = await sharp(filePath)
       .rotate()
       .resize({ width: 1800, height: 1800, fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 85 })
+      .png()
       .toBuffer();
     const base64 = buffer.toString('base64');
     const preferred = getUserPreferredVision(userId);
     const model = preferred.model || visionModelFor(provider);
     const prompt = [
-      'Prepare this uploaded image for Lumi knowledge-base retrieval.',
-      'Extract every readable text exactly as visible. Then summarize the visual content, tables, diagrams, screenshots, documents, labels, entities, and relationships that may be useful later.',
-      'Return structured plain text in the image language when possible. Do not invent details that are not visible.',
-      `File name: ${displayName}`,
+      'Extract readable text exactly as visible, preserving names, numbers, dates, negation and uncertainty; mark unreadable text without guessing. Then describe only directly visible objects, layout, tables and diagrams.',
+      'Return only visible text and direct observations in the image language. Do not add interpretations, keyword suggestions, current-time judgments or facts absent from the pixels, or infer application features from icons or file names.',
     ].join('\n');
     const imagePayload = JSON.stringify({
       image_base64: base64,
-      format: 'jpeg',
+      format: 'png',
       width: meta.width || null,
       height: meta.height || null,
     });
@@ -116,7 +114,7 @@ export async function extractImageKnowledge(filePath: string, userId: string, si
     }
 
     return {
-      content: `${imageInfo}\nVision provider: ${provider}/${model}\n\nExtracted visual knowledge:\n${extracted}`,
+      content: `${imageInfo}\nVision provider: ${provider}/${model}\n\nVisible image content (model extraction, not independently verified):\n${extracted}`,
       method: 'image-vision',
       status: 'indexed',
       provider,

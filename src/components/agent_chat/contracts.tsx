@@ -22,18 +22,6 @@ export interface AgentChatVoiceSession {
 }
 
 
-export type ChatExecutionSnapshot = {
-  requestId: string;
-  source: string;
-  status: 'acknowledged' | 'planning' | 'executing' | 'waiting_confirmation' | 'cancelling' | 'completed' | 'cancelled' | 'failed';
-  createdAt: string;
-  updatedAt: string;
-  terminal: boolean;
-  queued?: boolean;
-  terminalEvent?: { event: string; payload: Record<string, any> };
-};
-
-
 export type ConversationHistoryItem = {
   id: string;
   displayTitle?: string;

@@ -1,6 +1,6 @@
 import { toolRegistry, type ToolRegistry } from "../../tools/registry";
 import type { AutonomousTask } from "../task_queue";
-import { buildLumiExecutionPipeline, type LumiExecutionPipeline, type BuildLumiExecutionPipelineInput } from "../../cognition/execution_pipeline";
+import type { BuildLumiExecutionPipelineInput } from "../../cognition/execution_pipeline";
 
 /** Tight tool policy for autonomous background work — more conservative than user-initiated mode */
 const AUTONOMOUS_POLICY = {
@@ -50,7 +50,7 @@ export function buildAutonomousToolPolicy(
   task: Pick<AutonomousTask, 'title' | 'description'> & Partial<Pick<AutonomousTask, 'idempotencyKey' | 'executionPlan' | 'recovery' | 'domain' | 'orgId'>>,
   maxIterations: number,
 ) {
-  const recoveryToolBoundary = task.recovery?.planRevisions?.length && task.executionPlan
+  const recoveryToolBoundary = task.recovery?.planRevisions?.length && task.executionPlan?.decisionAuthority === 'semantic_planner'
     ? Array.from(new Set(task.executionPlan.nodes
         .map(node => node.toolName)
         .filter((name): name is string => Boolean(name))))
@@ -108,14 +108,4 @@ export function autonomousTurnPlanningData(
     source: `autonomous:${task.source}`,
     taskId: task.id,
   };
-}
-
-export function buildAutonomousCapabilityPipeline(
-  task: Pick<AutonomousTask, 'id' | 'userId' | 'description' | 'source' | 'title'>
-    & Partial<Pick<AutonomousTask, 'idempotencyKey' | 'executionPlan' | 'recovery' | 'domain' | 'orgId'>>,
-  maxIterations: number,
-  registry: ToolRegistry = toolRegistry,
-  requestId?: string,
-): LumiExecutionPipeline {
-  return buildLumiExecutionPipeline({ ...autonomousTurnPlanningData(task, maxIterations, registry), requestId });
 }

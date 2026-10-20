@@ -18,11 +18,11 @@ export function getSelfModelSnapshot(
 ): SelfModelSnapshot {
   const domain = scope.domain === 'work' && scope.orgId ? 'work' : 'personal';
   const state = getClientStateForScope(userId, { domain, orgId: domain === 'work' ? scope.orgId : '' });
-  const awareness = getClientSelfAwarenessReport(userId, { domain, orgId: scope.orgId });
-  const health = getClientHealthReport(userId, { domain, orgId: scope.orgId });
   const modelConfiguration = getLumiModelConfiguration(userId) as {
     roles?: Record<string, Record<string, unknown>>;
   };
+  const health = getClientHealthReport(userId, { domain, orgId: scope.orgId }, modelConfiguration.roles);
+  const awareness = getClientSelfAwarenessReport(userId, { domain, orgId: scope.orgId }, health);
   const models = LUMI_MODEL_ROLES.map(role => {
     const configuration = modelConfiguration.roles?.[role] || {};
     return {
@@ -57,7 +57,9 @@ export function getSelfModelSnapshot(
   const staleFiles = Number(knowledge.staleFiles || 0);
   const failedFiles = Number(knowledge.failedFiles || 0);
   const unsupportedFiles = Number(knowledge.unsupportedFiles || 0);
-  const verification = failedFiles > 0 || unsupportedFiles > 0
+  const verification = health.checks.find(check => check.id === 'knowledge.observation')?.level === 'unknown'
+    ? 'unknown'
+    : failedFiles > 0 || unsupportedFiles > 0
     ? 'failed'
     : staleFiles > 0
       ? 'stale'
@@ -78,6 +80,7 @@ export function getSelfModelSnapshot(
     },
     scope: { domain, orgId: domain === 'work' ? String(scope.orgId || '') : '' },
     modes: [], // No selectable operation modes; capture status lives in meeting/voice.
+    health,
     configuredModels: models,
     connectedCapabilities: {
       tools: manifest.length,
@@ -111,7 +114,7 @@ export function getSelfModelSnapshot(
       failedFiles,
       unsupportedFiles,
       verification,
-      verifiedAbsorption: totalFiles > 0 && verifiedFiles === totalFiles,
+      verifiedAbsorption: verification === 'verified',
     },
     memoryState: {
       available: manifest.some(entry => entry.lane === 'memory'),
@@ -146,6 +149,11 @@ export function getSelfModelSnapshot(
   // the underlying state or its freshness classification actually changes.
   const digestCore = {
     ...snapshotCore,
+    health: {
+      ...health, observedAt: null, stateAgeSeconds: null,
+      checks: health.checks.map(({ observedAt: _at, ...check }) => check),
+      findings: health.findings.map(({ observedAt: _at, ...finding }) => finding),
+    },
     runtime: {
       ...snapshotCore.runtime,
       stateAgeSeconds: null,

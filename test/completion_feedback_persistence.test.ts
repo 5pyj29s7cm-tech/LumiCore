@@ -138,7 +138,7 @@ describe('foreground completion feedback persistence', () => {
     );
     const serialized = String(rows[0].completionFeedback || '');
     expect(serialized).not.toMatch(/No successful current-turn|\u8fd9\u4e00\u8f6e\u6ca1\u6709\u8bb0\u5f55\u5230\u6210\u529f\u7684\u771f\u5b9e\u5de5\u5177\u6267\u884c/iu);
-    expect(JSON.parse(serialized).blockers).toEqual(['当前步骤未能完成。']);
+    expect(JSON.parse(serialized).blockers).toEqual([expect.stringMatching(/(?:尚未|未能).*完成/u)]);
     expect(serialized).not.toMatch(/execution_|desktop_|verified terminal evidence/iu);
   });
 
@@ -183,7 +183,7 @@ describe('foreground completion feedback persistence', () => {
       message: 'The terminal persistence outcome is unknown.',
       completionFeedback: {
         status: 'blocked',
-        incomplete: ['The task is not complete yet.'],
+        incomplete: [expect.stringMatching(/not.*verified.*complete/i)],
         blockers: ['Terminal persistence outcome is unknown.'],
       },
     });

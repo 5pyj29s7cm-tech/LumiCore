@@ -233,11 +233,13 @@ export function createGrowthTasks(context: ScheduledBuiltinContext): ScheduledTa
     cron: 'daily_9am',
     lastRun: null,
     executionClass: 'proactive_delivery',
-    handler: async () => {
+    handler: async run => {
+      const signal = run?.signal || new AbortController().signal;
       const userIds = getAllUserIds();
       const messages: ScheduledDelivery[] = [];
 
       for (const userId of userIds) {
+        signal.throwIfAborted();
         try {
           const owner = { userId, domain: 'personal' as const, orgId: '' };
           const now = new Date();
@@ -311,9 +313,11 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
             const narrativeResult = await makeLLMCall(
               [{ role: 'user', content: narrativePrompt }],
               [],
-              getUserPreferredLLMConfig(userId, { maxTokens: 300, domain: 'personal', orgId: '', source: 'scheduler_growth_journal' }),
+              { ...getUserPreferredLLMConfig(userId, { maxTokens: 300, domain: 'personal', orgId: '', source: 'scheduler_growth_journal' }), signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) },
               ...providerGetterArguments(getters),
             );
+
+            signal.throwIfAborted();
 
             const generatedNarrative = narrativeResult.text?.trim();
             const narrative = generatedNarrative || `${summaryData.newMemories} 条新记忆，${summaryData.newInteractions} 次对话 — Lumi 在成长。`;
@@ -349,6 +353,7 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
               modelGenerated: Boolean(generatedNarrative),
             });
           } catch (llmErr: any) {
+            signal.throwIfAborted();
             console.warn(`[GrowthJournal] LLM generation failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(llmErr));
             // Fallback: simple stats summary
             const fallback = `${summaryData.date}: ${summaryData.newMemories} 条新记忆, ${summaryData.newInteractions} 次互动, ${summaryData.activeConversations} 个活跃对话。`;
@@ -365,6 +370,7 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
             messages.push({ userId, message: fallback, domain: 'personal' });
           }
         } catch (err: any) {
+          signal.throwIfAborted();
           console.warn(`[GrowthJournal] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }

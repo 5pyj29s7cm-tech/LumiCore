@@ -1,7 +1,6 @@
 import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../../cognition/turn_model";
 import { createChatMessageWriter } from "../message_writer";
 import { normalizeIncomingAttachments, buildChatAttachmentContext, buildStoredAttachmentSummary, shouldAllowLocalFileWriteForTurn } from "../attachments";
-import { buildClientSurfaceContinuationBridge } from "../client_surface";
 
 import type { ProviderGetters as SharedProviderGetters } from "../../../llm/provider_getters";
 import type { Server, Socket } from "socket.io";
@@ -41,7 +40,6 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
     const rawUserText = typeof data.text === 'string' ? data.text.trim() : '';
     const visibleUserText = rawUserText || (attachments.length > 0 ? 'Please review the attached file(s).' : '');
     const attachmentContext = buildChatAttachmentContext(attachments);
-    let chatContextBridge = buildClientSurfaceContinuationBridge(visibleUserText, []);
     let actionContinuationBridge = '';
     const text = [visibleUserText, attachmentContext].filter(Boolean).join('\n\n');
     const storedUserContent = buildStoredAttachmentSummary(visibleUserText, attachments);
@@ -210,8 +208,6 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
     personalityId,
     text,
     requestScope,
-    get chatContextBridge(): typeof chatContextBridge { return chatContextBridge; },
-    set chatContextBridge(value: typeof chatContextBridge) { chatContextBridge = value; },
     payloadMode,
     get actionContinuationBridge(): typeof actionContinuationBridge { return actionContinuationBridge; },
     set actionContinuationBridge(value: typeof actionContinuationBridge) { actionContinuationBridge = value; },

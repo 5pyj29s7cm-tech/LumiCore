@@ -14,9 +14,9 @@ export function extractExplicitArtifactTextRequirements(input: string): string[]
   const requirements: string[] = [];
   const patterns = [
     // i18n-allow: Exact user-supplied content recognition.
-    /(?:明确写出|原样写入|精确写入|(?:只|仅)写入|内容(?:为|是)|必须(?:包含|写入))\s*[：:]?\s*[“"]([^”"\r\n]{1,200})[”"]/gu,
+    /(?:明确写出|原样写入|精确写入|(?:只|仅)写入|内容(?:为|是)|必须(?:包含|写入))\s*[：:]?\s*[“"]([^”"]{1,200})[”"]/gu,
     /第(?:[一二三四五六七八九十百\d]+)行\s*[：:]?\s*[“"]([^”"\r\n]{1,1000})[”"]/gu, // i18n-allow: Line numbers in user instructions.
-    /\b(?:exactly\s+(?:include|write)|must\s+(?:include|contain))\s*[：:]?\s*[“"]([^”"\r\n]{1,200})[”"]/giu,
+    /\b(?:exactly\s+(?:include|write)|must\s+(?:include|contain))\s*[：:]?\s*[“"]([^”"]{1,200})[”"]/giu,
   ];
   for (const pattern of patterns) for (const match of String(input || '').matchAll(pattern)) {
     const value = match[1].trim();

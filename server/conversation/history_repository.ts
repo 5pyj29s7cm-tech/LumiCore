@@ -20,7 +20,7 @@ export interface InteractionHistoryFilter {
 export function listUserInteractions(userId: string, filter: InteractionHistoryFilter = {}): any[] {
   if (!userId) return [];
   const ids = filter.conversationIds ? new Set(filter.conversationIds) : null;
-  let rows = (readDatabaseTables(["interactions","conversations","conversationActionTasks","conversationActionTurns","conversationActionReceipts"]).interactions || []).filter((row: any) => row.userId === userId
+  let rows = (readDatabaseTables(["interactions"]).interactions || []).filter((row: any) => row.userId === userId
     && (filter.domain === undefined || (row.domain || 'personal') === filter.domain)
     && (filter.orgId === undefined || (row.orgId || '') === filter.orgId)
     && (filter.conversationId === undefined || row.conversationId === filter.conversationId)
@@ -135,4 +135,12 @@ function selectVisibleConversationHistory(input: any[], limit: number): any[] {
       && !hasSibling(assistants, response, time);
   }).slice(-limit);
   return visible;
+}
+
+/** Owner-scoped task diagnostics without reading transcripts or tool payloads. */
+export function listScopedConversationTaskDiagnostics(userId: string, domain: string, orgId = ''): any[] {
+  if (!userId || (domain === 'work' && !orgId)) return [];
+  return (readDatabaseTables(['conversationActionTasks']).conversationActionTasks || [])
+    .filter((task: any) => task.userId === userId && (task.domain || 'personal') === domain && (task.orgId || '') === orgId)
+    .map(({ id, status, blocker, updatedAt }: any) => ({ id, status, blocker, updatedAt }));
 }

@@ -31,8 +31,14 @@ export function broadcastMemoryChange(scope: MutationScope, action: 'added' | 'u
 }
 
 /** Broadcast preference change to all devices of a user (pet, accessories, wallpaper, etc.) */
-export function broadcastPreferenceChange(userId: string, key: string, value: any): void {
+export function broadcastPreferenceChange(userId: string, key: string, value: any, scope?: { domain?: string; orgId?: string }): void {
   if (!_io) return;
-  const payload = { key, value, userId, domain: 'personal', orgId: '', timestamp: new Date().toISOString() };
-  _io.to(`user:${userId}:personal`).emit('preferences:changed', payload);
+  if (key === 'desktop_execution') {
+    const sockets = [...(userSockets.get(userId) || [])];
+    if (sockets.length) _io.to(sockets).emit('preferences:changed', { key, value, userId, timestamp: new Date().toISOString() });
+    return;
+  }
+  const orgId = scope?.domain === 'work' ? String(scope.orgId || '') : '';
+  const payload = { key, value, userId, domain: orgId ? 'work' : 'personal', orgId, timestamp: new Date().toISOString() };
+  _io.to(orgId ? `user:${userId}:org:${orgId}` : `user:${userId}:personal`).emit('preferences:changed', payload);
 }

@@ -74,6 +74,7 @@ export function isEchoText(transcript: string, includeShortFragments = false, sc
 
 function normalizeSpeechText(text: string): string {
   return text
+    .normalize('NFKC')
     .replace(/\s+/g, '')
     .replace(/[。！？.!?，,、；;：:“”"'‘’（）()\[\]【】~～]/g, '')
     .toLowerCase();

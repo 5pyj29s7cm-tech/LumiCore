@@ -1,3 +1,4 @@
+import { registerChatSongTools } from './chat_song_tools';
 import { registerBusinessCalculationTools } from './business_calculation_tools';
 import { registerIndustryWorkflowTools } from './industry_workflow_tools';
 import { ToolRegistry } from '../registry';
@@ -79,6 +80,7 @@ export function registerAllTools(
   registerImageTools(registry);
   registerMemoryAvatarTools(registry);
   registerVideoTools(registry);
+registerChatSongTools(registry);
   registerInputTools(registry);
   registerComputerUseTool(registry);
   registerPythonTools(registry);

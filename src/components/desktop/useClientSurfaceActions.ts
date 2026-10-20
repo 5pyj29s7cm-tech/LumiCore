@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import type { useApp, OperationMode } from '../../contexts/AppContext';
 import type { CommandCenterView } from '../commandCenterTypes';
 import type { WallpaperPresentation, WallpaperWorkspace } from '../../services/systemService';
-import { getLegalConsultationCaseId, setLegalConsultationCaseId } from '../../lib/legalCaseStore';
 import { canAccessOrganizationWorkspaceView, normalizeOrganizationWorkspaceView, type OrganizationWorkspaceView } from '../../../shared/org_workspace';
 import { getPersonalClientSurfaceByAction, isComputerAdaptationSettingsTarget, normalizeClientSettingsSection } from '../../../shared/client_surfaces';
 import { queueOrganizationWorkspaceRoute } from '../../lib/orgWorkspaceNavigation';
@@ -18,7 +17,7 @@ type ClientActionRuntime = Pick<ReturnType<typeof useApp>, 'orgConnection' | 'wo
   enterDesktopWidgetMode: () => Promise<boolean>;
   exitDesktopWidgetMode: (target?: string) => Promise<boolean>;
   endMeetingAndReport: () => Promise<void>;
-  resetMeetingCapture: () => void;
+  meetingHistoryReadOnly: boolean;
   setMeetingPaused: (paused: boolean) => void;
   setMeetingNotesOpen: (open: boolean) => void;
   setLegalMeetingCaseTitle: (title: string) => void;
@@ -43,7 +42,7 @@ async function waitForSurfaceCommit(target: string): Promise<true> {
 }
 
 export function useClientSurfaceActions({
-  activeTab, applyWallpaperMode, closeSurface, endMeetingAndReport, enterDesktopWidgetMode, exitDesktopWidgetMode, isDesktopWidgetMode, openCommandCenter, openSurface, openWindows, operationMode, orgConnection, resetMeetingCapture, setOperationMode, switchDomain, workDomain, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle, setSettingsSection, setPersonalizationSection
+  activeTab, applyWallpaperMode, closeSurface, endMeetingAndReport, meetingHistoryReadOnly, enterDesktopWidgetMode, exitDesktopWidgetMode, isDesktopWidgetMode, openCommandCenter, openSurface, openWindows, operationMode, orgConnection, setOperationMode, switchDomain, workDomain, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle, setSettingsSection, setPersonalizationSection
 }: ClientActionRuntime) {
   useEffect(() => {
     const handler = async (event: Event) => {
@@ -97,7 +96,7 @@ export function useClientSurfaceActions({
         }
         setOperationMode(value as OperationMode);
         if (value === 'meeting') {
-          setMeetingPaused(false);
+          if (operationMode !== 'meeting') setMeetingPaused(true);
           setMeetingNotesOpen(true);
         }
       };
@@ -243,16 +242,12 @@ export function useClientSurfaceActions({
         }
         if (action === 'start_meeting_mode') {
           if (!confirmed) throw new Error('start_meeting_mode requires explicit user confirmation');
-          if (detail.resetNotes) resetMeetingCapture();
-          if (detail.legalCaseId) setLegalConsultationCaseId(String(detail.legalCaseId));
-          if (detail.legalCaseTitle) setLegalMeetingCaseTitle(String(detail.legalCaseTitle));
-          else if (!getLegalConsultationCaseId()) setLegalMeetingCaseTitle('');
-          setClientMode('meeting');
-          respond({ ok: true, action, mode: 'meeting' });
+          window.dispatchEvent(new CustomEvent('lumi:request-meeting-mode', { detail: { ...detail, confirmed: true, respond, reject } }));
           return;
         }
         if (action === 'end_meeting_mode') {
           if (!confirmed) throw new Error('end_meeting_mode requires explicit user confirmation');
+          if (meetingHistoryReadOnly) throw new Error('Historical meeting records are read-only. Choose New record to record a new meeting.');
           void endMeetingAndReport();
           respond({ ok: true, action, status: 'ending_and_generating_report' });
           return;
@@ -328,6 +323,6 @@ export function useClientSurfaceActions({
 
     window.addEventListener('lumi:client-action', handler);
     return () => window.removeEventListener('lumi:client-action', handler);
-  }, [activeTab, applyWallpaperMode, closeSurface, endMeetingAndReport, enterDesktopWidgetMode, exitDesktopWidgetMode, isDesktopWidgetMode, openCommandCenter, openSurface, openWindows, operationMode, orgConnection?.connected, orgConnection?.orgRole, resetMeetingCapture, setOperationMode, switchDomain, workDomain, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle, setSettingsSection, setPersonalizationSection]);
+  }, [activeTab, applyWallpaperMode, closeSurface, endMeetingAndReport, meetingHistoryReadOnly, enterDesktopWidgetMode, exitDesktopWidgetMode, isDesktopWidgetMode, openCommandCenter, openSurface, openWindows, operationMode, orgConnection?.connected, orgConnection?.orgRole, setOperationMode, switchDomain, workDomain, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle, setSettingsSection, setPersonalizationSection]);
 
 }

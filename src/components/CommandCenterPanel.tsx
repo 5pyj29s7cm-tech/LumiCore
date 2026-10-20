@@ -23,7 +23,7 @@ import { getCommandCenterCopy } from '@/i18n/locales/commandCenter';
 import { isCurrentScopeRequest } from './scopeRequestGuard';
 import { LumiScenePanel } from './LumiScenePanel';
 import { RuntimeEvidencePanel } from './RuntimeEvidencePanel';
-import { LumiCoreSphere, type LumiCoreOrbitTask, type LumiCoreTaskState } from './LumiCoreSphere';
+import { LumiCoreSphere, type LumiCoreOrbitTask } from './LumiCoreSphere';
 import { TaskCompletionFeedbackDetails } from './TaskCompletionFeedbackDetails';
 import {
   customerVisibleTaskBlocker,
@@ -57,7 +57,7 @@ export type CommandCenterTask = {
   completionFeedback?: TaskCompletionFeedback;
 };
 
-const ACTIVE_PHASES = new Set(['pending', 'queued', 'running', 'working', 'pausing', 'cancelling', 'waiting_confirmation']);
+const ACTIVE_STATUSES = new Set(['pending', 'queued', 'running', 'in_progress', 'executing', 'planning', 'working', 'pausing', 'cancelling']);
 
 function numeric(value: unknown): number {
   const number = Number(value || 0);
@@ -116,23 +116,14 @@ export function normalizeCommandCenterTask(value: unknown, locale?: 'zh' | 'en')
 }
 
 export function commandCenterTaskIsActive(task: CommandCenterTask): boolean {
-  return ACTIVE_PHASES.has(task.phase) || ACTIVE_PHASES.has(task.status);
-}
-
-function taskOrbitState(task: CommandCenterTask): LumiCoreTaskState {
-  if (task.phase === 'paused') return 'paused';
-  if (task.phase === 'failed' || task.phase === 'blocked') return 'attention';
-  if (task.phase === 'completed') return 'completed';
-  if (commandCenterTaskIsActive(task)) return 'working';
-  return 'queued';
+  return ACTIVE_STATUSES.has(task.status);
 }
 
 export function buildLumiCoreOrbitTasks(tasks: CommandCenterTask[]): LumiCoreOrbitTask[] {
-  return tasks.map(task => ({
+  return tasks.filter(commandCenterTaskIsActive).map(task => ({
     id: task.id,
     title: task.title,
-    state: taskOrbitState(task),
-    active: commandCenterTaskIsActive(task),
+    state: task.status === 'pending' || task.status === 'queued' ? 'queued' : 'working',
   }));
 }
 
@@ -207,7 +198,7 @@ export function CommandCenterPanel({
       && isCurrentScopeRequest(request, activeScopeKeyRef.current, scopeGenerationRef.current);
     setLoading(true);
     try {
-      const response = await apiFetch('/api/autonomy/work');
+      const response = await apiFetch('/api/autonomy/work', { signal: AbortSignal.timeout(6_000) });
       if (!response.ok) throw new Error('Task status unavailable');
       const payload = await response.json();
       if (!current()) return;
@@ -216,7 +207,10 @@ export function CommandCenterPanel({
         .filter((task): task is CommandCenterTask => Boolean(task)));
       setTaskError(payload?.degraded ? copy.degradedTaskState : '');
     } catch {
-      if (current()) setTaskError(copy.degradedTaskState);
+      if (current()) {
+        setTasks([]);
+        setTaskError(copy.degradedTaskState);
+      }
     } finally {
       if (current()) setLoading(false);
     }
@@ -224,7 +218,8 @@ export function CommandCenterPanel({
 
   useEffect(() => {
     void refresh();
-    return () => { refreshRevisionRef.current++; };
+    const interval = setInterval(() => { if (!document.hidden) void refresh(); }, 10_000);
+    return () => { clearInterval(interval); refreshRevisionRef.current++; };
   }, [refresh]);
 
   useEffect(() => {
@@ -236,6 +231,9 @@ export function CommandCenterPanel({
       timer = setTimeout(() => { void refresh(); void refreshRuntime(); }, 100);
     };
     const events = [
+      'connect',
+      'agent:status',
+      'chat:conversation_updated',
       'autonomous:task_started',
       'autonomous:task_paused',
       'autonomous:task_retry_scheduled',
@@ -272,10 +270,8 @@ export function CommandCenterPanel({
   }, [controlInFlightIds, copy.degradedTaskState, refresh, refreshRuntime, scopeKey]);
 
   const orbitTasks = useMemo(() => buildLumiCoreOrbitTasks(tasks), [tasks]);
-  const activeTasks = useMemo(() => tasks.filter(commandCenterTaskIsActive), [tasks]);
   const recentTasks = useMemo(() => tasks.slice(0, 8), [tasks]);
-  const hasAttention = tasks.some(task => task.phase === 'failed' || task.phase === 'blocked');
-  const coreState = hasAttention ? 'attention' : activeTasks.length > 0 ? 'working' : 'ready';
+  const coreState = orbitTasks.some(task => task.state === 'working') ? 'working' : 'ready';
 
   return (
     <section
@@ -310,10 +306,9 @@ export function CommandCenterPanel({
               labels={{
                 aria: copy.taskViewAria,
                 lumiCore: copy.core,
-                ready: copy.ready,
+                ready: taskError ? copy.runtimeUnavailable : copy.ready,
                 working: copy.working,
-                attention: copy.attention,
-                noTasks: copy.noTasks,
+                noTasks: taskError || copy.noTasks,
               }}
             />
             {!backgroundOnly && <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2">
@@ -334,7 +329,7 @@ export function CommandCenterPanel({
             <LumiScenePanel scene={scene} loading={sceneLoading} error={sceneError} />
             {!runtimeLoading && !status && <div className="flex items-center gap-2 rounded-2xl border border-amber-300/15 bg-amber-400/[0.05] p-4 text-xs text-amber-100/65"><CircleAlert size={14} />{copy.runtimeUnavailable}</div>}
             <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4"><div className="flex items-center gap-2 text-xs text-white/45"><Activity size={13} />{copy.tasks}</div><div className="mt-2 text-xl font-black text-white/80">{status?.counts.activeTasks || activeTasks.length}</div></div>
+              <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4"><div className="flex items-center gap-2 text-xs text-white/45"><Activity size={13} />{copy.tasks}</div><div className="mt-2 text-xl font-black text-white/80">{status?.counts.activeTasks ?? orbitTasks.length}</div></div>
               <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4"><div className="flex items-center gap-2 text-xs text-white/45"><Cpu size={13} />{copy.receipts}</div><div className="mt-2 text-xl font-black text-white/80">{status?.counts.verifiedReceipts || 0}</div></div>
             </div>
 

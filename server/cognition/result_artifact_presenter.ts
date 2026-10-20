@@ -3,6 +3,7 @@ import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
 import { artifactRecordMatchesTurn, artifactPathFromRecord, isArtifactProducerRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
 import { matchesRequestedArtifactOutput } from './artifact_write_scope';
 import { getArtifactTaskProgress } from './action_contract';
+import { resolveVerifiedArtifactRetrieval } from './contracts/artifact_evidence';
 import { formatArtifactProgress } from './artifact_progress';
 import { extractExplicitArtifactTextRequirements, extractCurrentAppTarget, extractRequestedCurrentAppText, hasBlankAutoCadDocumentEvidence, hasRequestedDesktopOpenEvidence, hasVerifiedCadGeometryExtractionEvidence, requiresArtifactPostWriteReadback, requiresArtifactOpen, requiresCadGeometryExtractionOnly, requiresCurrentAppUiMutation, requiresVisibleAutoCadExecution } from './action_contract';
 import { formatCnToolFailureDetail } from "../regions/messages/voice_fast_path_messages";
@@ -109,8 +110,13 @@ export function formatGroundedSkillDraft(input: LumiResultFinalizerInput): LumiR
 export function formatGroundedArtifactResult(
   input: LumiResultFinalizerInput,
 ): LumiResultFinalizerResult | null {
-  if (taskActionContract(input).kind !== 'artifact_work') return null;
+  const contract = taskActionContract(input);
+  if (contract.kind !== 'artifact_work') return null;
   const records = input.toolRecords || [];
+  if (contract.artifactMode === 'retrieve') {
+    const retrieved = resolveVerifiedArtifactRetrieval(resultTaskText(input), contract, records, input);
+    return retrieved ? { text: isChineseText(resultTaskText(input)) ? CN_EXECUTION_EVIDENCE_MESSAGES.artifactRetrieved : 'The existing file is attached.', blocked: false, reason: 'artifact_retrieved' } : null;
+  }
   const delivery = resolveArtifactDelivery(records, record => isVerifiedCurrentTurnRecord(input, record));
   if (!delivery) return null;
   const { producer: created, outputPath: path, readback } = delivery;
@@ -835,8 +841,19 @@ export function groundedMediaGeneration(input: LumiResultFinalizerInput): LumiRe
   const contract = taskActionContract(input);
   if (contract.kind !== 'media_generation') return null;
   const verdict = evaluateMediaGenerationEvidence(contract, input.toolRecords || [], input);
-  if (verdict.reason === 'media_followup_unverified') return null;
   const receipt = verdict.receipt;
+  const current = [...(input.toolRecords || [])].reverse().find(record =>
+    record.name === contract.mediaGeneration?.toolName && artifactRecordMatchesTurn(record, input));
+  const retained = current && parseReceiptObject(toolRecordTerminalPayload(current));
+  if (!receipt && input.requestId && input.taskId && current?.adapterStarted === true
+    && current.envelope?.status === 'unknown_outcome' && current.envelope.toolName === current.name
+    && retained?.automaticResubmissionBlocked === true && String(retained.taskId || '').trim()
+    && String(retained.recoveryId || '').trim()) return {
+    text: isChineseText(languageText) ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaGenerationPending
+      : 'The generation request was submitted, but its result has not been retrieved. The original task is retained; query its status rather than generating again.',
+    blocked: true, reason: 'media_generation_unknown',
+  };
+  if (verdict.reason === 'media_followup_unverified') return null;
   if (verdict.reason === 'media_output_type_mismatch') {
     const files = [...new Set((input.toolRecords || []).filter(item => isArtifactProducerRecord(item) && isVerifiedCurrentTurnRecord(input, item))
       .map(artifactPathFromRecord).filter(Boolean).map(file => file.split(/[\\/]/u).at(-1)!))].slice(0, 5);

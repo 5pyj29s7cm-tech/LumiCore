@@ -1,0 +1,15 @@
+{
+  "title": "最高人民法院关于适用《中华人民共和国民事诉讼法》的解释",
+  "recordId": "ff80818181cdceb30181d801c31c4070",
+  "versionDate": "2022-04-01",
+  "effectiveDate": "2022-04-10",
+  "articleMax": 550,
+  "binarySha256": "a8dcb7894aa019b5acd3c5f8341cde6118548cd61e6149025831265fb9917698",
+  "bytes": 85385,
+  "sourceUrl": "https://flk.npc.gov.cn/detail?id=ff80818181cdceb30181d801c31c4070&title=%E6%9C%80%E9%AB%98%E4%BA%BA%E6%B0%91%E6%B3%95%E9%99%A2%E5%85%B3%E4%BA%8E%E9%80%82%E7%94%A8%E3%80%8A%E4%B8%AD%E5%8D%8E%E4%BA%BA%E6%B0%91%E5%85%B1%E5%92%8C%E5%9B%BD%E6%B0%91%E4%BA%8B%E8%AF%89%E8%AE%BC%E6%B3%95%E3%80%8B%E7%9A%84%E8%A7%A3%E9%87%8A",
+  "corroboratingOfficialBody": "https://www.court.gov.cn/fabu/xiangqing/353651.html",
+  "corroboratingAmendmentDecision": "https://www.court.gov.cn/zixun/xiangqing/353731.html",
+  "retrievedAt": "2026-10-13",
+  "purpose": "Actual public official DOCX in isolated tests; never installed or confirmed in production by test fixtures",
+  "metadataCorrection": "The already pinned 2022 version ends at 550, not the 552 ending of the earlier version. All record/version/source/structure requirements are retained."
+}

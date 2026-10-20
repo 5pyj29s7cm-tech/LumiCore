@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiJson } from './apiClient';
+import { getBackendOrigin } from './apiBridge';
 import { logout } from './authService';
 import { cloneVoice, deleteVoice, designVoice, getVoiceCloneStatus, listVoices, synthesizeSpeech, uploadSamples } from './voiceService';
 import { startIndustryWorkflow, verifyIndustryWorkflow, executeIndustryWorkflow, executeFinanceDeliveryWorkflow } from '../lib/industryWorkflowClient';
@@ -23,7 +24,7 @@ describe('confirmed frontend writes', () => {
     expect(await verifyIndustryWorkflow({ taskId, workbenchInput: { rows: [] } })).toEqual(verification);
     const controller = new AbortController(); expect(await executeFinanceDeliveryWorkflow({ taskId, financeInput: { period: '2026-09' }, signal: controller.signal })).toEqual(finance);
     const progress = vi.fn(); expect(await executeIndustryWorkflow({ taskId, prompt: 'Scoped task', routeText: 'Source', signal: controller.signal, onProgress: progress })).toMatchObject({ text: 'Verified result', status: 'delivered' }); expect(progress).toHaveBeenCalledTimes(2); expect(cancel).toHaveBeenCalledTimes(1); expect(stream.locked).toBe(false);
-    for (const [url, init] of fetcher.mock.calls) { expect(url).toMatch(/^http:\/\/127\.0\.0\.1:3000\/api\//); expect(init.credentials).toBe('include'); expect(new Headers(init.headers).get('Authorization')).toBe('Bearer synthetic-token'); expect(new Headers(init.headers).get('x-lumi-desktop-session')).toBe('synthetic-proof'); }
+    for (const [url, init] of fetcher.mock.calls) { expect(new URL(String(url)).origin).toBe(getBackendOrigin()); expect(new URL(String(url)).pathname).toMatch(/^\/api\//); expect(init.credentials).toBe('include'); expect(new Headers(init.headers).get('Authorization')).toBe('Bearer synthetic-token'); expect(new Headers(init.headers).get('x-lumi-desktop-session')).toBe('synthetic-proof'); }
     expect(fetcher.mock.calls[1][0]).toContain('/task%2Fa%3Fb/verify'); expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ resultText: '', filePaths: [], source: 'industry_client', workbenchInput: { rows: [] } }); expect(fetcher.mock.calls[2][1].signal).toBe(controller.signal);
     expect(JSON.parse(fetcher.mock.calls[3][1].body)).toEqual({ industryWorkflowTaskId: taskId, industryWorkflowSourceInput: 'Source', messages: [{ role: 'user', content: 'Scoped task' }] });
     controller.abort(); await expect(startIndustryWorkflow({ entryId: 'accounting' }, controller.signal)).rejects.toMatchObject({ name: 'AbortError' }); await expect(executeIndustryWorkflow({ taskId, prompt: 'Stopped', signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' }); expect(fetcher).toHaveBeenCalledTimes(4);
@@ -52,7 +53,7 @@ describe('confirmed frontend writes', () => {
     await getVoiceCloneStatus(payload.voiceId); await deleteVoice(payload.voiceId);
     const controller = new AbortController(); expect(await synthesizeSpeech('hello', 'voice', 'relay', 'model', controller.signal)).toBe(audio);
     for (const [url, init] of fetcher.mock.calls) {
-      expect(url).toMatch(/^http:\/\/127\.0\.0\.1:3000\/api\/voice\//); expect(init.credentials).toBe('include');
+      expect(new URL(String(url)).origin).toBe(getBackendOrigin()); expect(new URL(String(url)).pathname).toMatch(/^\/api\/voice\//); expect(init.credentials).toBe('include');
       expect(new Headers(init.headers).get('Authorization')).toBe('Bearer synthetic-token'); expect(new Headers(init.headers).get('x-lumi-desktop-session')).toBe('synthetic-proof');
     }
     expect(fetcher.mock.calls[0][1].body.getAll('samples')).toEqual([sample]); expect(new Headers(fetcher.mock.calls[0][1].headers).has('Content-Type')).toBe(false);

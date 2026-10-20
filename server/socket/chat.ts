@@ -22,7 +22,6 @@ import { executeChatModelAndDelivery } from './chat/phases/execute_chat_model_an
 
 export { normalizeChatHistoryRecord } from "./chat/history";
 export { buildChatAttachmentContext } from "./chat/attachments";
-export { buildClientSurfaceContinuationBridge } from "./chat/client_surface";
 export { buildSocketNativeRequestBinding } from './native_request_binding';
 export type { SocketNativeRequestBinding } from './native_request_binding';
 export type {

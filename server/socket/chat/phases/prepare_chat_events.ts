@@ -3,7 +3,7 @@ import { extendTurnBindings } from "../../../cognition/turn_bindings";
 import { createChatTerminalReply } from "../terminal_reply";
 import type { TurnResolution } from "../../../cognition/turn_resolution";
 import { flushDBOrThrow, readDatabaseTables } from "../../../../db_layer";
-import { collectChatArtifacts } from "../../../conversation/chat_artifacts";
+import { projectPublicArtifactPayload } from "../../../conversation/chat_artifacts";
 import { projectCustomerVisibleExecutionEvent } from "../../public_agent_event_projection";
 import { normalizeCompletionFeedbackForPersistence } from "../../../conversation/completion_feedback";
 import { sanitizeExecutionResponseForDelivery, sanitizeExecutionNotificationForDelivery } from "../../../cognition/execution_guard_recovery";
@@ -121,17 +121,19 @@ export async function prepareChatEvents(context: NonNullable<Awaited<ReturnType<
         : event === 'agent:error'
           ? sanitizeChatAgentErrorPayload(payload)
           : payload;
-      const publicPayload = projectCustomerVisibleExecutionEvent(event, sanitizedPayload, {
+      const projectedEvent = projectCustomerVisibleExecutionEvent(event, sanitizedPayload, {
         taskText: context.visibleUserText,
       });
+      const publicPayload = event === 'agent:response'
+        ? projectPublicArtifactPayload(projectedEvent, context.collectRequestTerminalRecords(), context.selectedConversationId,
+          { userId: context.uid, requestId: context.requestId, originalText: [context.visibleUserText] })
+        : projectedEvent;
       const completionFeedback = normalizeCompletionFeedbackForPersistence(publicPayload.completionFeedback);
       const boundedPublicPayload = { ...publicPayload };
       delete boundedPublicPayload.completionFeedback;
       return {
         ...boundedPublicPayload,
-        ...(event === 'agent:response'
-          ? { fileArtifacts: collectChatArtifacts(context.collectRequestTerminalRecords(), context.selectedConversationId) }
-          : {}),
+
         ...(event === 'agent:response' && context.latestMediaArtifactReceipt
           ? { artifactReceipt: context.latestMediaArtifactReceipt }
           : {}),

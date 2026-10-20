@@ -65,7 +65,7 @@ it('offers the 2D character without the retired 3D option and replaces the old c
 
 it('creates a blank person, and safely reuses the request ID after a failed attempt', async () => {
   const created = vi.fn(); mocks.create.mockRejectedValueOnce(new Error('save failed')).mockResolvedValueOnce(record);
-  render(<MemoryAvatarCreate locale="en" ownerId="owner-a" onCreated={created} onImport={vi.fn()} onLogin={vi.fn()} />);
+  render(<MemoryAvatarCreate locale="en" ownerId="owner-a" onCreated={created} onModeChange={vi.fn()} onLogin={vi.fn()} />);
   change('Name', 'New companion'); fireEvent.click(button('Create and enter'));
   await screen.findByRole('alert'); expect(created).not.toHaveBeenCalled();
   expect(button('Create and enter').disabled).toBe(false);
@@ -77,7 +77,7 @@ it('creates a blank person, and safely reuses the request ID after a failed atte
 
 it('ignores late creation from another owner and gives the new owner an empty, usable form', async () => {
   const gate = deferred<MemoryAvatar>(); mocks.create.mockReturnValueOnce(gate.promise).mockResolvedValue(record);
-  const created = vi.fn(); const props = { locale: 'en' as const, onCreated: created, onImport: vi.fn(), onLogin: vi.fn() };
+  const created = vi.fn(); const props = { locale: 'en' as const, onCreated: created, onModeChange: vi.fn(), onLogin: vi.fn() };
   const view = render(<MemoryAvatarCreate {...props} ownerId="owner-a" />);
   change('Name', 'Owner A'); fireEvent.click(button('Create and enter'));
   view.rerender(<MemoryAvatarCreate {...props} ownerId="owner-b" />);

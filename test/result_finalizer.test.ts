@@ -15,6 +15,24 @@ const verifiedDesktopReceipt = {
 };
 
 describe('Lumi result finalizer', () => {
+  it('accepts a current client-state read without requiring an unrequested UI mutation', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const { buildActionContract, hasCoreActionEvidence } = await import('../server/cognition/action_contract');
+    const taskText = '查看 Lumi 客户端当前界面状态，介绍当前页面和各个分区。只读取客户端状态，不做桌面控制，也不切换页面。';
+    const responseText = '当前在个人域的指挥中心。聊天、任务和创作入口都在客户端内。';
+    const record = { name: 'client_get_state', arguments: { detail: 'full' }, requestId: 'client-read', taskId: 'client-task',
+      result: JSON.stringify({ state: { activeTab: 'home', workDomain: 'personal' }, stateDigest: { clientStateAvailable: true, stateFresh: true } }),
+      terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'current scoped client state' } };
+    const input = { taskText, responseText, source: 'chat', requestId: 'client-read', taskId: 'client-task', toolRecords: [record], flow: { clientActionOnlyTurn: true, completionEvidenceNeeded: true } as any };
+    const result = finalizeLumiResponse(input);
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('指挥中心');
+    const contract = buildActionContract(taskText);
+    expect(contract.label).toBe('Verified Lumi client state');
+    expect(hasCoreActionEvidence(contract, [record], taskText)).toBe(true);
+    expect(hasCoreActionEvidence(contract, [], taskText)).toBe(false);
+  });
+
   it.each([true, false])('grounds model identity in current evidence (active receipt: %s)', async active => {
     const { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } = await import('../server/cognition/result_finalizer');
     const input = { taskText: '你现在是什么模型', responseText: '', source: 'chat', requestId: 'identity-current', taskId: 'identity-task',
@@ -461,7 +479,8 @@ describe('Lumi result finalizer', () => {
 
     expect(result.blocked).toBe(false);
     expect(result.reason).toContain('Grounded client diagnostic summary');
-    expect(result.text).toBe('刚刚已经完成自检。');
+    expect(result.text).toContain('自检完成');
+    expect(result.text).toContain('健康等级：ready');
     expect(result.reason).not.toContain('prior diagnostic run');
   });
 
@@ -1093,7 +1112,7 @@ describe('Lumi result finalizer', () => {
     expect(result.text).not.toBe('\u5df2\u6253\u5f00 AutoCAD\u3002');
   });
 
-  it('keeps model-authored chat wording unchanged when the success receipt is grounded', async () => {
+  it('reports the exact opened target from the grounded success receipt', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const responseText = '嗯，AutoCAD 已经替你打开了。';
     const result = finalizeLumiResponse({
@@ -1114,11 +1133,12 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(result.text).toBe(responseText);
+    expect(result.text).toContain('AutoCAD');
+    expect(result.text).toMatch(/已打开|已启动/u);
     expect(result.reason).not.toContain('Model-authored wording preserved');
   });
 
-  it('keeps a natural paraphrase without requiring every receipt detail to be repeated', async () => {
+  it('reports a verified launch from the exact target receipt', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const responseText = '搞定啦，记事本窗口已经在前台。';
     const result = finalizeLumiResponse({
@@ -1139,7 +1159,8 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(result.text).toBe(responseText);
+    expect(result.text).toContain('记事本');
+    expect(result.text).toMatch(/已打开|已启动/u);
   });
 
   it('keeps an exact desktop-open receipt successful even if the model hits its tool limit', async () => {
@@ -1202,7 +1223,6 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toContain('指挥中心');
     expect(result.text).toContain('已打开');
     expect(result.reason).toContain('verified state-diff receipt');
-    expect(result.reason).toContain('Structured evidence correction');
   });
 
   it('blocks a claimed client chat navigation when the current turn has no action receipt', async () => {
@@ -1585,7 +1605,7 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain('could not start that action');
+    expect(result.text).toMatch(/could not (?:start|complete)/i);
   });
 
   it('blocks a runtime-repair plan when no tool actually started', async () => {
@@ -1633,7 +1653,7 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain('could not start that action');
+    expect(result.text).toMatch(/could not (?:start|complete)/i);
     expect(result.reason).toContain('content-read/open/review');
   });
 
@@ -1655,7 +1675,7 @@ describe('Lumi result finalizer', () => {
     expect(result.blocked).toBe(true);
     expect(result.text).toContain('\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210');
     expect(result.text).toContain('\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\u7a97\u53e3');
-    expect(result.text).toContain('\u7a97\u53e3\u56de\u6267\u65f6\u8d85\u65f6');
+    expect(result.text).toContain('\u7b49\u5f85\u7ed3\u679c\u8d85\u65f6');
     expect(result.text).not.toContain('timed out');
     expect(result.text).not.toContain('\u56de\u590d\u58f0\u79f0');
     expect(result.text).not.toContain('\u76ee\u524d\u80fd\u786e\u8ba4\u7684\u6210\u529f\u6b65\u9aa4');
@@ -2124,7 +2144,8 @@ describe('Lumi result finalizer', () => {
     expect(result.blocked).toBe(true);
     expect(result.reason).toBe('Missing current-law verification gate for legal document.');
     expect(result.text).toContain('\u8fd8\u4e0d\u80fd\u6807\u8bb0\u4e3a\u5b8c\u6210\u6216\u6b63\u5f0f\u53ef\u7528');
-    expect(result.text).toContain('legal_generate_citation_verification_report');
+    expect(result.text).toContain('请先完成文书核验');
+    expect(result.text).not.toContain('legal_generate_citation_verification_report');
   });
 
   it('allows legal document completion after current-law verification passes', async () => {
@@ -2177,7 +2198,8 @@ describe('Lumi result finalizer', () => {
     expect(result.blocked).toBe(true);
     expect(result.reason).toBe('Missing legal reasoning chain evidence.');
     expect(result.text).toContain('\u4e09\u6bb5\u8bba\u63a8\u7406\u94fe');
-    expect(result.text).toContain('legal_case_reasoning_matrix');
+    expect(result.text).toContain('法律依据-事实证据-涵摄结论证据');
+    expect(result.text).not.toContain('legal_case_reasoning_matrix');
   });
 
   it('blocks legal delivery claims when the current-law gate failed', async () => {

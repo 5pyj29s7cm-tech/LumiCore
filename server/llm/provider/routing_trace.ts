@@ -1,13 +1,15 @@
 import { rememberFailedModelCandidates } from "../model_turn_state";
 import type { UserLLMSelectionMode } from "../user_preferences";
-import { modelRoutingErrorDigest, modelRoutingErrorReason, persistModelRoutingReceipt, type ModelRoutingTrace } from "../model_routing_receipts";
+import { modelAttemptCompletion, modelRoutingErrorDigest, modelRoutingErrorReason, persistModelRoutingReceipt, type ModelRoutingTrace } from "../model_routing_receipts";
 import type { ProviderOutboundMessagesEvidence } from "../outbound_message_evidence";
 import type { LLMCallConfig } from './contracts';
+import type { NormalizedLLMResponse } from '../../tools/types';
+import { ModelAttemptDeadlineError } from './deadlines';
 import { traceWithProviderOutboundEvidence } from './outbound_evidence';
 
 // ── LLM Call Router ──
 
-export function directRoutingTrace(config: LLMCallConfig, status: 'succeeded' | 'failed', error?: unknown): ModelRoutingTrace {
+export function directRoutingTrace(config: LLMCallConfig, status: 'succeeded' | 'failed', error?: unknown, completion?: Pick<NormalizedLLMResponse, 'finishReason' | 'usage'>): ModelRoutingTrace {
   const reason = status === 'failed' ? modelRoutingErrorReason(error) : '';
   return {
     requestedProvider: config.provider,
@@ -21,6 +23,7 @@ export function directRoutingTrace(config: LLMCallConfig, status: 'succeeded' | 
       model: config.model,
       status,
       ...(reason ? { reason, errorDigest: modelRoutingErrorDigest(error) } : {}),
+      ...modelAttemptCompletion(completion || (error instanceof ModelAttemptDeadlineError ? error : {})),
     }],
   };
 }

@@ -1,6 +1,6 @@
 import { cloneDatabaseValue } from '../server/db/snapshot_changes';
 import './helpers';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { initDatabase, readDB, writeDB } from '../db_layer';
 import {
   addMessage,
@@ -14,7 +14,13 @@ import {
   setConversationActionExecutionStatus,
 } from '../server/conversation/manager';
 import { getConversationActionStateFromLedger } from "../server/conversation/ledger/queries";
-import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
+import { genericExternalCommit, normalizeActionIntent } from '../server/cognition/normalized_action_intent';
+
+import { registerComputerUseTool } from '../server/tools/definitions/computer_use_tool';
+import { ToolRegistry } from '../server/tools/registry';
+
+const desktopBoundaryCalls = vi.hoisted(() => ({ loop: vi.fn() }));
+vi.mock('../server/agents/computer_use', () => ({ computerUseLoop: desktopBoundaryCalls.loop }));
 
 function durableActionState(conversationId: string, userId: string) {
   return getConversationActionStateFromLedger(readDB(), { conversationId, userId });
@@ -55,10 +61,17 @@ describe('conversation action continuation state', () => {
     expect(normalizeActionIntent(goal)).toMatchObject({ kind: 'workflow', sideEffectClass: 'local_write' });
     expect(durableActionState(conversation.id, userId)?.goal).toBe(goal);
   });
-  it('retains external-commit treatment for publishing a workflow to a public destination', () => {
+  it('refuses the same public workflow destinations at the selected desktop action boundary', async () => {
+    const registry = new ToolRegistry(); registerComputerUseTool(registry);
+    const desktopRelay = vi.fn();
+    desktopBoundaryCalls.loop.mockReset().mockRejectedValue(new Error('OFFLINE_DESKTOP_LOOP_SENTINEL'));
+    const context = { userId: 'external-boundary-offline', domain: 'personal', source: 'offline', authenticated: true, authRole: 'admin', localExecution: true, executionBoundary: 'trusted_local' as const, userConfirmed: true, currentTurnExecutionRequested: true, desktopRelay, llmGetters: { getDeepSeek: () => null, getGemini: () => null } };
     for (const text of ['发布工作流到 GitHub', '把工作流发布到官网', 'Publish workflow to GitHub']) {
-      expect(normalizeActionIntent(text)).toMatchObject({ kind: 'public_publish', sideEffectClass: 'external_commit' });
+      expect(genericExternalCommit(text)).toMatchObject({ kind: 'public_publish', sideEffectClass: 'external_commit' });
+      await expect(registry.execute('computer_use', { task: text }, { ...context, actionIntent: text })).rejects.toThrow('final external commit');
     }
+    expect(desktopBoundaryCalls.loop).not.toHaveBeenCalled();
+    expect(desktopRelay).not.toHaveBeenCalled();
   });
   it('hydrates a detailed workflow resumption from the ledger when the live pointer is absent', () => {
     const userId = `workflow-hydration-${Date.now()}`;

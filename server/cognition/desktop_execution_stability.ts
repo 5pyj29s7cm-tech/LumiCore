@@ -1,6 +1,6 @@
 import type { LumiCapabilityLane, LumiCapabilitySelection } from './capability_selection';
 import type { LumiTurnChannel, LumiTurnFlow } from './turn_flow';
-import type { CapabilityExecutionPlan } from './capability_execution_plan';
+import type { NormalizedActionIntent } from './normalized_action_intent';
 import {
   buildDesktopExecutionPlan,
   type DesktopExecutionPlan,
@@ -11,7 +11,8 @@ export interface DesktopExecutionStabilityPolicyInput {
   text: string;
   flow?: LumiTurnFlow;
   capabilitySelection: Pick<LumiCapabilitySelection, 'lane' | 'primary' | 'preferredTools'>;
-  capabilityExecutionPlan?: CapabilityExecutionPlan;
+  actionIntent?: NormalizedActionIntent;
+  taskId?: string;
 }
 
 export interface DesktopExecutionStabilityPolicy {
@@ -49,15 +50,10 @@ function inferReason(input: DesktopExecutionStabilityPolicyInput): string {
   return 'visible desktop/software control is selected';
 }
 
-function shouldApply(input: DesktopExecutionStabilityPolicyInput): boolean {
-  return VISIBLE_DESKTOP_LANES.has(input.capabilitySelection.lane)
-    || Boolean(input.flow?.workSurfaceRoute.directDesktop);
-}
-
 export function buildDesktopExecutionStabilityPolicy(
   input: DesktopExecutionStabilityPolicyInput,
 ): DesktopExecutionStabilityPolicy {
-  const applies = shouldApply(input);
+  const applies = VISIBLE_DESKTOP_LANES.has(input.capabilitySelection.lane);
   if (!applies) {
     return {
       applies: false,
@@ -116,8 +112,8 @@ export function buildDesktopExecutionStabilityPolicy(
   const executionPlan = buildDesktopExecutionPlan({
     text: input.text || input.flow?.routeText || '',
     lane,
-    capabilityExecutionPlan: input.capabilityExecutionPlan,
-    taskId: input.capabilityExecutionPlan?.taskId || taskId,
+    actionIntent: input.actionIntent,
+    taskId: input.taskId || taskId,
     recoveredCurrentAppEdit,
   });
 

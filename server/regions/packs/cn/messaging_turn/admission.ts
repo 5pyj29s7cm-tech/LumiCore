@@ -2,7 +2,6 @@ import { preparePlannedConversationExecution } from "../../../../conversation/pl
 import type { IncomingMessage } from "../../../../messaging/types";
 import { getMember } from "../../../../org/db";
 import { captureMessagingOrganization, isMessagingAuthorizationCurrent as isAcceptedMessagingAuthorizationCurrent } from "../../../../messaging/turn_authorization";
-import { requestsOrganizationScope } from "../../../../messaging/personal_org_scope";
 import { isRemoteConversationDismissalRequest } from "../../../../messaging/attachment_context";
 import { resolveUserTurn, type TurnResolution } from "../../../../cognition/turn_resolution";
 import { isPureOperationModeSwitchRequest, type OperationMode } from "../../../../cognition/operation_modes";
@@ -22,12 +21,15 @@ import { CN_TASK_EXECUTION_MESSAGES } from "../../../messages/task_execution_mes
 import { createConversationReceiptObserver } from "../../../../conversation/execution_receipt_archive";
 import type { OrganizationWorkExecution } from "../../../../org/work_routing";
 import { type MessagingRouteOptions, flushMessagingStateOrThrow, buildRemoteRuntimeEvidenceContext, type MessagingDesktopRelay } from "../messaging_finalization";
-import { remotePlatformLabel, getRequestText, buildRemoteTurnIntentText } from "../remote_materials";
+import { remotePlatformLabel, getRequestText, getDisplayText, buildRemoteTurnIntentText } from "../remote_materials";
 import { assertMessagingAuthorization, isMessagingAuthorizationCurrent, newerMessageSupersedesThisTurn, registerActiveMessageRouteController } from "../messaging_ingress_runtime";
 import { createMessagingReplyCommitter, conversationForMessagingTurn } from "../messaging_persistence";
 import { messagingPendingOffer, buildRemoteConversationHistory } from './history';
 import { remoteTurnPlanningData } from './remote_plan';
 import type { LumiExecutionPipeline } from '../../../../cognition/execution_pipeline';
+import { captureConversationNativeStageContext, retainConversationNativeStageContext } from '../../../../conversation/manager/execution_preparation';
+import type { ToolExecutionRecord } from '../../../../tools/types';
+import type { RemoteLegalNoticeStageReceipt } from '../legal_notice_intake';
 
 export async function prepareMessagingTurn(msg: IncomingMessage, options?: MessagingRouteOptions, preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null, acceptedTurn?: { resolution: TurnResolution; pendingAssistantOfferContext?: PendingAssistantOfferContext }, admittedController?: AbortController) {
 
@@ -35,6 +37,7 @@ export async function prepareMessagingTurn(msg: IncomingMessage, options?: Messa
   assertMessagingAuthorization(msg);
   const llm = options?.llmGetters;
   const requestText = getRequestText(msg);
+  const acceptedTranscriptText = getDisplayText(msg);
   const registry = options?.personalityRegistry;
   const isIdentityBound = Boolean(msg.boundUserId);
   const isOrganizationBound = Boolean(msg.boundUserId && msg.boundOrgId);
@@ -144,6 +147,7 @@ export async function prepareMessagingTurn(msg: IncomingMessage, options?: Messa
   }
   const planning = remoteTurnPlanningData({
     requestId,userText:requestText,acceptedResolution:turnResolution,
+    serverBoundCapability: msg.legalNoticeSelection?.execution,
     actionTaskState:conversation?.actionContinuationState,
     userId: effectiveUserId,
     text: routingText,
@@ -251,7 +255,6 @@ export async function prepareMessagingTurn(msg: IncomingMessage, options?: Messa
     execution: executionPlan, conversationId: isIdentityBound ? conversation?.id : undefined,
     userId: effectiveUserId, userText: requestText, requestId, userMessageId: msg.userMessageId || '',
     pendingConfirmation, bindConversationTurn: true,
-    additionalLedgerRequired: isOrganizationBound && requestsOrganizationScope(requestText),
   });
   if ('bindingFailure' in actionTaskExecution) {
     const staleText = actionTaskExecution.bindingFailure === 'busy'
@@ -259,6 +262,38 @@ export async function prepareMessagingTurn(msg: IncomingMessage, options?: Messa
       : CN_TASK_EXECUTION_MESSAGES.actionTurnStale;
     return { terminal: await ( await commitReply(staleText)), context: undefined };
   }
+  let nativeTaskBinding: Promise<void> | undefined;
+  const bindPreparedNativeTask = () => nativeTaskBinding ||= (async () => {
+    if (actionTaskExecution.state?.taskId) return;
+    assertMessagingAuthorization(msg);
+    if (!conversation || !actionTaskExecution.turnRowId || actionWasCancelled()) throw new Error('The native action lost its accepted turn.');
+    const prepared = preparePlannedConversationExecution({ execution: executionPlan, conversationId: conversation.id,
+      userId: effectiveUserId, userText: requestText, requestId, userMessageId: msg.userMessageId || '',
+      pendingConfirmation, bindConversationTurn: true, additionalLedgerRequired: true,
+      preparedTurnUpgrade: { turnRowId: actionTaskExecution.turnRowId, signal: actionAbortController.signal, transcriptText: acceptedTranscriptText },
+    });
+    if ('bindingFailure' in prepared || !prepared.state?.taskId) throw new Error('The native action could not bind its accepted task.');
+    Object.assign(actionTaskExecution, prepared);
+    await flushDBOrThrow();
+  })();
+  // A pending notice is source context, never this task's accepted root or an execution grant.
+  const stageContext = actionTaskExecution.state?.taskId && conversation
+    ? captureConversationNativeStageContext<{ receipt: RemoteLegalNoticeStageReceipt; content: string }>({
+        userId: effectiveUserId, conversationId: conversation.id, taskId: actionTaskExecution.state.taskId,
+        domain, orgId, selection: msg.legalNoticeSelection,
+      }) : { selection: msg.legalNoticeSelection, stage: undefined };
+  let remoteLegalNoticeSelection = stageContext.selection;
+  let nativeLegalStage = stageContext.stage;
+  const retainNativeLegalStage = async (value: { receipt: RemoteLegalNoticeStageReceipt; content: string }, records: ToolExecutionRecord[]) => {
+    const policySnapshot = retainConversationNativeStageContext({ userId: effectiveUserId,
+      conversationId: conversation?.id, taskId: actionTaskExecution.state?.taskId, requestId, domain, orgId,
+      selection: remoteLegalNoticeSelection, value, records,
+    });
+    nativeLegalStage = value;
+    if (!conversation || !actionTaskExecution.state?.taskId) return;
+    actionTaskExecution.state.policySnapshot = policySnapshot;
+    await flushDBOrThrow();
+  };
   const receiptObserver = conversation && actionTaskExecution.state?.taskId
     ? createConversationReceiptObserver({
         userId: effectiveUserId, conversationId: conversation.id,
@@ -294,6 +329,11 @@ export async function prepareMessagingTurn(msg: IncomingMessage, options?: Messa
   return { terminal: undefined, context: {
     isIdentityBound,
     actionTaskExecution,
+    bindPreparedNativeTask,
+    personalityToolPolicy: personality?.toolPolicy,
+    remoteLegalNoticeSelection,
+    get nativeLegalStage() { return nativeLegalStage; },
+    retainNativeLegalStage,
     requestId,
     actionAbortController,
     receiptObserver,

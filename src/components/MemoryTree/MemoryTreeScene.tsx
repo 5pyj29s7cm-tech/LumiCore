@@ -139,7 +139,7 @@ function SceneContent({
       <StarfieldBackground hue={35} />
 
       {/* Orbital rings — main visual structure */}
-      <OrbitalRings hue={100} syncRate={1} />
+      <OrbitalRings syncRate={1} />
 
       {/* Floating memory nodes — time on Y, tier on radius */}
       <MemoryNodes
@@ -149,7 +149,7 @@ function SceneContent({
       />
 
       {/* Ambient particles */}
-      <ParticleField nodes={nodes} curves={curves} hue={100} />
+      <ParticleField curves={curves} hue={100} />
 
       {/* Post-processing */}
       <EffectComposer>

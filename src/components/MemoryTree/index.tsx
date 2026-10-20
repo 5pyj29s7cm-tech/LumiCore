@@ -4,7 +4,6 @@ export type {
   TreeNode3D,
   BranchCurve3D,
   RingDef,
-  TimelineState,
   MemoryNode,
   FileEntry,
   ConversationEntry,

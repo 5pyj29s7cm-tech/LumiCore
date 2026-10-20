@@ -50,10 +50,10 @@ export const GENERATION_MODEL_OPTIONS: Record<string, string[]> = {
   minimaxVideo: ['MiniMax-Hailuo-2.3', 'MiniMax-Hailuo-02'],
   siliconflowVideo: ['Wan-AI/Wan2.2-T2V-A14B', 'Wan-AI/Wan2.1-T2V-14B-720P', 'Wan-AI/Wan2.1-T2V-14B-720P-Turbo'],
   openaiVideo: ['sora-2', 'sora-2-pro'],
-  relayImage: [LUMI_OFFICIAL_DEFAULT_MODELS.image_generation],
-  relayImageEdit: [LUMI_OFFICIAL_DEFAULT_MODELS.image_edit],
-  relayVideo: [LUMI_OFFICIAL_DEFAULT_MODELS.video_generation],
-  relayImageToVideo: [LUMI_OFFICIAL_DEFAULT_MODELS.image_to_video],
+  relayImage: [],
+  relayImageEdit: [],
+  relayVideo: [],
+  relayImageToVideo: [],
 };
 
 export const IMAGE_GENERATION_PROVIDERS: Record<string, { label: string; models: string[] }> = {

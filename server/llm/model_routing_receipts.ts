@@ -1,4 +1,7 @@
 import crypto from 'node:crypto';
+import { ModelAttemptDeadlineError } from './provider/deadlines';
+import { completionMetadata } from './provider/response';
+import type { NormalizedLLMResponse } from '../tools/types';
 import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import type { ProviderRuntimeObservation } from './provider_health';
@@ -12,7 +15,7 @@ import {
 
 export type ModelRouteAttemptStatus = 'succeeded' | 'failed' | 'skipped';
 
-export interface ModelRouteAttempt {
+export interface ModelRouteAttempt extends Pick<NormalizedLLMResponse, 'finishReason' | 'usage'> {
   provider: string;
   model: string;
   status: ModelRouteAttemptStatus;
@@ -71,6 +74,7 @@ function compact(value: unknown, limit = 200): string {
 }
 
 export function modelRoutingErrorReason(error: unknown): string {
+  if (error instanceof ModelAttemptDeadlineError && error.completedEmpty) return error.finishReason === 'length' ? 'output_limit' : 'empty_response';
   if ((error as any)?.code === 'MODEL_TOOL_ARGUMENTS_INVALID') return 'invalid_tool_arguments';
   if ((error as any)?.name === 'LocalModelContextBudgetError') return 'local_context_budget_exceeded';
   const message = compact((error as any)?.message || error, 500).toLowerCase();
@@ -91,6 +95,14 @@ export function modelRoutingErrorReason(error: unknown): string {
 export function modelRoutingErrorDigest(error: unknown): string {
   const message = compact((error as any)?.message || error, 1000);
   return message ? crypto.createHash('sha256').update(message).digest('hex') : '';
+}
+
+export function modelAttemptCompletion(value: Pick<NormalizedLLMResponse, 'finishReason' | 'usage'> = {}) {
+  const usage = value.usage;
+  return { ...completionMetadata(value.finishReason),
+    ...(usage && [usage.promptTokens, usage.completionTokens, usage.totalTokens].every(count => Number.isSafeInteger(count) && count >= 0)
+      ? { usage: { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, totalTokens: usage.totalTokens } } : {}),
+  };
 }
 
 function normalizeAttempt(value: ModelRouteAttempt): ModelRouteAttempt {
@@ -120,6 +132,7 @@ function normalizeAttempt(value: ModelRouteAttempt): ModelRouteAttempt {
     ...(value.durationMs !== undefined ? { durationMs: Math.max(0, Math.trunc(Number(value.durationMs) || 0)) } : {}),
     ...(value.visibleOutputCommitted !== undefined ? { visibleOutputCommitted: value.visibleOutputCommitted === true } : {}),
     ...(outboundMessagesEvidence ? { outboundMessagesEvidence } : {}),
+    ...modelAttemptCompletion(value),
   };
 }
 

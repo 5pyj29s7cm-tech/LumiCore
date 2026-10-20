@@ -7,11 +7,11 @@ import { normalizeTaskCompletionFeedback } from '../src/components/workflowTypes
 import { describe, expect, it } from 'vitest';
 import {
   evaluateAutonomousTaskOutcome,
-  finalizeAutonomousTaskOutcomeForDelivery,
   isSuccessfulAutonomousToolRecord,
   projectAutonomousCompletionFeedback,
   projectAutonomousCustomerMessage,
 } from '../server/autonomy/task_executor';
+import { finalizeLumiResponseForDelivery } from '../server/cognition/response_delivery';
 import { isVerifiedAutonomousHistoryItem } from '../server/socket/ambient';
 import { finalizeScheduledDelivery } from '../server/scheduler';
 import {
@@ -85,11 +85,10 @@ describe('remaining output bypass closure', () => {
 
   it('removes internal finalizer protocol from autonomous user-visible feedback', async () => {
     const internal = 'No successful current-turn tool execution was recorded for that execution-status claim.';
-    const delivery = await finalizeAutonomousTaskOutcomeForDelivery(
-      'Open WPS and create a document.',
-      { text: internal, blocked: true, reason: internal },
-      [],
-    );
+    const { finalization: delivery } = await finalizeLumiResponseForDelivery({
+      taskText: 'Open WPS and create a document.', responseText: internal, source: 'autonomous',
+      initialFinalization: { text: internal, blocked: true, reason: internal }, allowToolUse: false, toolRecords: [],
+    });
 
     expect(delivery).toMatchObject({
       blocked: true,

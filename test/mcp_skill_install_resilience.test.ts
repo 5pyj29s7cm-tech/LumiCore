@@ -302,7 +302,9 @@ describe('MCP skill install resilience', () => {
     expect(connect).toHaveBeenCalledWith('stale_server', expect.any(Object));
     expect(tools).toEqual([]);
     expect(manager.getRoutableServers()).toEqual([]);
-    expect(manager.getServerHealth().stale_server.status).toBe('disconnected');
+    expect(manager.getServerHealth().stale_server.status).toBe('restarting');
+    expect(manager.getServerHealth().stale_server.lastError).toBe('synthetic live discovery unavailable');
+    await manager.disconnectAll();
   });
 
   it('does not trust cached tools from an unsigned local Skill runtime', async () => {
@@ -753,7 +755,10 @@ describe('MCP skill install resilience', () => {
   });
 
   it('removes atomic staging when dependency preparation fails', async () => {
-    const execMock = makeExec((_command, _options, callback) => callback(new Error('registry unavailable'), '', 'registry unavailable'));
+    const execMock = makeExec((command, _options, callback) => {
+      expect(command).toContain('--package-lock=false');
+      callback(new Error('registry unavailable'), '', 'registry unavailable');
+    });
     const { MCPClientManager } = await importClientWithExec(execMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
     const source = path.join(tempHome, 'dependency-failure-source');
@@ -1438,4 +1443,47 @@ describe('MCP connection owner regressions', () => {
     expect(close).toHaveBeenCalledTimes(2);
     expect(manager.getConnectedServers()).toEqual([]);
   });
+  it('reports rejected launch policy and missing keys instead of unexplained disconnection', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    manager.saveConfig({ mutable: { enabled: true, source: 'external', command: 'npx', args: ['-y', 'mutable-package'] }, keyless: { enabled: true, source: 'external', command: 'node', requiresApiKey: true } });
+    const connect = vi.spyOn(manager as any, 'ensureServerConnected');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await manager.connectAll()).toEqual([]);
+    expect(connect).not.toHaveBeenCalled();
+    expect(manager.getServerHealth()).toMatchObject({ mutable: { status: 'configuration_required', lastError: expect.stringContaining('Online npx package execution') }, keyless: { status: 'configuration_required', lastError: expect.stringContaining('Required API key') } });
+  });
+
+  it('records external discovery failure and clears its stale error after successful recovery', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    manager.saveConfig({ external: { enabled: true, source: 'external', transport: 'http', url: 'https://example.invalid/mcp' } });
+    vi.spyOn(manager as any, 'ensureServerConnected').mockRejectedValue(new Error('external discovery failed'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    await manager.connectAll();
+    expect(manager.getServerHealth().external).toMatchObject({ status: 'restarting', lastError: 'external discovery failed' });
+    (manager as any).health.recordConnected('external');
+    expect(manager.getServerHealth().external.lastError).toBeUndefined();
+    await manager.disconnectAll();
+  });
+
+  it('preserves dependency failure when Windows locks staging cleanup', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(new Error('registry unavailable'), '', 'registry unavailable'));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const source = path.join(tempHome, 'locked-cleanup-source');
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'locked-cleanup', dependencies: { 'lumi-audit-unavailable-dependency': '1.0.0' } }));
+    const cleanup = vi.spyOn(fs.promises, 'rm').mockRejectedValueOnce(new Error('EPERM: staging locked'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(manager.installSkillValidated('locked-cleanup', source)).rejects.toThrow('registry unavailable');
+    expect(cleanup).toHaveBeenCalledWith(expect.stringContaining('.staging-locked-cleanup-'), expect.objectContaining({ maxRetries: 3 }));
+    expect(manager.getConfig()).not.toHaveProperty('locked-cleanup');
+    expect(fs.existsSync(path.join(skillsDir, 'locked-cleanup'))).toBe(false);
+  });
+
 });

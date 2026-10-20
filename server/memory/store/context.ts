@@ -15,7 +15,7 @@ export function formatMemoriesForContext(
   const lines: string[] = [
     '## Retrieved memory evidence',
     'When quoting a recalled identifier, marker, path, code or exact location, copy its characters verbatim. Do not decorate, translate, insert spaces, or invent a variant. If uncertain, say so.',
-    'Each item below is a recalled candidate from an earlier source, not part of the current user message and not unquestionable truth. The current turn and same-conversation evidence take priority.',
+    'Recalled candidates are fallible; current user evidence takes priority. recorded is the memory storage date, not the event date. Never infer the first dialogue or relationship duration from the oldest recalled item; use retained conversation history.',
     'Memory confidence describes the stored extraction, not whether a current name, code, person, customer, project, or task is the same entity. Every recalled entity binding starts unconfirmed. A shared word, exact token, name fragment, code prefix, or semantic similarity is retrieval evidence only; never transfer attributes, status, plans, or actions until the user or same-conversation history explicitly establishes the identity. Ask one short clarification when that binding matters.',
     'Owner statements prove that the owner previously said something; owner observations are inferences that may be wrong; shared context is not proof of an owner trait; Lumi narrative describes Lumi and must never be used as evidence about the owner.',
   ];
@@ -71,13 +71,8 @@ export function formatMemoriesForContext(
 
   // Output ungrouped leaves (no parent branch)
   const orphans = byParent.get(null) || [];
-  if (orphans.length > 0) {
-    for (const m of orphans) {
-      // Filter out branches from the root display
-      if (m.nodeType !== 'branch') {
-        lines.push(`- [${evidenceLabel(m)}] [${provenanceLabel(m)}] ${m.content}`);
-      }
-    }
+  for (const m of orphans) {
+    lines.push(`- [${evidenceLabel(m)}] [${provenanceLabel(m)}] ${m.content}`);
   }
 
   return lines.join('\n');

@@ -1,10 +1,11 @@
-import { listPersistedAutonomousTasks, type AutonomousTask } from '../autonomy/task_queue';
+import { listScopedConversationTaskDiagnostics } from '../conversation/history_repository';
+import { listPersistedAutonomousTasks } from '../autonomy/task_queue';
 import { projectAutonomousTaskFinalization } from '../autonomy/task_finalization';
 import type { DurableTaskRecoveryState } from './durable_task_recovery';
 
 export interface DurableTaskDiagnosticItem {
   taskId: string;
-  runtime: 'autonomous';
+  runtime: 'autonomous' | 'conversation';
   status: string;
   attempt: number;
   recoveryCount: number;
@@ -14,6 +15,9 @@ export interface DurableTaskDiagnosticItem {
 }
 
 export interface DurableTaskHealthSnapshot {
+  available: boolean;
+  diagnostics: string[];
+  paused: number;
   active: number;
   retryScheduled: number;
   blocked: number;
@@ -42,8 +46,8 @@ function toItem(task: any, runtime: DurableTaskDiagnosticItem['runtime']): Durab
     recoveryCount: Number(task.recoveryCount) || 0,
     ...(task.nextAttemptAt ? { nextAttemptAt: compact(task.nextAttemptAt, 80) } : {}),
     ...(diagnosis?.failureClass ? { failureClass: diagnosis.failureClass } : {}),
-    ...((recovery?.blockedReason || task.error)
-      ? { blocker: compact(recovery?.blockedReason || task.error) }
+    ...((recovery?.blockedReason || task.blocker || task.error)
+      ? { blocker: compact(recovery?.blockedReason || task.blocker || task.error) }
       : {}),
   };
 }
@@ -52,23 +56,24 @@ export function getDurableTaskHealthSnapshot(
   userId: string,
   scope: { domain?: string; orgId?: string } = {},
 ): DurableTaskHealthSnapshot {
-  let tasks: AutonomousTask[];
-  try {
-    tasks = scope.domain === 'work' && scope.orgId ? [] : listPersistedAutonomousTasks(userId);
-  } catch {
-    return {
-      active: 0,
-      retryScheduled: 0,
-      blocked: 0,
-      failed: 0,
-      recent: [],
-      safeAutomaticRecovery: ['reprobe_runtime_health'],
-      forbiddenAutomaticRecovery: ['repeat_unknown_external_commit', 'bypass_confirmation', 'edit_runtime_code'],
-    };
+  const diagnostics: string[] = [];
+  const items: DurableTaskDiagnosticItem[] = [];
+  const domain = scope.domain === 'work' ? 'work' : 'personal';
+  const orgId = domain === 'work' ? String(scope.orgId || '') : '';
+  if (domain === 'work' && !orgId) diagnostics.push('invalid_work_scope');
+  else {
+    if (domain === 'personal') try {
+      items.push(...listPersistedAutonomousTasks(userId).map(task => toItem(projectAutonomousTaskFinalization(task), 'autonomous')));
+    } catch { diagnostics.push('autonomous_tasks_unavailable'); }
+    try {
+      items.push(...listScopedConversationTaskDiagnostics(userId, domain, orgId).map(task => toItem(task, 'conversation')));
+    } catch { diagnostics.push('conversation_tasks_unavailable'); }
   }
-  const items = tasks.map(task => toItem(projectAutonomousTaskFinalization(task), 'autonomous'));
   return {
-    active: items.filter(item => ['pending', 'queued', 'running', 'pausing', 'paused'].includes(item.status)).length,
+    available: diagnostics.length === 0,
+    diagnostics,
+    paused: items.filter(item => item.status === 'paused').length,
+    active: items.filter(item => ['pending', 'queued', 'running', 'executing', 'waiting_confirmation', 'pausing'].includes(item.status)).length,
     retryScheduled: items.filter(item => Boolean(item.nextAttemptAt) && ['pending', 'queued'].includes(item.status)).length,
     blocked: items.filter(item => item.status === 'blocked').length,
     failed: items.filter(item => item.status === 'failed').length,

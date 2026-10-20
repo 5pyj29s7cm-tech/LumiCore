@@ -1,6 +1,7 @@
 import './helpers';
 import fs from 'fs';
 import path from 'path';
+import sharp from 'sharp';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { initDatabase } from '../db_layer';
 import { saveKeys } from '../server/config/keys';
@@ -8,6 +9,7 @@ import { getGeneratedOutputDir } from '../server/config/data_path';
 import { upsertUserPreferredGenerationModels } from '../server/llm/generation_preferences';
 import { registerVideoTools } from '../server/tools/definitions/video_tools';
 import { ToolRegistry } from '../server/tools/registry';
+import { buildActionContract } from '../server/cognition/action_contract';
 import type { ToolContext } from '../server/tools/types';
 import { VALID_MP4 as MINIMAL_MP4, VALID_WEBM as MINIMAL_WEBM } from './fixtures/synthetic_video';
 
@@ -20,6 +22,25 @@ function jsonResponse(body: any, status = 200): Response {
     status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+// Supply the HTTP catalog response while exercising the production parser and admission guard.
+// providerFetch still counts only provider generation/poll/content requests in the original assertions.
+const TEST_OFFICIAL_MODEL_CATALOG = { data: [
+  { id: 'huawei_maas/Wan2.2-T2V-A14B', capability: 'video_generation' },
+  { id: 'aliyun/Wan2.2-T2V-A14B', capability: 'video_generation' },
+  { id: 'huawei_maas/Wan2.2-I2V-A14B', capability: 'image_to_video' },
+  { id: 'aliyun/Wan2.2-I2V-A14B', capability: 'image_to_video' },
+  { id: 'aliyun/wan3.0-video', capabilities: ['video_generation', 'image_to_video'] },
+  { id: 'aliyun/wan3.0-video-prime', capabilities: ['video_generation', 'image_to_video'] },
+] };
+function stubVideoFetch(providerFetch: any, catalog = TEST_OFFICIAL_MODEL_CATALOG, status = 200) {
+  const transport = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> => {
+    if (String(input) === 'https://official.example.test/v1/models') return jsonResponse(catalog, status);
+    return providerFetch(input, init);
+  });
+  vi.stubGlobal('fetch', transport);
+  return transport;
 }
 
 const OFFICIAL_T2V_MODEL = 'huawei_maas/Wan2.2-T2V-A14B';
@@ -85,9 +106,23 @@ async function runVideo(
 }
 
 describe('video generation model routing', () => {
+  it.each(['修改刚才生成的视频，把背景换成雪景', 'Edit the generated video and make the lighting warmer.'])('does not replace an existing-video edit with paid generation: %s', async taskText => {
+    const fetchMock = vi.fn(); stubVideoFetch( fetchMock);
+    const contract = buildActionContract(taskText);
+    expect(contract.mediaGeneration).toMatchObject({ toolName: 'generate_video', sourceVideoRequired: true });
+    await expect(runVideo('video-edit-user', {}, { actionIntent: taskText, acceptedActionContract: { taskText, contract } }))
+      .rejects.toThrow('本次未提交重生成任务');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it('rejects reference video arguments instead of dropping the input', async () => {
+    const fetchMock = vi.fn(); stubVideoFetch( fetchMock);
+    await expect(runVideo('video-edit-reference-user', { reference_video: 'https://example.test/original.mp4' }))
+      .rejects.toThrow('无法直接修改已有成片');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   it('rejects an official-only request after a preference change without calling another service', async () => {
     upsertUserPreferredGenerationModels('official-only-video', { video: { provider: 'qwen' } });
-    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = vi.fn(); stubVideoFetch( fetchMock);
     await expect(runVideo('official-only-video', { officialOnly: true })).rejects.toThrow(/requires Lumi Official API/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -120,7 +155,7 @@ describe('video generation model routing', () => {
       .mockResolvedValueOnce(response({ output: { task_id: 'qwen-task' } }))
       .mockResolvedValueOnce(response({ output: { task_status: 'SUCCEEDED', video_url: 'https://8.8.8.8/qwen.mp4' } }))
       .mockResolvedValueOnce(mediaResponse(MINIMAL_MP4, 'video/mp4'));
-    vi.stubGlobal('fetch', fetchMock);
+    stubVideoFetch( fetchMock);
     const progress: string[] = [];
 
     let result: any;
@@ -167,7 +202,7 @@ describe('video generation model routing', () => {
       .mockResolvedValueOnce(response({ output: { task_id: 'qwen-invalid-task' } }))
       .mockResolvedValueOnce(response({ output: { task_status: 'SUCCEEDED', video_url: 'https://8.8.8.8/not-video.mp4' } }))
       .mockResolvedValueOnce(mediaResponse(Buffer.from('<html>not a video</html>'), 'text/html'));
-    vi.stubGlobal('fetch', fetchMock);
+    stubVideoFetch( fetchMock);
 
     await expect(runVideo(userId)).rejects.toThrow('container validation failed');
     expect(generatedFiles()).toEqual(before);
@@ -186,7 +221,7 @@ describe('video generation model routing', () => {
       controller.abort(new DOMException('cancelled by test', 'AbortError'));
       return response({ output: { task_id: 'qwen-cancel-task' } });
     });
-    vi.stubGlobal('fetch', fetchMock);
+    stubVideoFetch( fetchMock);
 
     await expect(runVideo(userId, {}, {
       executionSignal: controller.signal,
@@ -217,7 +252,7 @@ describe('video generation model routing', () => {
       .mockResolvedValueOnce(response({ status: 'Success', file_id: 'minimax-file' }))
       .mockResolvedValueOnce(response({ file: { download_url: 'https://8.8.8.8/minimax.mp4' } }))
       .mockResolvedValueOnce(mediaResponse(MINIMAL_MP4, 'video/mp4'));
-    vi.stubGlobal('fetch', fetchMock);
+    stubVideoFetch( fetchMock);
 
     const result = await runVideo('video-minimax-user', { duration: 6, resolution: '1080P' });
 
@@ -249,7 +284,7 @@ describe('video generation model routing', () => {
       .mockResolvedValueOnce(response({ requestId: 'siliconflow-task' }))
       .mockResolvedValueOnce(response({ status: 'Succeed', results: { videos: [{ url: 'https://8.8.8.8/siliconflow.mp4' }] } }))
       .mockResolvedValueOnce(mediaResponse(MINIMAL_MP4, 'video/mp4'));
-    vi.stubGlobal('fetch', fetchMock);
+    stubVideoFetch( fetchMock);
 
     const result = await runVideo('video-siliconflow-user', { size: '960*960' });
 
@@ -271,7 +306,7 @@ describe('video generation model routing', () => {
       .mockResolvedValueOnce(response({ id: 'openai-video', status: 'queued' }))
       .mockResolvedValueOnce(response({ id: 'openai-video', status: 'completed' }))
       .mockResolvedValueOnce(mediaResponse(MINIMAL_MP4, 'video/mp4'));
-    vi.stubGlobal('fetch', fetchMock);
+    stubVideoFetch( fetchMock);
 
     const result = await runVideo('video-openai-user', { duration: 8, size: '1280*720' });
 
@@ -299,7 +334,7 @@ describe('video generation model routing', () => {
       .mockResolvedValueOnce(response({ id: 'openai-cancel-video', status: 'queued' }))
       .mockResolvedValueOnce(response({ id: 'openai-cancel-video', status: 'completed' }))
       .mockResolvedValueOnce(mediaResponse(MINIMAL_MP4, 'video/mp4'));
-    vi.stubGlobal('fetch', fetchMock);
+    stubVideoFetch( fetchMock);
     const fsyncSpy = vi.spyOn(fs, 'fsyncSync').mockImplementationOnce(() => {
       controller.abort(new DOMException('cancelled during atomic publication', 'AbortError'));
     });
@@ -322,7 +357,7 @@ describe('video generation model routing', () => {
     const fetchMock = vi.fn(async (..._request: Parameters<typeof fetch>): Promise<Response> => jsonResponse({
       video_base64: `data:video/mp4;base64,${MINIMAL_MP4.toString('base64')}`,
     }));
-    vi.stubGlobal('fetch', fetchMock);
+    stubVideoFetch( fetchMock);
 
     let result: any;
     try {
@@ -364,7 +399,7 @@ describe('video generation model routing', () => {
     const fetchMock = vi.fn(async (..._request: Parameters<typeof fetch>): Promise<Response> => jsonResponse({
       video_base64: `data:video/webm;base64,${MINIMAL_WEBM.toString('base64')}`,
     }));
-    vi.stubGlobal('fetch', fetchMock);
+    stubVideoFetch( fetchMock);
 
     let result: any;
     try {
@@ -392,6 +427,27 @@ describe('video generation model routing', () => {
     }
   });
 
+  it('keeps an accepted official video polling beyond 120 responses within the registry budget', async () => {
+    const userId = 'video-official-long-running-user';
+    configureOfficialVideoModels(userId);
+    let polls = 0;
+    const fetchMock = vi.fn(async (url: any): Promise<Response> => {
+      if (String(url).endsWith('/videos/generations')) return jsonResponse({ id: 'long-running-video', status: 'queued' });
+      if (String(url).endsWith('/content')) return mediaResponse(MINIMAL_MP4, 'video/mp4');
+      return jsonResponse({ id: 'long-running-video', status: ++polls > 120 ? 'completed' : 'processing' });
+    });
+    stubVideoFetch( fetchMock);
+    let result: any;
+    try {
+      result = await runVideo(userId, { duration: 5 });
+      expect(polls).toBe(121);
+      expect(result).toMatchObject({ verified: true, taskId: 'long-running-video' });
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/videos/generations'))).toHaveLength(1);
+    } finally {
+      removeGeneratedVideo(result);
+    }
+  });
+
   it('downloads and atomically publishes an official async content response', async () => {
     const userId = 'video-official-content-user';
     configureOfficialVideoModels(userId);
@@ -399,7 +455,7 @@ describe('video generation model routing', () => {
       .mockResolvedValueOnce(jsonResponse({ id: 'official-content-task', status: 'queued' }))
       .mockResolvedValueOnce(jsonResponse({ id: 'official-content-task', status: 'completed' }))
       .mockResolvedValueOnce(mediaResponse(MINIMAL_WEBM, 'video/webm'));
-    vi.stubGlobal('fetch', fetchMock);
+    stubVideoFetch( fetchMock);
 
     let result: any;
     try {
@@ -425,11 +481,13 @@ describe('video generation model routing', () => {
     configureOfficialVideoModels(userId);
     const before = generatedFiles();
     const invalidBytes = Buffer.from('<!doctype html><title>not video</title>');
-    vi.stubGlobal('fetch', vi.fn(async (..._request: Parameters<typeof fetch>): Promise<Response> => jsonResponse({
+    stubVideoFetch( vi.fn(async (..._request: Parameters<typeof fetch>): Promise<Response> => jsonResponse({
       video_base64: `data:video/mp4;base64,${invalidBytes.toString('base64')}`,
     })));
 
-    await expect(runVideo(userId)).rejects.toThrow('container validation failed');
+    const incomplete = await runVideo(userId);
+    expect(incomplete).toMatchObject({ status: 'unknown', verified: false, recoveryTool: 'get_video_generation_status' });
+    expect(incomplete).not.toHaveProperty('outputPath');
     expect(generatedFiles()).toEqual(before);
   });
 
@@ -444,7 +502,7 @@ describe('video generation model routing', () => {
     const referencePath = path.join(process.env.LUMI_DATA_DIR!, 'official-i2v-mode-guard.png');
     fs.writeFileSync(referencePath, VALID_PNG_BYTES);
     const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
+    stubVideoFetch( fetchMock);
 
     try {
       await expect(runVideo(userId, {
@@ -459,16 +517,77 @@ describe('video generation model routing', () => {
   it('rejects invalid Wan final duration or size before submitting a paid generation', async () => {
     const user = 'wan-spec-admission'; configureOfficialVideoModels(user);
     process.env.RELAY_VIDEO_MODEL = 'aliyun/Wan2.2-T2V-A14B';
-    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = vi.fn(); stubVideoFetch( fetchMock);
     await expect(runVideo(user, { duration: 121, size: '1920x1080' })).rejects.toThrow(/1 至 120/);
     await expect(runVideo(user, { duration: 5, size: '1280x720' })).rejects.toThrow(/supported size/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+  it.each(['aliyun/wan3.0-video', 'aliyun/wan3.0-video-prime'])('forwards Wan3 native duration and each quality without stitching or upscaling: %s', async model => {
+    const user = 'wan3-quality-' + model; configureOfficialVideoModels(user);
+    process.env.RELAY_VIDEO_MODEL = model; process.env.RELAY_IMAGE_TO_VIDEO_MODEL = model;
+    const referencePath = path.join(process.env.LUMI_DATA_DIR!, 'wan3-quality.png');
+    fs.writeFileSync(referencePath, VALID_PNG_BYTES);
+    const fetchMock = vi.fn(async (..._request: Parameters<typeof fetch>): Promise<Response> => jsonResponse({ video_base64: MINIMAL_MP4.toString('base64') })); stubVideoFetch( fetchMock);
+    try {
+      for (const size of ['1080x1920', '720x1280', '480x832']) {
+        let result: any;
+        try {
+          result = await runVideo(user, { first_frame_image: referencePath, duration: 15, size });
+          expect(JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body))).toMatchObject({ model, size, duration: 15, image: expect.any(String), extra_body: { parameters: { duration: 15, resolution: size.startsWith('1080') ? '1080P' : size.startsWith('720') ? '720P' : '480P', prompt_extend: false, ratio: 'adaptive' } } });
+          expect(result.requestedSettings).toEqual({ size, duration: 15 });
+          expect(result.composition).toBeUndefined(); expect(result.sizeAdaptation).toBeUndefined();
+          expect(fs.readFileSync(result.outputPath)).toEqual(MINIMAL_MP4);
+        } finally { removeGeneratedVideo(result); }
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      let result: any;
+      try {
+        result = await runVideo(user, { duration: 30, size: '1920x1080' });
+        expect(JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body))).toMatchObject({ model, size: '1920x1080', duration: 30 });
+        expect(result.generationMode).toBe('text_to_video'); expect(result.composition).toBeUndefined();
+      } finally { removeGeneratedVideo(result); }
+      try {
+        result = await runVideo(user);
+        expect(JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body))).toMatchObject({ model, size: '1920x1080', duration: 5 });
+        expect(result.requestedSettings).toEqual({ size: '1920x1080', duration: 5 });
+      } finally { removeGeneratedVideo(result); }
+    } finally { fs.rmSync(referencePath, { force: true }); }
+  });
+  it.each(['json', 'multipart'])('preserves both image edges and forwards native controls in %s requests', async format => {
+    const user = 'wan3-reference-' + format; configureOfficialVideoModels(user);
+    process.env.RELAY_IMAGE_TO_VIDEO_MODEL = 'aliyun/wan3.0-video'; process.env.RELAY_VIDEO_REQUEST_FORMAT = format;
+    const reference = await sharp(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128" fill="white"/><rect width="8" height="128" fill="red"/><rect x="120" width="8" height="128" fill="blue"/></svg>')).png().toBuffer();
+    const prompt = 'Animate this exact poster, keeping the entire title and product unchanged.';
+    const fetchMock = vi.fn(async (..._request: Parameters<typeof fetch>): Promise<Response> => jsonResponse({ video_base64: MINIMAL_MP4.toString('base64') })); stubVideoFetch( fetchMock);
+    let result: any;
+    try {
+      result = await runVideo(user, { prompt, first_frame_image: 'data:image/png;base64,' + reference.toString('base64'), duration: 15, size: '480x832', prompt_extend: true, seed: 42 });
+      const body = fetchMock.mock.calls[0][1]?.body;
+      const payload = format === 'json' ? JSON.parse(String(body)) : Object.fromEntries((body as FormData).entries());
+      expect(payload.prompt).toBe(prompt);
+      const parameters = format === 'json' ? payload.extra_body.parameters : JSON.parse(payload.extra_body).parameters;
+      expect(parameters).toEqual({ duration: 15, resolution: '480P', prompt_extend: true, ratio: 'adaptive', seed: 42 });
+      const image = String(payload.image || payload.input_reference);
+      const decoded = await sharp(Buffer.from(image.split(',')[1], 'base64')).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      expect([decoded.info.width, decoded.info.height]).toEqual([480, 832]);
+      const at = (x: number, y: number) => Array.from(decoded.data.subarray((y * 480 + x) * 3, (y * 480 + x) * 3 + 3));
+      expect(at(1, 416)).toEqual([255, 0, 0]); expect(at(478, 416)).toEqual([0, 0, 255]);
+      expect(at(240, 0)).toEqual([0, 0, 0]); expect(at(240, 831)).toEqual([0, 0, 0]);
+    } finally { removeGeneratedVideo(result); }
+  });
+  it.each([1, 31, 60, 120, 5.5])('rejects unsupported Wan3 duration %s before a provider request', async duration => {
+    const user = 'wan3-invalid-spec-' + duration; configureOfficialVideoModels(user); process.env.RELAY_VIDEO_MODEL = 'aliyun/wan3.0-video';
+    const fetchMock = vi.fn(); stubVideoFetch( fetchMock);
+    await expect(runVideo(user, { duration, size: '1920x1080' })).rejects.toThrow(/2 to 30 seconds/);
+    await expect(runVideo(user, { duration: 15, size: '3840x2160' })).rejects.toThrow(/supported size/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('applies current Wan defaults to both the provider request and its measured receipt', async () => {
     const user = 'wan-spec-defaults'; configureOfficialVideoModels(user);
     process.env.RELAY_VIDEO_MODEL = 'aliyun/Wan2.2-T2V-A14B';
     const fetchMock = vi.fn(async (..._request: Parameters<typeof fetch>): Promise<Response> => jsonResponse({ video_base64: MINIMAL_MP4.toString('base64') }));
-    vi.stubGlobal('fetch', fetchMock); let result: any;
+    stubVideoFetch( fetchMock); let result: any;
     try {
       result = await runVideo(user);
       expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ size: '1920x1080', duration: 5 });
@@ -476,4 +595,23 @@ describe('video generation model routing', () => {
     } finally { removeGeneratedVideo(result); }
   });
 
+});
+
+// Catalog failures must remain fail-closed before touching a paid provider endpoint.
+it.each([
+  { name: 'empty', data: [], status: 200 },
+  { name: 'disabled', data: [{ id: OFFICIAL_T2V_MODEL, capability: 'video_generation', enabled: false }], status: 200 },
+  { name: 'wrong role', data: [{ id: OFFICIAL_T2V_MODEL, capability: 'image_generation' }], status: 200 },
+  { name: 'unavailable', data: [], status: 503 },
+])('blocks $name official catalogs without paying or publishing artifacts', async fixture => {
+  const user = 'catalog-negative-' + fixture.name; configureOfficialVideoModels(user);
+  const provider = vi.fn(async () => { throw new Error('A paid submission must never be reached'); });
+  const transport = stubVideoFetch(provider, { data: fixture.data } as any, fixture.status);
+  const before = generatedFiles();
+  await expect(runVideo(user)).rejects.toThrow(/本次未提交视频生成请求/);
+  expect(provider).not.toHaveBeenCalled();
+  expect(transport).toHaveBeenCalledTimes(1);
+  expect(String(transport.mock.calls[0][0])).toBe('https://official.example.test/v1/models');
+  expect(transport.mock.calls[0][1]?.method).toBe('GET');
+  expect(generatedFiles()).toEqual(before);
 });

@@ -1,7 +1,8 @@
 import { ToolRegistry } from '../registry';
 import { computerUseLoop } from '../../agents/computer_use';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
-import { normalizeActionIntent } from '../../cognition/normalized_action_intent';
+import { getClientStateForScope } from '../../client/self/state';
+import { genericExternalCommit, normalizeActionIntent } from '../../cognition/normalized_action_intent';
 import { resolveDesktopApplicationIdentity } from '../../desktop/execution_plan';
 
 const DEFAULT_COMPUTER_USE_STEPS = 12;
@@ -42,7 +43,7 @@ async function computerUse(args: Record<string, any>, context?: any): Promise<st
   if (!task.trim()) {
     throw new Error('The "task" parameter is required. Describe what you want Lumi to do on the desktop.');
   }
-  const normalizedIntent = normalizeActionIntent(task);
+  const normalizedIntent = genericExternalCommit(task) || normalizeActionIntent(task);
   if (normalizedIntent.sideEffectClass === 'external_commit') {
     throw new Error('Vision computer control cannot perform the final external commit. Use the dedicated provider/application capability with immutable confirmation and receipt verification.');
   }
@@ -59,7 +60,10 @@ async function computerUse(args: Record<string, any>, context?: any): Promise<st
 
   activeDesktopControlLeases.add(leaseKey);
   try {
+    const state = getClientStateForScope(context.userId || 'anonymous', { domain: context.domain || 'personal', orgId: context.orgId });
     return await computerUseLoop(task, {
+      desktopPresentationManaged: context.desktopPresentationManaged === true
+        || Boolean(state?.updatedAt && Date.now() - state.updatedAt <= 30_000 && state.surfaces?.wallpaperMode),
       userId: context.userId,
       desktopRelay: context.desktopRelay,
       llmGetters: context.llmGetters,

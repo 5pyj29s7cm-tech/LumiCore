@@ -300,8 +300,8 @@ describe('finalized output paths', () => {
     const scheduler = source('server/scheduler.ts') + source('server/scheduler/delivery_finalization.ts') + source('server/scheduler/builtins/personal_memory.ts') + source('server/scheduler/builtins/growth.ts');
 
     expect(autonomous).toContain('evaluateAutonomousTaskOutcome');
-    expect(autonomous).toContain('finalizeAutonomousTaskOutcomeForDelivery');
-    expect(autonomous).toContain('finalizeExecutionForOutboundDelivery');
+    expect(source('server/cognition/prepared_turn.ts')).toContain('await finalizeLumiResponseForDelivery({');
+    expect(autonomous).not.toContain('finalizeAutonomousTaskOutcomeForDelivery');
     expect(autonomous).toContain('toolRecords,');
     expect(autonomous).toContain('if (!outcome.verified || !terminalAcceptance?.accepted)');
     expect(autonomous).toContain('verified: true');

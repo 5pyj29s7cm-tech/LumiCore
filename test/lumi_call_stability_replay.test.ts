@@ -83,7 +83,13 @@ describe('Lumi field-call stability replay', () => {
 
   it('reports desktop relay timeouts as actionable Chinese instead of an opaque failure', () => {
     expect(formatCnToolFailureDetail('Desktop tool "desktop_open" timed out (60s)'))
-      .toContain('窗口回执时超时');
+      .toContain('等待结果超时');
+  });
+
+  it('does not describe video generation timeout as a desktop operation', () => {
+    const message = formatCnToolFailureDetail('Lumi Official API video generation timed out. Task: queued-video');
+    expect(message).toContain('尚不能确认服务端是否仍在处理');
+    expect(message).not.toMatch(/桌面|窗口|重复打开|queued-video/u);
   });
 
   it.each([

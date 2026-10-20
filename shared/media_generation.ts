@@ -9,6 +9,7 @@ export type MediaGenerationOperation = typeof MEDIA_GENERATION_OPERATIONS[number
 
 export type StructuredMediaRequest = {
   officialOnly?: true;
+  model?: string;
   operation: MediaGenerationOperation;
   prompt: string;
   size: string;
@@ -58,7 +59,8 @@ function normalizeReference(value: unknown): string {
 /**
  * Fail-closed parser for the media workbench envelope. The client can choose
  * among four product operations, but it can never choose an arbitrary tool,
- * provider, model, endpoint, or unbounded argument through this payload.
+ * provider, endpoint, or unbounded argument through this payload. A video
+ * model id is bounded here and validated against its role catalog by preflight.
  * An optional official-only restriction narrows allowed routing; it never
  * changes model preferences or grants another provider permission to run.
  */
@@ -94,14 +96,17 @@ export function normalizeStructuredMediaRequest(value: unknown): StructuredMedia
     };
   }
 
+  const model = candidate.model === undefined ? '' : typeof candidate.model === 'string' ? candidate.model.trim() : '';
+  if (candidate.model !== undefined && (!model || model.length > 200)) return null;
+  const modelSelection = model ? { model } : {};
   const requestedDuration = candidate.duration === undefined ? 6 : Number(candidate.duration);
   if (!Number.isInteger(requestedDuration) || requestedDuration < 1 || requestedDuration > 120) return null;
   const duration = requestedDuration;
-  if (operation === 'text_to_video') return { operation, prompt, size, duration, ...restriction };
+  if (operation === 'text_to_video') return { operation, prompt, size, duration, ...restriction, ...modelSelection };
 
   const referenceImage = normalizeReference(candidate.referenceImage);
   if (!referenceImage) return null;
-  return { operation, prompt, size, duration, referenceImage, ...restriction };
+  return { operation, prompt, size, duration, referenceImage, ...restriction, ...modelSelection };
 }
 
 export function structuredMediaToolCall(request: StructuredMediaRequest): StructuredMediaToolCall {
@@ -130,6 +135,7 @@ export function structuredMediaToolCall(request: StructuredMediaRequest): Struct
       prompt: request.prompt,
       size: request.size,
       duration: request.duration || 6,
+      ...(request.model ? { model: request.model } : {}),
       ...restriction,
       ...(request.operation === 'image_to_video'
         ? { first_frame_image: request.referenceImage }
@@ -153,4 +159,11 @@ export function structuredMediaRoutingEnvelope(request: StructuredMediaRequest):
     `Required tool: ${toolCall.name}`,
     'The runtime owns the exact structured arguments and will verify the returned media artifact.',
   ].join('\n');
+}
+
+/** Unknown external outcomes must be reconciled through the existing task resume route. */
+export function mediaGenerationNeedsStatusCheck(status: string, detail = ''): boolean {
+  return status === 'cancelled' || (status === 'error'
+    // i18n-allow: Recognition of existing localized unknown-outcome receipts, never displayed as copy.
+    && /outcome is unknown|external commit.{0,60}unknown|(?:先核对.{0,80}(?:服务端|任务).{0,40}状态)|不能确认.{0,60}服务端|丢失.{0,40}任务状态|may still continue and incur charges|lost.{0,40}task state/i.test(detail));
 }

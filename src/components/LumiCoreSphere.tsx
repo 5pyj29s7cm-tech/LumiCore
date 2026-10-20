@@ -1,23 +1,19 @@
 import type { CSSProperties } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
-import { CheckCircle2, CircleAlert, Loader2, Pause } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { LumiCoreOrb } from './LumiCoreOrb';
 
-export type LumiCoreTaskState = 'queued' | 'working' | 'paused' | 'attention' | 'completed';
+export type LumiCoreTaskState = 'queued' | 'working';
 
 export interface LumiCoreOrbitTask {
   id: string;
   title: string;
   state: LumiCoreTaskState;
-  active: boolean;
 }
 
 const TASK_COLORS: Record<LumiCoreTaskState, string> = {
   queued: '#94a3b8',
   working: '#67e8f9',
-  paused: '#fbbf24',
-  attention: '#fb7185',
-  completed: '#6ee7b7',
 };
 
 /**
@@ -50,9 +46,6 @@ const COSMOS_STARS = [
 
 function TaskIcon({ state }: { state: LumiCoreTaskState }) {
   if (state === 'working') return <Loader2 size={11} className="animate-spin" />;
-  if (state === 'paused') return <Pause size={11} />;
-  if (state === 'attention') return <CircleAlert size={11} />;
-  if (state === 'completed') return <CheckCircle2 size={11} />;
   return <span className="h-1.5 w-1.5 rounded-full bg-current" />;
 }
 
@@ -63,21 +56,20 @@ export function LumiCoreSphere({
   labels,
 }: {
   tasks: LumiCoreOrbitTask[];
-  state: 'ready' | 'working' | 'attention';
+  state: 'ready' | 'working';
   loading?: boolean;
   labels: {
     aria: string;
     lumiCore: string;
     ready: string;
     working: string;
-    attention: string;
     noTasks: string;
   };
 }) {
   const reducedMotion = useReducedMotion();
-  const activeTasks = tasks.filter(task => task.active).slice(0, 8);
-  const stateLabel = state === 'working' ? labels.working : state === 'attention' ? labels.attention : labels.ready;
-  const coreColor = state === 'attention' ? '#fb7185' : state === 'working' ? '#67e8f9' : '#a78bfa';
+  const activeTasks = tasks.slice(0, 8);
+  const stateLabel = state === 'working' ? labels.working : labels.ready;
+  const coreColor = state === 'working' ? '#67e8f9' : '#a78bfa';
   const motionEnabled = reducedMotion !== true;
 
   return (
@@ -173,7 +165,7 @@ export function LumiCoreSphere({
         >
           <div className="lumi-core-command-field__core-aura" style={{ background: `radial-gradient(circle, ${coreColor}2e 0%, ${coreColor}08 42%, transparent 72%)` }} />
           <LumiCoreOrb
-            sentiment={state === 'attention' ? 'excited' : state === 'working' ? 'focused' : 'default'}
+            sentiment={state === 'working' ? 'focused' : 'default'}
             callState={state === 'working' ? 'thinking' : 'idle'}
             className="h-full w-full"
           />

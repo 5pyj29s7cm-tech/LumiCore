@@ -5,7 +5,7 @@ import { systemService, type WallpaperPresentation, type WallpaperWorkspace } fr
 import type { useDesktopRuntimeAndPreferences } from './use_desktop_runtime_and_preferences';
 
 export function useDesktopWallpaper(previousBindings: ReturnType<typeof useDesktopRuntimeAndPreferences>) {
-  const { wallpaperAutomationTimerRef, wallpaperPresentationRef, inferWallpaperWorkspace, wallpaperWorkspaceRef, isWallpaperModeRef, syncWallpaperModeView, wallpaperNativeTransitionDepthRef, chatOpen, isDesktopWidgetMode, wallpaperBeforeAutomationRef, addNotification, t, isWallpaperMode, setWallpaperWorkPromptVisible, socket, setMcpActivities } = previousBindings;
+  const { wallpaperAutomationTimerRef, wallpaperPresentationRef, inferWallpaperWorkspace, wallpaperWorkspaceRef, isWallpaperModeRef, syncWallpaperModeView, wallpaperNativeTransitionDepthRef, chatOpen, isDesktopWidgetMode, wallpaperBeforeAutomationRef, addNotification, t, isWallpaperMode, socket, setMcpActivities } = previousBindings;
 
 
   const applyWallpaperMode = useCallback(async (
@@ -33,7 +33,6 @@ export function useDesktopWallpaper(previousBindings: ReturnType<typeof useDeskt
       presentation: wallpaperPresentationRef.current,
       workspace: wallpaperWorkspaceRef.current,
     };
-    syncWallpaperModeView(enabled, requestedPresentation, requestedWorkspace);
     let resolvedState = {
       enabled,
       presentation: requestedPresentation,
@@ -48,6 +47,9 @@ export function useDesktopWallpaper(previousBindings: ReturnType<typeof useDeskt
         requestedWorkspace,
       );
       resolvedState = actual;
+      if (!options.silent && wallpaperBeforeAutomationRef.current) {
+        wallpaperBeforeAutomationRef.current = actual;
+      }
       syncWallpaperModeView(actual.enabled, actual.presentation, actual.workspace);
       await systemService.setAlwaysOnTop(
         actual.enabled
@@ -196,15 +198,6 @@ export function useDesktopWallpaper(previousBindings: ReturnType<typeof useDeskt
     void applyWallpaperMode(!isWallpaperMode, { presentation: 'workbench' });
   }, [applyWallpaperMode, isWallpaperMode]);
 
-  const dismissWallpaperWorkPrompt = useCallback(() => {
-    setWallpaperWorkPromptVisible(false);
-  }, [setWallpaperWorkPromptVisible]);
-
-  const enterWallpaperFromWorkPrompt = useCallback(() => {
-    dismissWallpaperWorkPrompt();
-    void applyWallpaperMode(true, { presentation: 'workbench' });
-  }, [applyWallpaperMode, dismissWallpaperWorkPrompt]);
-
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{
@@ -223,7 +216,11 @@ export function useDesktopWallpaper(previousBindings: ReturnType<typeof useDeskt
               presentation: wallpaperPresentationRef.current,
               workspace: wallpaperWorkspaceRef.current,
             };
-          } else if (!enabled && wallpaperBeforeAutomationRef.current) {
+          } else if (!enabled) {
+            if (!wallpaperBeforeAutomationRef.current) {
+              detail.respond?.({ enabled: isWallpaperModeRef.current, presentation: wallpaperPresentationRef.current, workspace: wallpaperWorkspaceRef.current });
+              return;
+            }
             const restore = wallpaperBeforeAutomationRef.current;
             if (wallpaperAutomationTimerRef.current) {
               clearTimeout(wallpaperAutomationTimerRef.current);
@@ -281,6 +278,6 @@ export function useDesktopWallpaper(previousBindings: ReturnType<typeof useDeskt
     return () => { socket.off('mcp:activity', handler); };
   }, [socket, addNotification, setMcpActivities]);
   return {
-    ...previousBindings, toggleWallpaperMode, applyWallpaperMode, enterWallpaperFromWorkPrompt, dismissWallpaperWorkPrompt
+    ...previousBindings, toggleWallpaperMode, applyWallpaperMode
   } as const;
 }

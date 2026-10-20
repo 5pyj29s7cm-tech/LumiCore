@@ -200,7 +200,11 @@ migrateLegacySkills() {
       }
       return destDir;
     } finally {
-      fs.rmSync(stagingDir, { recursive: true, force: true });
+      try {
+        await fs.promises.rm(stagingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      } catch (error: any) {
+        console.warn(`[MCP] Pending staging cleanup for ${path.basename(stagingDir)}: ${error?.message || error}`);
+      }
     }
   }
 

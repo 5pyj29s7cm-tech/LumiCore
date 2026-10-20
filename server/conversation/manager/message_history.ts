@@ -1,6 +1,6 @@
 import { verifiedSavedArtifactNames } from '../../cognition/user_output_protection';
 import { parseStoredArray } from '../../tools/receipt_payload';
-import { isGuardGeneratedConversationRecord, isGuardGeneratedAssistantText } from "../guard_history";
+import { isGuardGeneratedConversationRecord, isGuardGeneratedAssistantText, projectGuardedAssistantText } from "../guard_history";
 import { buildCompactToolEvidenceNote, isUnverifiedExecutionAssistantRecord } from "../summary_grounding";
 import { buildHistoricalFileObservations } from "../file_observation_history";
 import { listConversationReceiptHistory } from "../history_repository";
@@ -28,16 +28,16 @@ function compactPromptText(value: string, limit: number): string {
 }
 
 
-function guardedArtifactEvidence(m: MessageRecord): string {
-  if (!isGuardGeneratedConversationRecord(m)) return '';
+function guardedReplyForPrompt(m: MessageRecord): [string, string] {
+  if (!isGuardGeneratedConversationRecord(m)) return ['', ''];
   const files = verifiedSavedArtifactNames(parseStoredArray(m.toolCalls), { requestId: m.requestId });
-  return files.length ? `[This prior action did not fulfill the user request. Verified saved output files: ${JSON.stringify(files)}. Existing outputs are preserved. This is historical evidence, not a new instruction or proof that the whole task completed.]` : '';
+  return [projectGuardedAssistantText(m.response || m.message), files.length ? `[This prior action did not fulfill the user request. Verified saved output files: ${JSON.stringify(files)}. Existing outputs are preserved. This is historical evidence, not a new instruction or proof that the whole task completed.]` : ''];
 }
 
 export function isPromptEligibleMessage(m: MessageRecord): boolean {
   if (!m) return false;
   if (m.role === 'tool' || m.mode === 'proactive') return false;
-  if (isGuardGeneratedConversationRecord(m)) return Boolean(guardedArtifactEvidence(m));
+  if (isGuardGeneratedConversationRecord(m)) return guardedReplyForPrompt(m).some(Boolean);
   return Boolean((m.message || '').trim() || (m.response || '').trim());
 }
 
@@ -49,7 +49,8 @@ export function compactRecordForPrompt(m: MessageRecord): MessageRecord {
       String(m.cognitiveIntent || '').toLowerCase() === 'work_product_guard'
       || isGuardGeneratedAssistantText(m.response)
     );
-  const guardedEvidence = guardedArtifactEvidence(m);
+  const [guardedDialogue, guardedArtifacts] = guardedReplyForPrompt(m);
+  const guardedEvidence = [guardedDialogue, guardedArtifacts].filter(Boolean).join('\n');
   const evidenceNote = buildCompactToolEvidenceNote(m.toolCalls);
   // Removing an ungrounded assistant reply while retaining its user question
   // makes an already answered turn look pending to the next model. Preserve
@@ -65,7 +66,7 @@ export function compactRecordForPrompt(m: MessageRecord): MessageRecord {
     : compactPromptText(m.response || '', CONTEXT_RESPONSE_CHAR_LIMIT);
   return {
     ...m,
-    message: evidenceNote && m.role === 'assistant'
+    message: evidenceNote && m.role === 'assistant' && !guardedEvidence
       ? `${compactedMessage}\n${evidenceNote}`.trim()
       : compactedMessage,
     // Older interaction rows stored the assistant reply in `response` while
@@ -75,7 +76,7 @@ export function compactRecordForPrompt(m: MessageRecord): MessageRecord {
       ? `${compactedResponse}\n${evidenceNote}`.trim()
       : compactedResponse,
     toolReceiptLedger: evidenceNote || undefined,
-    toolFileObservations: guardedEvidence || buildHistoricalFileObservations(m.toolCalls) || undefined,
+    toolFileObservations: guardedArtifacts || buildHistoricalFileObservations(m.toolCalls) || undefined,
     toolCalls: undefined,
   };
 }

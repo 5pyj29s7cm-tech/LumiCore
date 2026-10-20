@@ -1,3 +1,8 @@
+import type { IncomingMessage } from '../../messaging/types';
+import type { ToolExecutionRecord } from '../../tools/types';
+import { getCanonicalToolExecutionInputDigests } from '../../tools/canonical_execution_record';
+import { toolRecordSucceeded } from '../../tools/receipt_payload';
+import { parseObject } from '../ledger/serialization';
 import type { ActiveTaskMessageResolution } from "../../cognition/task_concurrency";
 import { bindConversationActionTurnTask, getConversationActionTurn } from "../action_turn_ledger";
 import { readDatabaseTables, commitDatabaseTables } from "../../../db_layer";
@@ -8,7 +13,7 @@ import { syncConversationActionTaskLedger } from "../ledger/task_lifecycle";
 import { getConversationActionStateByTaskId } from "../ledger/queries";
 import type { ToolPolicy } from "../../personality/types";
 import type { CapabilityExecutionPlan } from "../../cognition/capability_execution_plan";
-import { releaseManagerActionTurnLease } from "../action_execution_runtime";
+import { releaseManagerActionTurnLease, type PreparedConversationTurnUpgrade } from "../action_execution_runtime";
 import { detachUnrelatedConversationActionState, hydrateConversationActionState } from "../action_state_hydration";
 import { bindConversationActionExecutionTurnInDb } from './turn_binding';
 
@@ -44,6 +49,7 @@ export function prepareConversationActionExecution(input: {
   /** Exact already-persisted user transcript row owning this serial turn. */
   userMessageId: string;
   toolPolicy: ToolPolicy;
+  preparedTurnUpgrade?: PreparedConversationTurnUpgrade;
   forceResume?: boolean;
   forceNewTask?: boolean;
   forceTask?: boolean;
@@ -78,6 +84,7 @@ export function prepareConversationActionExecution(input: {
     userText: input.userText,
     requestId: input.requestId,
     userMessageId: input.userMessageId,
+    preparedTurnUpgrade: input.preparedTurnUpgrade,
     // A fresh executable turn still needs to see the prior unfinished state
     // long enough for prepareConversationActionTaskState to record an exact
     // supersession edge. Detachment is only for a genuinely conversational
@@ -127,7 +134,7 @@ export function prepareConversationActionExecution(input: {
       userId: input.userId,
       requestId: input.requestId,
       taskId: prepared.state.taskId,
-    });
+    }, input.preparedTurnUpgrade ? db : undefined);
     if (taskBinding.bound === false) {
       releaseManagerActionTurnLease({
         conversationId: input.conversationId,
@@ -207,4 +214,68 @@ export function persistConversationExecutionPlan(input: {
   if (!task) return false;
   commitDatabaseTables(db);
   return true;
+}
+
+interface ConversationNativeStageValue {
+  receipt: { taskId?: string; requestId?: string; orgId?: string; pendingId?: string };
+  content: string;
+}
+interface ConversationNativeStageOwner {
+  userId: string; conversationId: string; taskId: string; domain: string; orgId: string;
+}
+export function captureConversationNativeStageContext<TStage extends ConversationNativeStageValue>(
+  input: ConversationNativeStageOwner & { selection?: IncomingMessage['legalNoticeSelection'] },
+): { selection?: IncomingMessage['legalNoticeSelection']; stage?: TStage } {
+  let selection = input.selection;
+  let stage: TStage | undefined;
+  const db = readDatabaseTables(['conversationActionTasks']);
+  const task = db.conversationActionTasks.find(row => row.id === input.taskId
+    && row.userId === input.userId && row.conversationId === input.conversationId
+    && (row.domain || 'personal') === input.domain && (row.orgId || '') === input.orgId);
+  if (task) {
+    const stored = parseObject(task.context);
+    if (selection) {
+      task.context = JSON.stringify({ ...stored, remoteLegalNoticeSelection: selection });
+      commitDatabaseTables(db);
+    } else if (stored.remoteLegalNoticeSelection?.target?.orgId === input.orgId) selection = stored.remoteLegalNoticeSelection;
+    if (stored.nativeLegalStage?.receipt?.taskId === task.id
+      && (stored.nativeLegalStage.receipt.orgId || '') === input.orgId) stage = stored.nativeLegalStage;
+  }
+  return { selection, stage };
+}
+
+export function retainConversationNativeStageContext(input: Omit<ConversationNativeStageOwner, 'conversationId' | 'taskId'> & {
+  conversationId?: string; taskId?: string; requestId: string; value: ConversationNativeStageValue; selection?: IncomingMessage['legalNoticeSelection'];
+  records: readonly ToolExecutionRecord[];
+}) {
+  const stage = input.value.receipt;
+  if (stage.requestId !== input.requestId || stage.taskId !== input.taskId
+    || (stage.orgId || '') !== input.orgId) throw new Error('The native stage lost its accepted task owner.');
+  if (!input.conversationId || !stage.taskId) return;
+  const db = readDatabaseTables(['conversationActionTasks', 'conversations']);
+  const task = db.conversationActionTasks.find(row => row.id === stage.taskId && row.userId === input.userId
+    && row.conversationId === input.conversationId && (row.domain || 'personal') === input.domain && (row.orgId || '') === input.orgId);
+  const liveConversation = db.conversations.find(row => row.id === input.conversationId && row.userId === input.userId
+    && (row.domain || 'personal') === input.domain && (row.orgId || '') === input.orgId);
+  const stored = parseObject(task?.context);
+  const state = liveConversation?.actionContinuationState;
+  if (!task || !state || state.taskId !== task.id || state.activeRequestId !== input.requestId
+    || stored.actionState?.activeRequestId !== input.requestId) throw new Error('The native stage lost its current request lease.');
+  const binding = input.selection?.execution;
+  const consumed = binding && stage.pendingId === input.selection?.pendingId
+    && binding.sourceId === stage.pendingId && binding.scope.userId === input.userId
+    && binding.scope.domain === input.domain && binding.scope.orgId === input.orgId
+    && input.selection.target.orgId === input.orgId
+    && input.records.some(record => record.taskId === task.id && record.requestId === input.requestId
+      && record.name === binding.toolName && toolRecordSucceeded(record)
+      && getCanonicalToolExecutionInputDigests(record)?.argumentsDigest === binding.argumentsDigest);
+  const policySnapshot = consumed && state.policySnapshot?.allowedTools?.length
+    ? { ...state.policySnapshot, forbiddenTools: Array.from(new Set([
+        ...(state.policySnapshot.forbiddenTools || []), binding.toolName,
+      ])) } : state.policySnapshot;
+  task.context = JSON.stringify({ ...stored, nativeLegalStage: input.value,
+    actionState: { ...stored.actionState, policySnapshot } });
+  liveConversation.actionContinuationState = { ...state, policySnapshot };
+  commitDatabaseTables(db);
+  return policySnapshot;
 }

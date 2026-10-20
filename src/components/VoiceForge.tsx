@@ -200,7 +200,7 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
                : 'border-amber-400/20 bg-amber-400/10 text-amber-100/75'
            }`}>
              <div className="font-black uppercase tracking-widest">{ui('当前语音服务', 'Current voice service')} · {providerName}</div>
-             <div className="mt-1 opacity-75">
+             <div className="mt-1">
                {!providerConfigured
                  ? ui('该服务尚未配置完成。', 'This service is not configured yet.')
                  : cloneSupported

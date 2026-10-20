@@ -9,7 +9,7 @@ import { buildMemoryAvatarContext } from "../../memory_avatar/store";
 import { retrieveChunks } from "../../agents/rag";
 import { runRetrievalRequest } from "../../llm/retrieval_request";
 
-import { searchKnowledgeBase } from "../../org/kb";
+import { retrieveConversationKnowledge } from "../../knowledge/conversation_retrieval";
 
 import { scopedEmotionalStateKey } from "../scope";
 
@@ -66,25 +66,22 @@ export async function retrieveChatContext(context: retrieveChatContextInput) {
         context.turnAuthorization.assertCurrent();
         for (const chunk of chunks) {
           const content = (chunk as any).content;
-          if (content && !ragChunks.includes(content)) ragChunks.push(content);
+          const citedContent = content ? `${chunk.citation}\n${content}` : '';
+          if (citedContent && !ragChunks.includes(citedContent)) ragChunks.push(citedContent);
           if (ragChunks.length >= 5) break;
         }
         if (ragChunks.length >= 5) break;
       }
 
       context.markTurnTiming('ragEnd');
-      // Org: search company KB when in work domain
+      // The edition knowledge adapter owns both organization and local case sources.
       let kbContext: string | undefined;
-      if (context.resolvedDomain === 'work' && context.resolvedOrgId) {
+      if (!context.isMemoryAvatar) {
         try {
-          const kbResults = await runRetrievalRequest(signal => searchKnowledgeBase(context.resolvedOrgId, context.text, { limit: 3, userId: context.uid, signal }), context.abortController.signal);
+          kbContext = await runRetrievalRequest(signal => retrieveConversationKnowledge({
+            userId: context.uid, domain: context.resolvedDomain, orgId: context.resolvedOrgId,
+          }, context.text, { signal }), context.abortController.signal);
           context.turnAuthorization.assertCurrent();
-          if (kbResults.length > 0) {
-            kbContext = kbResults
-              .map(r => `[${r.title}] ${r.chunk}`)
-              .join('\n');
-            console.log('[ChatHandler] KB search results:', kbResults.length, 'articles found');
-          }
         } catch (err: any) {
           context.abortController.signal.throwIfAborted();
           console.warn('[ChatHandler] KB search failed:', err.message);

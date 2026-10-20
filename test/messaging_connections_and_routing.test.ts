@@ -1,3 +1,4 @@
+import { observedMessagingOptions } from './organization_model_observer_fixture';
 import { consumeFixtureBindingCode } from './messaging_binding_fixture';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import sqlite3 from 'sqlite3';
@@ -35,13 +36,13 @@ async function captureRoutedMessage(message: IncomingMessage): Promise<IncomingM
     const accepted = routes.dispatchIncomingMessage(message, {
       enrich: async value => value,
       reply: async () => undefined,
-    }, {
+    }, observedMessagingOptions({
       onMessage: async value => {
         clearTimeout(timeout);
         resolve(value);
         return { platform: value.platform, text: 'ok' };
       },
-    });
+    }));
     if (!accepted) {
       clearTimeout(timeout);
       reject(new Error('message was rejected as a duplicate'));
@@ -665,14 +666,14 @@ describe('messaging long connections and organization routing', () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({ status: 'completed', completionSource: 'tool_receipt' });
     const taskContext = JSON.parse(tasks[0].context);
-    expect(taskContext.executionPlan).toMatchObject({
-      taskId: tasks[0].id,
-      decisionAuthority: 'semantic_planner',
-      scriptAuthority: 'adapter_only',
-    });
+    expect(taskContext.executionPlan).toBeUndefined();
     const receipts = (afterExecution.conversationActionReceipts || [])
       .filter((item: any) => item.taskId === tasks[0].id);
     expect(receipts).toHaveLength(1);
+    const {inspectPersistedToolExecutionReceipt}=await import('../server/tools/persisted_execution_receipt');
+    const canonical=inspectPersistedToolExecutionReceipt(receipts[0],{rowTaskId:tasks[0].id,requestId:`wechat_bot:${first.messageId}`,toolName:'client_action'});
+    expect(canonical.valid).toBe(true);
+    expect(canonical.envelope).toMatchObject({taskId:tasks[0].id,requestId:`wechat_bot:${first.messageId}`,status:'verified_success'});
     expect(receipts[0]).toMatchObject({
       toolName: 'client_action',
       requestId: `wechat_bot:${first.messageId}`,

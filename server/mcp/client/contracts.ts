@@ -69,6 +69,8 @@ export interface MCPToolDef {
 }
 
 export interface MCPCallOptions {
+  /** Server-owned configuration only; never copied from a tool/HTTP argument. Not persisted or registered as model tools. */
+  configuration?: MCPServerConfig;
   timeoutMs?: number;
 }
 

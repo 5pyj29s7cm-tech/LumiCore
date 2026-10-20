@@ -77,13 +77,3 @@ export function getDueReminders(filters: { userId?: string; domain?: string; org
     )
     .slice(0, 10);
 }
-
-export function fireReminder(id: string): void {
-  const all = getReminderStore();
-  const r = all.find(r => r.id === id);
-  if (r) {
-    r.status = 'fired';
-    r.firedAt = new Date().toISOString();
-    saveReminderStore(all);
-  }
-}

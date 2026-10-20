@@ -7,6 +7,7 @@ import { evaluateActionConstitution, classifyActionRisk, canAutoApproveAction } 
 import { executeToolCall } from '../server/tools/execution_engine';
 import { ToolRegistry } from '../server/tools/registry';
 import { registerDocumentTools } from '../server/tools/definitions/document_tools';
+import { registerVideoTools } from '../server/tools/definitions/video_tools';
 import { registerFileOpsTools } from '../server/tools/definitions/file_ops';
 import { loadXlsxWorkbook } from '../server/utils/spreadsheet';
 
@@ -86,5 +87,26 @@ describe('constitution separates executable arguments from document data', () =>
     expect(evaluateActionConstitution('delete_file', { path: 'C:/docs/notes.txt' }, 'safe').level).toBe('confirm');
     expect(canAutoApproveAction('delete_file', { path: 'C:/docs/notes.txt' })).toBe(false);
     expect(evaluateActionConstitution('shutdown', {}, 'safe').level).toBe('forbidden');
+  });
+});
+
+
+describe('media creative data never becomes an external submit instruction', () => {
+  const registry = new ToolRegistry();
+  registerVideoTools(registry);
+  const capability = registry.getCapabilityManifestEntry('generate_video');
+  it.each(['确认', '支付后交付商品', '发布宣传视频', '签署合同前的提醒'])('keeps the video script %s as creative data', script => {
+    expect(evaluateActionConstitution('generate_video', { prompt: '请在视频里说：' + script, duration: 15 }, 'safe', { actionIntent: '确认' }, capability)).toMatchObject({ level: 'safe', requiresUserConfirmation: false });
+  });
+  it('retains an explicit confirmation-level video service policy', () => {
+    expect(evaluateActionConstitution('generate_video', { prompt: '演示付款流程', duration: 15 }, 'confirm', { actionIntent: '确认' }, capability)).toMatchObject({ level: 'confirm', requiresUserConfirmation: true });
+  });
+  it.each([
+    ['wechat_send_message', { contact: '测试收件人', content: '测试内容' }, '发送消息给测试收件人'],
+    ['external_app_publish', { content: '测试内容' }, '发布测试内容到平台'],
+    ['external_app_pay', { amount: 1 }, '支付一元费用'],
+    ['external_app_sign', { contract: 'synthetic' }, '签署这份合同'],
+  ] as const)('keeps %s as an actual confirmation boundary', (name, args, actionIntent) => {
+    expect(evaluateActionConstitution(name, args, 'safe', { actionIntent })).toMatchObject({ level: 'confirm', requiresUserConfirmation: true });
   });
 });

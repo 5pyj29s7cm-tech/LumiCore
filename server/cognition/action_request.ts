@@ -20,7 +20,7 @@ export function extractPrimaryTaskText(input: string): string {
 }
 
 const CURRENT_APP_REFERENCE_RE =
-  /(?:\u5728|\u5f80|\u7528).{0,16}(?:\u8fd9\u91cc\u9762|\u8fd9\u91cc|\u91cc\u9762|\u8fd9\u4e2a\u8f6f\u4ef6|\u5f53\u524d\u8f6f\u4ef6|\u521a\u6253\u5f00\u7684(?:\u8f6f\u4ef6|\u5e94\u7528|\u91cc\u9762)|(?:WPS(?:\s+Office)?|Word|Excel|PowerPoint|AutoCAD|CAD|\u5fae\u4fe1|WeChat|Chrome|\u753b\u56fe).{0,8}(?:\u91cc|\u91cc\u9762|\u4e2d|\u5185))|\b(?:in|inside)\b.{0,24}\b(?:this|current|opened|WPS|Word|Excel|PowerPoint|AutoCAD|WeChat|Chrome)\b.{0,12}\b(?:app|application|document)?/iu;
+  /(?:\u5728|\u5f80|\u7528)(?:\u8fd9\u91cc\u9762|\u8fd9\u91cc)|(?:\u5728|\u5f80|\u7528).{0,16}(?:\u8fd9\u4e2a\u8f6f\u4ef6|\u5f53\u524d\u8f6f\u4ef6|\u521a\u6253\u5f00\u7684(?:\u8f6f\u4ef6|\u5e94\u7528)|(?:WPS(?:\s+Office)?|Word|Excel|PowerPoint|AutoCAD|CAD|\u5fae\u4fe1|WeChat|Chrome|\u753b\u56fe|SketchUp|Photoshop|\u9177\u5bb6\u4e50|\u5343\u725b|\u91d1\u8776).{0,8}(?:\u91cc|\u91cc\u9762|\u4e2d|\u5185))|\b(?:in|inside)\b.{0,24}\b(?:(?:this|current|opened)\b.{0,12}\b(?:app|application|document)\b|(?:WPS|Word|Excel|PowerPoint|AutoCAD|WeChat|Chrome)\b)/iu;
 
 const CURRENT_APP_MUTATION_INTENT_RE =
   /(?:\u65b0\u5efa|\u521b\u5efa|\u5199\u5165|\u8f93\u5165|\u7c98\u8d34|\u5199|\u7f16\u8f91|\u4fee\u6539|\u4fdd\u5b58)|\b(?:new|create|write|type|paste|edit|modify|save)\b/iu;
@@ -93,8 +93,8 @@ export function extractCurrentAppTarget(input: string): string {
   const raw = String(input || '');
 
   const primary = compact(extractPrimaryTaskText(raw));
-  const named = primary.match(/\b(WPS(?:\s+Office)?|Microsoft\s+Word|Word|Excel|PowerPoint|AutoCAD|WeChat|Chrome)\b/i)?.[1]
-    || primary.match(/(\u5fae\u4fe1|\u753b\u56fe)/u)?.[1];
+  const named = primary.match(/\b(WPS(?:\s+Office)?|Microsoft\s+Word|Word|Excel|PowerPoint|AutoCAD|WeChat|Chrome|SketchUp|Photoshop)\b/i)?.[1]
+    || primary.match(/(\u5fae\u4fe1|\u753b\u56fe|酷家乐|千牛|金蝶)/u)?.[1]; // i18n-allow: explicit application names in user input.
   return compact(named);
 }
 
@@ -313,16 +313,12 @@ function isCompositeDesignDeliveryTurn(text: string): boolean {
 }
 
 export function isDesignDeliveryTurn(text: string): boolean {
-  const designSurface = /(?:\u88c5\u4fee|\u5bb6\u88c5|\u5de5\u88c5|\u5ba4\u5185\u8bbe\u8ba1|\u7a7a\u95f4\u8bbe\u8ba1|\u5efa\u7b51\u8bbe\u8ba1|\u54c1\u724c\u8bbe\u8ba1|\u89c6\u89c9\u8bbe\u8ba1|\u54c1\u724c\u521b\u610f|\u6548\u679c\u56fe|\u6e32\u67d3|\u6d77\u62a5|logo|Revit|\bBIM\b|\bIFC\b|interior\s+design|spatial\s+design|architectural\s+design|brand\s+design|visual\s+design|render)/iu.test(text);
+  const designSurface = /(?:\u88c5\u4fee|\u5bb6\u88c5|\u5de5\u88c5|\u5ba4\u5185\u8bbe\u8ba1|\u7a7a\u95f4\u8bbe\u8ba1|\u5efa\u7b51\u8bbe\u8ba1|\u54c1\u724c\u8bbe\u8ba1|\u89c6\u89c9\u8bbe\u8ba1|\u54c1\u724c\u521b\u610f|\u6548\u679c\u56fe|\u6e32\u67d3|\u6d77\u62a5|logo|Revit|\bBIM\b|\bIFC\b|interior\s+design|spatial\s+design|architectural\s+design|brand\s+design|visual\s+design|\brender\b)/iu.test(text);
   const deliveryIntent = /(?:\u8bbe\u8ba1|\u751f\u6210|\u5236\u4f5c|\u7ed8\u5236|\u51fa\u56fe|\u4ea4\u4ed8|\u63a5\u7ba1|\u65b9\u6848|\u6a21\u578b|\u6539\u56fe|design|create|generate|produce|deliver|take\s*over|model|revise)/iu.test(text);
   return isCompositeDesignDeliveryTurn(text) || (designSurface && deliveryIntent);
 }
+export { hasNegatedMessagingSendIntent } from './normalized_action_intent';
 
-export function hasNegatedMessagingSendIntent(text: string): boolean {
-  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  if (/^(?:我)?(?:没有|没|并未|从未|不是|并不是).{0,100}(?:发给|发送给|给.{0,24}发|让你.{0,24}(?:发|回复|告诉))/u.test(text)) return true;
-  return /(?:不要|别|无需|禁止).{0,32}(?:发送|发消息|回复|发出)|\b(?:do\s+not|don't|dont|never)\b.{0,64}\b(?:send|message|reply)\b|\bwithout\b.{0,40}\b(?:sending|messaging|replying)\b/iu.test(text);
-}
 
 export function requiresVisibleAutoCadExecution(input: string): boolean {
   const text = compact(input);

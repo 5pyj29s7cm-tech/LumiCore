@@ -5,15 +5,15 @@ export const CN_DURABLE_EXECUTION_MESSAGES = {
   capabilityCandidatePersistenceDetail:
     '候选已记录，但数据库写入不构成能力验证；必须经过真实实验和终态回执后才能晋级为可复用能力。',
   noExecutableToolResult:
-    '这轮处理没有拿到可执行的工具结果，不能确认完成。恢复时必须保留当前目标并重新规划可用能力或声明式替代路径，不能让你重复已经提供的信息。',
+    '本次请求尚未完成，暂未取得可确认的处理结果。已有信息不需要重复提供。',
   verifiedStatus: '已验证',
-  unverifiedStatus: '未验证',
+  unverifiedStatus: '尚未确认完成',
   recoveryBudgetExhausted:
-    '这轮工具执行与自动恢复预算已经用尽，当前任务仍未通过最终验真。',
+    '本次请求尚未全部完成。',
   resumeFromVerifiedArtifacts:
-    '恢复执行时必须从这些已验证结果继续，优先改走声明式替代能力或独立验真工具，不能重复已完成步骤。',
+    '以上文件已生成；本次请求尚未全部完成。',
   resumeWithoutVerifiedArtifacts:
-    '这轮没有检测到可验证产物；恢复执行时必须保留现有回执并重新规划声明式替代能力或验真工具，不能把失败说明当成完成。',
+    '可能已生成文件，但尚未确认可交付成果。',
   terminalVerificationPassed: '已通过终态核验',
   verifiedCheckpointHeading: '已核验的执行结果：',
   verifiedCheckpointContinuation: '当前进度与回执仍可用于继续后续步骤。',
@@ -34,7 +34,7 @@ export const CN_TOOL_LOOP_MESSAGES = {
   messagingTool: "消息操作",
   installationTool: "安装/技能操作",
   statusTool: "状态检查",
-  controlledTool: "受控工具操作",
+  controlledTool: "任务处理",
   confirmationBlockedProgress: "我开始处理了，但中途卡在需要你确认的安全边界上，还没有完成这件事。",
   confirmationOnlyPendingAction: "回复“确认”只会授权这一个待执行动作；确认前我不会把它说成已经完成。",
   notCompletedStatus: "未成功",

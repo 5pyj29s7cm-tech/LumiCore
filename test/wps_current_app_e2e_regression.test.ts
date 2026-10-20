@@ -605,7 +605,10 @@ describe('WPS current-app end-to-end regression', () => {
       source: 'chat',
     });
     expect(finalized.blocked).toBe(false);
-    expect(finalized.text).toBe(response);
+    expect(finalized.text).toContain('WPS');
+    expect(finalized.text).toContain(CONTENT);
+    expect(finalized.text).toContain('当前未保存');
+    expect(finalized.text).not.toContain('已保存');
 
     const savedClaim = finalizeLumiResponse({
       taskText: executionTaskText,

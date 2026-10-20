@@ -16,7 +16,7 @@ export function createVoiceExecutionReceiptCollector(requestId: string) {
     return {
       settled: unknown.size === 0,
       records: [...records.values(), ...[...unknown.values()].map(call => ({
-        id: call.id, name: call.name, arguments: call.arguments,
+        id: call.id, idempotencyKey: call.idempotencyKey, name: call.name, arguments: call.arguments,
         taskId, requestId, turnId: requestId, result: '',
         error: 'outcome_unknown: The started tool has no settled canonical receipt; its outcome requires reconciliation.',
         terminalVerification: { status: 'unverified' as const, strategy: 'terminal_receipt' as const, reason: 'tool_settlement_unknown' },

@@ -11,6 +11,7 @@ export const TOOL_RESULT_LIMITS: Record<string, number> = {
   list_directory: 2_500,
   search_files: 4_000,
   grep_files: 5_000,
+  knowledge_file_stats: 20_000,
   read_file: 6_000,
   read_files_batch: 7_000,
   extract_document_text: 8_000,
@@ -38,7 +39,7 @@ export const TOOL_RESULT_LIMITS: Record<string, number> = {
   ocr_region: 4_000,
 };
 
-export const UNTRUSTED_OUTPUT_TOOL_RE = /(?:^mcp_|web|browser|url_|fetch|search|read_file|read_files|list_directory|grep_files|extract_document|read_pdf|read_docx|ocr_|clipboard_read|ui_snapshot|capture_screen|email|message_intake|external|authority_research|company_lookup)/i;
+export const UNTRUSTED_OUTPUT_TOOL_RE = /(?:^mcp_|knowledge_file_stats|web|browser|url_|fetch|search|read_file|read_files|list_directory|grep_files|extract_document|read_pdf|read_docx|ocr_|clipboard_read|ui_snapshot|capture_screen|email|message_intake|external|authority_research|company_lookup)/i;
 
 export function isUntrustedToolOutput(toolName: string): boolean {
   return UNTRUSTED_OUTPUT_TOOL_RE.test(String(toolName || ''));
@@ -74,7 +75,7 @@ export function compactToolResultForModel(toolName: string, value: string): stri
       compactStringForModel(value, limit, 'Spreadsheet content'),
     ].join('\n');
   }
-  return compactStringForModel(value, limit, 'Tool result');
+  return compactStringForModel(toolName === 'knowledge_file_stats' && value.length > limit ? value.replace(/"truncated":false/g, '"truncated":true') : value, limit, 'Tool result');
 }
 
 export function sanitizeReceiptForModel(

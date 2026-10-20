@@ -61,7 +61,7 @@ describe('conversation guard history isolation', () => {
     expect(isGuardGeneratedAssistantText('desktop_active_window returned target_mismatch')).toBe(true);
   });
 
-  it('keeps guard output visible in storage but out of model prompt history', () => {
+  it('keeps unprojectable legacy guard protocol in storage and out of model prompt history', () => {
     const userId = `guard-history-${Date.now()}-${Math.random()}`;
     const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
     const guardText = [

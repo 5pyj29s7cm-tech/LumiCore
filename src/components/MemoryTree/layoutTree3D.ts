@@ -57,7 +57,7 @@ export function layoutTree3D(
   }
 
   const fileNodes: TreeNode3D[] = files.map(f => ({
-    id: f.id, type: 'file' as const, title: f.displayName || f.name,
+    id: f.id, type: 'file' as const, title: f.sourceTitle || f.displayName || f.name,
     hue: FILE_HUE, depth: 0, position: new THREE.Vector3(),
     children: [], fileData: f, radius: 0.04,
   }));

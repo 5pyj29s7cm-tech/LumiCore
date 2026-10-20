@@ -96,7 +96,8 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
     if (!conversationPersistence) { if (persistence !== 'preaccepted' && identity.conversationId) await flushDBOrThrow(); return; }
     addMessageIdempotent({ ...identity, source: entry.source, channel: entry.channel, role: 'assistant', content: finalized.text,
       toolCalls: toolRecords, cognitiveIntent: reason,
-      ...(finalized.blocked && taskId ? { terminalTaskDisposition: { outcome: 'blocked' as const, taskId,
+      ...(finalized.blocked && taskId && !toolRecords.some(record => record.taskId === taskId
+         && record.requestId === identity.requestId && record.envelope?.status === 'waiting_confirmation') ? { terminalTaskDisposition: { outcome: 'blocked' as const, taskId,
         requestId: identity.requestId, reason: finalized.reason || reason } } : {}),
     });
     await flushDBOrThrow();
@@ -108,7 +109,7 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
       { authorization, abort: reason => { if (!controller.signal.aborted) controller.abort(reason); } }) : undefined);
     if (conversationPersistence && !identity.conversationId) throw new Error('A conversation entry requires its accepted transcript');
     await admission?.waitForTurn(); assertCurrent();
-    const conversation = identity.conversationId ? getConversationForScope(identity.conversationId, identity.userId, identity.domain, identity.orgId) : null;
+    const conversation = identity.conversationId ? getConversationForScope(identity.conversationId, identity.userId, identity.domain, identity.orgId, userText) : null;
     if (identity.conversationId && !conversation) throw Object.assign(new Error('The accepted conversation is unavailable'), { code: 'CONVERSATION_ENTRY_UNAVAILABLE' });
     const planning = typeof capturedPlanning === 'function' ? await capturedPlanning() : capturedPlanning;
     if ('terminal' in planning) return planning.terminal;

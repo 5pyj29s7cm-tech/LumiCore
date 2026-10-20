@@ -113,7 +113,9 @@ export function buildMediaArtifactReceipt(
   error?: unknown,
 ): MediaArtifactReceipt | undefined {
   const recoveringImage = toolName === 'get_image_generation_status';
+  const recoveringVideo = toolName === 'get_video_generation_status';
   if (recoveringImage) toolName = 'generate_image';
+  if (recoveringVideo) toolName = 'generate_video';
   const kind = MEDIA_TOOL_KIND.get(String(toolName || ''));
   if (!kind || error) return undefined;
   const payload = parseResult(result);
@@ -166,6 +168,7 @@ export function buildMediaArtifactReceipt(
     ? payload.generationSettings as Record<string, unknown> : undefined;
   const parameters: Record<string, unknown> = recoveringImage
     ? { size: storedSettings?.size, n: storedSettings?.count }
+    : recoveringVideo ? payload.requestedSettings || {}
     : args && typeof args === 'object' ? args as Record<string, unknown> : {};
   const measured = kind === 'video' && typeof payload.settingsMatch === 'boolean';
   const size = String((measured ? payload.actualSettings?.size : parameters.size) || '').trim().slice(0, 40) || undefined;
@@ -183,7 +186,7 @@ export function buildMediaArtifactReceipt(
       ...(kind === 'image' && Number.isInteger(count) ? { count } : {}),
       ...(kind === 'video' && Number.isFinite(duration) ? { duration } : {}),
       ...(measured && typeof payload.actualSettings?.hasAudio === 'boolean' ? { hasAudio: payload.actualSettings.hasAudio } : {}),
-      hasReference: Boolean(String(parameters.first_frame_image || '').trim()),
+      hasReference: recoveringVideo ? payload.inputReferenceAccepted === true : Boolean(String(parameters.first_frame_image || '').trim()),
       ...(toolName === 'ai_edit_image'
         ? { hasSource: Boolean(String(parameters.filePath || '').trim()) }
         : {}),

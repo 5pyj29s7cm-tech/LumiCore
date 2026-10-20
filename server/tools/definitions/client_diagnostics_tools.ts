@@ -25,9 +25,9 @@ export function registerClientDiagnosticsTools(registry: ToolRegistry): void {
       const isWork = context?.domain === 'work' && Boolean(context?.orgId);
       const state = getClientStateForScope(userId, scope);
       const architecture = getLumiTechnicalArchitecture();
-      const selfAwareness = getClientSelfAwarenessReport(userId, scope);
       const capabilityRuntime = getCapabilityRuntimeSummary(registry, context);
       const health = getClientHealthReport(userId, scope);
+      const selfAwareness = getClientSelfAwarenessReport(userId, scope, health);
       const autonomyGate = isWork ? null : getAutonomyDiagnosticPolicy(userId);
       const autonomyWorkflows = isWork ? [] : getAutonomyWorkflowDiagnostics(userId);
       const scopedIdentity = isWork ? { domain: 'work', orgId: context?.orgId } : { domain: 'personal' };

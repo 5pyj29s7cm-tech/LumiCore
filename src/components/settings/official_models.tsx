@@ -37,7 +37,7 @@ export function officialModelOptions(
   fallback: string[],
 ): string[] {
   const live = catalog?.byRole?.[role];
-  return Array.isArray(live) && live.length > 0 ? live : fallback;
+  return catalog ? (Array.isArray(live) ? live : []) : fallback;
 }
 
 export function readStoredRelayBaseUrl(): string {

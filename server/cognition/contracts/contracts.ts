@@ -27,8 +27,10 @@ export type LumiActionContractKind =
   | 'artifact_work';
 
 export interface LumiActionContract {
+  artifactMode?: 'retrieve';
+  artifactTarget?: { id: string; revision?: number };
   mediaPlayback?: 'play' | 'pause';
-  mediaGeneration?: { toolName: 'generate_image' | 'ai_edit_image' | 'generate_video'; standalone: boolean; duration?: number; size?: string; count: number; audioRequired: boolean };
+  mediaGeneration?: { toolName: 'generate_image' | 'ai_edit_image' | 'generate_video'; standalone: boolean; duration?: number; size?: string; count: number; audioRequired: boolean; sourceVideoRequired?: boolean };
   components?: Array<{ text: string; contract: LumiActionContract }>;
   applies: boolean;
   kind: LumiActionContractKind;

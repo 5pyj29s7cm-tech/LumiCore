@@ -1,4 +1,5 @@
 import type { ToolExecutionRecord } from '../tools/types';
+import { toolRecordSucceeded } from '../tools/receipt_payload';
 
 export function hasContinuousStockWatchIntent(text: string): boolean {
   return /(?:\u6301\u7eed|\u4e00\u76f4|\u5b9e\u65f6|\u76d8\u4e2d|\u5f00\u59cb|\u6b63\u5728)?.{0,12}(?:\u76ef\u76d8|\u76d1\u63a7|\u9884\u8b66|\u63d0\u9192)|(?:watch|monitor|track|alert|watchlist|price\s*alert|market\s*alert)/iu
@@ -27,17 +28,17 @@ export function requiresLegalCurrentLawGate(text: string): boolean {
 }
 
 export function claimsLegalDocumentCompletion(text: string): boolean {
-  return /(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u751f\u6210|\u51fa\u5177|\u4ea4\u4ed8|\u6b63\u5f0f|\u53ef\u76f4\u63a5\u4f7f\u7528|\u53ef\u4ee5\u76f4\u63a5\u4f7f\u7528|\u53ef\u63d0\u4ea4|\u53ef\u7acb\u6848|\u53ef\u7528|completed|created|generated|ready|formal|deliverable)/iu
-    .test(text || '');
+  return String(text || '').split(/[。！？!?\n]/u).some(clause => {
+    if (/(?:\u5c1a\u672a|\u6ca1\u6709|\u4e0d\u80fd|\u4e0d\u5f97|\u4e0d\u7b49\u540c|\u4e0d\u6784\u6210|\u4e0d\u4f5c\u4e3a|\u5f85\u6838\u9a8c|not\s+(?:a|complete|ready|formal)|cannot)/iu.test(clause)) return false;
+    return /(?:\u8d77\u8bc9\u72b6|\u8bc9\u72b6|\u7b54\u8fa9\u72b6|\u8d28\u8bc1\u610f\u89c1|\u4ee3\u7406\u8bcd|\u6cd5\u5f8b\u610f\u89c1\u4e66|\u59d4\u6258\u624b\u7eed|\u7acb\u6848\u6750\u6599|\u8bc1\u636e\u76ee\u5f55|\u5408\u540c|\u534f\u8bae|\u6807\u4e66|\u6295\u6807\u4e66|\u6587\u4e66|pleading|complaint|defense|legal\s+opinion|contract|agreement|bid|tender).{0,24}(?:\u5df2(?:\u7ecf)?(?:\u751f\u6210|\u5b8c\u6210|\u8d77\u8349|\u5199\u597d|\u51fa\u5177|\u4ea4\u4ed8)|\u751f\u6210\u5b8c\u6210|\u6b63\u5f0f\u53ef\u7528|\u53ef(?:\u4ee5)?\u76f4\u63a5\u4f7f\u7528|completed|created|generated|ready)|(?:\u5df2(?:\u7ecf)?(?:\u751f\u6210|\u5b8c\u6210|\u8d77\u8349|\u5199\u597d|\u51fa\u5177|\u4ea4\u4ed8)|completed|created|generated).{0,24}(?:\u8d77\u8bc9\u72b6|\u8bc9\u72b6|\u7b54\u8fa9\u72b6|\u8d28\u8bc1\u610f\u89c1|\u4ee3\u7406\u8bcd|\u6cd5\u5f8b\u610f\u89c1\u4e66|\u59d4\u6258\u624b\u7eed|\u7acb\u6848\u6750\u6599|\u8bc1\u636e\u76ee\u5f55|\u5408\u540c|\u534f\u8bae|\u6807\u4e66|\u6295\u6807\u4e66|\u6587\u4e66|pleading|complaint|defense|legal\s+opinion|contract|agreement|bid|tender)/iu.test(clause);
+  });
 }
 
 export function hasLegalDocumentProductionEvidence(records: ToolExecutionRecord[]): boolean {
   return records.some(record => {
-    if (record.error) return false;
+    if (!toolRecordSucceeded(record)) return false;
     const name = String(record.name || '');
-    const result = String(record.result || '');
-    return /^(legal_generate_(?!citation_verification_report)|legal_analyze_folder_and_draft_argument|legal_review_contract|legal_draft_contract|legal_finalize_delivery_package|legal_prepare_filing_handoff|create_docx|write_file)$/i.test(name)
-      || /\.(?:docx|pdf|md|txt)\b|formal-document|litigation-packet|pleading|argument|opinion|\u8d77\u8bc9\u72b6|\u7b54\u8fa9\u72b6|\u4ee3\u7406\u8bcd|\u6cd5\u5f8b\u610f\u89c1|\u8bc1\u636e\u76ee\u5f55|\u6807\u4e66/iu.test(result);
+    return /^(legal_generate_(?!citation_verification_report).+|legal_analyze_folder_and_draft_argument|legal_review_contract|legal_draft_contract|legal_finalize_delivery_package|legal_prepare_filing_handoff|create_docx|write_file)$/i.test(name);
   });
 }
 

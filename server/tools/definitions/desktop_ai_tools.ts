@@ -1173,6 +1173,7 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
       },
       required: ['question'],
     },
+    serverOwnedArgumentBinder: args => ({ ...args, send: args.send !== false }),
     handler: desktopAiAsk,
     permission: 'user',
     securityLevel: 'confirm',

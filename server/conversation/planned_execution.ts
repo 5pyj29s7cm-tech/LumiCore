@@ -1,7 +1,7 @@
+import type { PreparedConversationTurnUpgrade } from './action_execution_runtime';
 import type { LumiExecutionPipeline } from '../cognition/execution_pipeline';
 import type { PendingToolConfirmation } from '../tools/pending_confirmation';
-import { prepareConversationActionExecution, persistConversationExecutionPlan } from './manager/execution_preparation';
-import { bindCapabilityExecutionPlanTask } from '../cognition/capability_execution_plan';
+import { prepareConversationActionExecution } from './manager/execution_preparation';
 
 export interface PlannedConversationExecutionInput {
   execution: LumiExecutionPipeline;
@@ -21,12 +21,14 @@ export interface PlannedConversationExecutionInput {
   bindConversationTurn?: boolean;
   /** A regional organization route may require a ledger without a model tool call. */
   additionalLedgerRequired?: boolean;
+  preparedTurnUpgrade?: PreparedConversationTurnUpgrade;
 }
 
 /** Bind the final accepted relation and policy once; never classify the wording again here. */
 export function preparePlannedConversationExecution(input: PlannedConversationExecutionInput) {
   const { execution } = input;
-  if (input.requestId !== execution.resolution.requestId) throw new Error('Task preparation does not belong to the accepted turn');
+  if (input.requestId !== execution.resolution.requestId
+    || input.preparedTurnUpgrade && input.userText !== execution.resolution.userText) throw new Error('Task preparation does not belong to the accepted turn');
   const conversation = { state: null, kind: 'conversation' as const, turnRowId: undefined };
   if (!input.conversationId || input.observationOnly) return conversation;
   const relation = execution.taskRelation;
@@ -43,6 +45,7 @@ export function preparePlannedConversationExecution(input: PlannedConversationEx
   const prepared = prepareConversationActionExecution({
     conversationId: input.conversationId, userId: input.userId, requestId: input.requestId,
     userText: input.userText, userMessageId: input.userMessageId,
+    preparedTurnUpgrade: input.preparedTurnUpgrade,
     toolPolicy: input.acceptedRuntimeCleanup
       ? { allowedTools: ['runtime_work_cancel'], requireConfirmation: [], forbiddenTools: [], maxIterations: 1 }
       : execution.authorizationPolicy,
@@ -52,11 +55,6 @@ export function preparePlannedConversationExecution(input: PlannedConversationEx
     forceNewTask: input.acceptedRuntimeCleanup || tasklessGrant,
     preserveExistingTask: input.acceptedRuntimeCleanup ? false : forceResume || forceTask,
   });
-  if (prepared.state?.taskId) {
-    execution.executionPlan = bindCapabilityExecutionPlanTask(execution.executionPlan, prepared.state.taskId);
-    if (!persistConversationExecutionPlan({ conversationId: input.conversationId, userId: input.userId, plan: execution.executionPlan })) {
-      throw new Error('The accepted capability plan could not be attached to its exact task');
-    }
-  }
+  if (prepared.state?.taskId) execution.taskId = prepared.state.taskId;
   return prepared;
 }

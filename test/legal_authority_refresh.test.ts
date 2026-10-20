@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import './helpers';
+import {evaluateCurrentLawGate} from '../server/regions/packs/cn/legal_tools/citations';
 import { initDatabase } from '../db_layer';
 import {
   listStatuteVerificationCatalog,
@@ -76,7 +77,9 @@ describe('Authoritative statute source refresh', () => {
 
     const citation = verifyCitation('《公司法》第五十条', undefined, { asOf: '2026-11-01' });
     expect(citation.isEffective).toBe(true);
-    expect(citation.verificationStatus).toBe('verified');
+    expect(citation.verificationStatus).toBe('metadata_only');
+    expect(citation.provisionVerified).toBe(false);
+    expect(evaluateCurrentLawGate(citation.citation,undefined,[],'2026-01-15',{asOf:'2026-11-01'}).passed).toBe(false);
     expect(citation.reviewAfter).toBe('2026-12-30');
   });
 
@@ -129,6 +132,8 @@ describe('Authoritative statute source refresh', () => {
     const withinDeadline = verifyCitation('《公司法》第五十条', undefined, { asOf: '2026-11-01' });
     expect(withinDeadline.isEffective).toBe(true);
     expect(withinDeadline.authorityRefreshStatus).toBe('unavailable');
+    expect(withinDeadline.verificationStatus).toBe('metadata_only');
+    expect(withinDeadline.provisionVerified).toBe(false);
 
     const expired = verifyCitation('《公司法》第五十条', undefined, { asOf: '2026-12-31' });
     expect(expired.isEffective).toBeNull();
@@ -138,6 +143,8 @@ describe('Authoritative statute source refresh', () => {
   it('settles the official WAF session challenge once without following a redirect loop', async () => {
     const entry = companyLawCatalogEntry();
     const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+      if (String(_url).includes('/law-search/download/')) return new Response('No original body in this unit fixture',{status:503});
+      if (!String(_url).includes('/law-search/search/flfgDetails?')) throw new Error('Unexpected unit fixture URL');
       if (fetchMock.mock.calls.length === 1) {
         return new Response('', {
           status: 307,
@@ -155,7 +162,11 @@ describe('Authoritative statute source refresh', () => {
     });
 
     expect(result.verified).toBe(1);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.filter(([url])=>String(url).includes('/flfgDetails?'))).toHaveLength(2);
+    expect(fetchMock.mock.calls.filter(([url])=>String(url).includes('/law-search/download/'))).toHaveLength(1);
+    expect(verifyCitation('《公司法》第五十条').provisionVerified).not.toBe(true);
+    expect(evaluateCurrentLawGate('《公司法》第五十条',undefined,[],'2026-01-15').passed).toBe(false);
     const retryHeaders = new Headers(fetchMock.mock.calls[1][1]?.headers);
     expect(retryHeaders.get('Cookie')).toBe('wzws_cid=test-session');
   });

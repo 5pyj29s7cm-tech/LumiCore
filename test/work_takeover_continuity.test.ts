@@ -2,6 +2,21 @@ import './helpers';
 import { describe, expect, it } from 'vitest';
 
 describe('work takeover continuity', () => {
+  it('does not bind fresh Lumi state or navigation to an older customer task', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
+    const { buildWorkTakeoverContinuityContext } = await import('../server/work_takeover/continuity');
+    await initDatabase();
+    const userId = 'client-state-unbound';
+    createWorkTakeoverTask({ userId, category: 'general_work', title: '旧客户交付任务', source: 'manual', status: 'in_progress', nextActions: ['继续客户交付'] });
+    for (const text of ['查看 Lumi 客户端当前界面状态，介绍当前页面和各个分区。只读取客户端状态，不做桌面控制，也不切换页面。', '打开客户端设置界面']) {
+      const context = buildWorkTakeoverContinuityContext(userId, text, { surface: 'chat' });
+      expect(context.shouldResumeTask).toBe(false);
+      expect(context.routeText).toBe(text);
+      expect(context.intent).toBeNull();
+    }
+  });
+
   it('binds a bare continue turn to the latest active task on a work surface', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');

@@ -121,6 +121,7 @@ export interface MemoryTree {
 }
 
 export interface MemoryQuery {
+  semanticTimeoutMs?: number;
   /** Only actual conversational recall should train retrieval associations. */
   recordRetrieval?: boolean;
   /** Administrative history may explicitly include superseded/test records. */

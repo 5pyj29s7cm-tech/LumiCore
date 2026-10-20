@@ -1,3 +1,4 @@
+import { explicitFile } from '../server/conversation/targets/instruction_targets';
 import { describe, expect, it } from 'vitest';
 import {
   buildTaskCapsuleV1,
@@ -501,6 +502,7 @@ describe('TaskCapsuleV1', () => {
       instruction: replacementAB,
       eventRef: 'msg-correction-ab',
     });
+    expect(first.target).toMatchObject({ path: replayB, label: replayB, object: replayB, status: 'candidate' });
     const correctionSnapshot = structuredClone(first.latestCorrection);
     const rejectionSnapshot = structuredClone(first.rejectedTargets);
     const doNotRetrySnapshot = structuredClone(first.doNotRetry);
@@ -741,4 +743,11 @@ describe('TaskCapsuleV1', () => {
     expect(corrected.taskCapsule?.latestCorrection?.eventRef).toBe('msg-correction');
     expect(requestFallback.latestInstructionRef).toBe('request-only-ref');
   });
+});
+
+it.each(['report.txt.', 'report.pdf.', 'report.docx.', '"report.pdf".'])('keeps a sentence-final filename boundary: %s', file => {
+  expect(explicitFile('Read ' + file)).toBe(file.replace(/^"|"?\.$/g, ''));
+});
+it.each(['report.txt.exe', 'report.pdfx', 'report.pdf-old', 'report.pdf_more', '"report.txt.exe"'])('rejects an extension-prefix masquerading as a filename: %s', file => {
+  expect(explicitFile('Read ' + file)).toBe('');
 });

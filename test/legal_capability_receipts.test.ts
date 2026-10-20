@@ -22,11 +22,12 @@ describe('legal capability terminal receipts', () => {
     const registry = new ToolRegistry();
     registerLegalTools(registry);
     const caseName = `Receipt case ${Date.now()}`;
+    const orgId = `legal-receipt-${Date.now()}`;
     const record = await executeToolCall({
       registry,
       name: 'legal_case_workspace',
       arguments: {
-        orgId: `legal-receipt-${Date.now()}`,
+        orgId,
         userId: 'vitest',
         caseName,
         facts: 'A contract was performed but payment remains outstanding.',
@@ -34,7 +35,21 @@ describe('legal capability terminal receipts', () => {
     });
 
     expect(record.result).toContain(caseName);
-    expect(record.result).toContain('案件ID：');
+    const CaseStore = await import('../server/org/legal_cases');
+    const createdCases = CaseStore.listCases(orgId, caseName, 50, 'vitest')
+      .filter(item => item.title === caseName);
+    expect(createdCases).toHaveLength(1);
+    const createdCase = createdCases[0];
+    expect(createdCase).toMatchObject({ orgId, title: caseName, createdBy: 'vitest' });
+    expect(createdCase.materials).toHaveLength(1);
+    expect(record.result).toContain(createdCase.title);
+    expect(record.result).toContain(`案件现有材料：共 ${createdCase.materials.length} 份`);
+    expect(record.result).not.toContain(createdCase.id);
+    expect(record.result).not.toContain(orgId);
+    for (const material of createdCase.materials) {
+      expect(record.result).not.toContain(material.id);
+    }
+    expect((record.receipt as any).changedCaseIds).toEqual([createdCase.id]);
     expect(record.receipt).toMatchObject({
       ok: true,
       status: 'updated',

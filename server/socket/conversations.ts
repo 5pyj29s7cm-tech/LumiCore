@@ -1,7 +1,7 @@
 import { Socket } from "socket.io";
 import { conversationAccessStatus, listConversationHeaders, listUserInteractions } from '../conversation/history_repository';
 import { resolveAuthorizedSocketScope } from './scope';
-import { collectChatArtifacts } from '../conversation/chat_artifacts';
+import { projectPublicArtifactPayload, capturePublicArtifactEvidenceSnapshot } from '../conversation/chat_artifacts';
 
 export function registerConversationHandlers(socket: Socket, getUserId: (s: Socket) => string) {
   socket.on("chat:conversations", async () => {
@@ -57,6 +57,7 @@ export function registerConversationHandlers(socket: Socket, getUserId: (s: Sock
       const interactions = listUserInteractions(uid, { conversationId: data.conversationId, order: 'oldest' }).slice(-100);
 
       const messages: any[] = [];
+      const evidenceSnapshot = capturePublicArtifactEvidenceSnapshot();
       for (const i of interactions) {
         const body = i.content || i.message;
         if (body && (!i.role || i.role === 'user')) {
@@ -68,8 +69,10 @@ export function registerConversationHandlers(socket: Socket, getUserId: (s: Sock
         }
         const response = i.role === 'assistant' ? (body || i.response) : i.response;
         if (response && (!i.role || i.role === 'user' || i.role === 'assistant')) {
-          messages.push({ id: i.id + '_r', type: 'lumi', content: response, timestamp: i.timestamp,
-            conversationId: data.conversationId, fileArtifacts: collectChatArtifacts(i.toolCalls, data.conversationId) });
+          const projected = projectPublicArtifactPayload({ text: response }, i.toolCalls, data.conversationId,
+            { userId: uid, requestId: i.requestId }, evidenceSnapshot);
+          messages.push({ id: i.id + '_r', type: 'lumi', content: projected.text, timestamp: i.timestamp,
+            conversationId: data.conversationId, fileArtifacts: projected.fileArtifacts });
         }
       }
       socket.emit("chat:messages", { conversationId: data.conversationId, messages });

@@ -159,11 +159,14 @@ export interface ClientHealthFinding {
   evidence?: string;
   safeActions?: string[];
   confirmationActions?: string[];
+  observedAt?: string;
 }
 
 export interface ClientHealthReport {
   level: ClientHealthLevel;
   stateAgeSeconds: number | null;
+  observedAt: string;
+  checks: ClientHealthFinding[];
   findings: ClientHealthFinding[];
   autonomyBoundary: {
     automatic: string[];
@@ -240,6 +243,7 @@ export interface SelfModelSnapshot {
   };
   scope: { domain: 'personal' | 'work'; orgId: string };
   modes: Array<{ id: string; available: boolean; active: boolean }>;
+  health: ClientHealthReport;
   configuredModels: Array<{
     role: string;
     provider: string;
@@ -275,7 +279,7 @@ export interface SelfModelSnapshot {
     staleFiles: number;
     failedFiles: number;
     unsupportedFiles: number;
-    verification: 'empty' | 'verified' | 'indexed_unverified' | 'partial' | 'stale' | 'failed';
+    verification: 'unknown' | 'empty' | 'verified' | 'indexed_unverified' | 'partial' | 'stale' | 'failed';
     verifiedAbsorption: boolean;
   };
   memoryState: {

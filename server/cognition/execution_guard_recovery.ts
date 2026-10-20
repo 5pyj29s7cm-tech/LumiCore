@@ -7,6 +7,7 @@ import { formatCnToolFailureDetail } from "../regions/messages/voice_fast_path_m
 import {
   sanitizeUserFacingNotification,
   sanitizeUserFacingExecutionOutput,
+  inspectPublicExecutionReferences,
   type UserFacingOutputProtectionOptions,
 } from './user_output_protection';
 import { buildActionContract, requiresMediaPlaybackAction } from './action_contract';
@@ -16,9 +17,10 @@ import {
   normalizeActionIntent,
 } from './normalized_action_intent';
 import { formatUserVisibleReplyForReadability } from './reply_style';
-import { containsInternalExecutionLanguage } from '../../shared/public_execution_language';
+import { containsInternalExecutionLanguage, projectExecutionReferenceText } from '../../shared/public_execution_language';
 import { DESKTOP_COMPLETION_REVIEW_REASON } from './desktop_completion_review';
 import { isModelConfigurationReadRequest } from './model_configuration_intent';
+import { shouldAllowToolUseForTurn } from './tool_intent';
 import { mergeToolExecutionRecords } from './task_execution_ledger';
 
 export type ExecutionGuardIntent = 'conversation' | 'status_query' | 'action_execution';
@@ -146,8 +148,6 @@ function isExecutionStatusQuery(text: string): boolean {
 }
 // i18n-allow -- deterministic conversational intent recognition; not user-visible copy.
 const CONVERSATION_ONLY = /^(?:hi|hello|hey|thanks|thank you|who are you|what can you do|tell me about yourself|how are you)[\s!?.]*$|^(?:\u4f60\u597d|\u55e8|\u8c22\u8c22|\u4f60\u662f\u8c01|\u4f60\u80fd\u505a\u4ec0\u4e48|\u4ecb\u7ecd\u4e00\u4e0b\u81ea\u5df1|\u804a\u804a)[\s\uff01\uff1f\u3002]*$/iu;
-// i18n-allow -- fallback imperative recognition for action contracts not yet catalogued.
-const ACTION_IMPERATIVE = /\b(?:open|close|start|stop|run|execute|repair|fix|check|inspect|read|write|create|generate|save|delete|move|copy|send|install|uninstall|click|type|search|download|upload)\b|\u6253\u5f00|\u5173\u95ed|\u542f\u52a8|\u505c\u6b62|\u6267\u884c|\u4fee\u590d|\u68c0\u67e5|\u8bfb\u53d6|\u5199\u5165|\u521b\u5efa|\u751f\u6210|\u4fdd\u5b58|\u5220\u9664|\u79fb\u52a8|\u590d\u5236|\u53d1\u9001|\u5b89\u88c5|\u5378\u8f7d|\u70b9\u51fb|\u8f93\u5165|\u641c\u7d22|\u4e0b\u8f7d|\u4e0a\u4f20/iu;
 // i18n-allow -- recognizes a truthful but still non-terminal recovery result.
 const RECOVERY_REPORTS_INCOMPLETE = /\b(?:could not|couldn't|unable to|failed to|not (?:yet )?(?:completed|finished|done|verified)|still (?:waiting|blocked)|no (?:verified|verifiable).{0,40}result)\b|\u4ecd\u672a|\u5c1a\u672a|\u8fd8\u6ca1\u6709|\u8fd8\u6ca1|\u672a\u80fd|\u65e0\u6cd5|\u5931\u8d25|\u6ca1\u6709.{0,20}(?:\u7ed3\u679c|\u56de\u6267|\u8bc1\u636e)/iu;
 
@@ -229,7 +229,7 @@ export function classifyExecutionGuardIntent(
   if (isExecutionStatusQuery(clean)) return 'status_query';
   if (CONVERSATION_ONLY.test(clean)) return 'conversation';
   const contract = buildActionContract(clean);
-  if ((contract.applies && contract.kind !== 'none') || ACTION_IMPERATIVE.test(clean)) {
+  if ((contract.applies && contract.kind !== 'none') || shouldAllowToolUseForTurn(clean)) {
     return 'action_execution';
   }
   if (records.some(record => (
@@ -434,13 +434,9 @@ function safeFailureDetail(records: ToolExecutionRecord[], chinese: boolean): st
     if (/provider unavailable|service unavailable|connection refused/i.test(detail)) {
       return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryServiceUnavailable : 'the required service is temporarily unavailable';
     }
-    return detail;
+    return chinese ? formatCnToolFailureDetail(detail) : 'the operation did not return a usable result';
   })();
-  if (chinese) return `${action}：${formatCnToolFailureDetail(mappedDetail)}`;
-  const safeEnglishDetail = /(?:\b(?:target_mismatch|taskId|requestId|receipt|terminalVerification)\b|\{[\s\S]*\}|[_-](?:receipt|task|request))/iu.test(mappedDetail)
-    ? 'the operation could not confirm the requested result'
-    : mappedDetail;
-  return `${action}: ${safeEnglishDetail}`;
+  return chinese ? `${action}：${mappedDetail}` : `${action}: ${mappedDetail}`;
 }
 
 function containsInternalGuardDetail(value: unknown): boolean {
@@ -496,13 +492,15 @@ export function sanitizeExecutionResponseForDelivery<
   } = {},
 ): TDelivery {
   const initiallyBlocked = delivery.blocked === true;
+  const { privateReferences, verifiedText } = inspectPublicExecutionReferences({ ...options, task: options.task || '', toolCalls: options.toolRecords || [] }, String(delivery.text || ''));
+  const privateReference = privateReferences.length > 0;
   const textLeaks = containsInternalGuardDetail(delivery.text);
   const notificationLeaks = containsInternalGuardDetail(delivery.notification);
   const task = options.task || String(delivery.text || '');
   const intent = options.intent || classifyExecutionGuardIntent(task, options.toolRecords || []);
   const informationalGuard = textLeaks && intent !== 'action_execution';
-  const blocked = informationalGuard ? false : initiallyBlocked || textLeaks;
-  const reason = informationalGuard
+  const blocked = privateReference || (informationalGuard ? false : initiallyBlocked || textLeaks);
+  const reason = privateReference && !initiallyBlocked ? PUBLIC_RECOVERY_FAILURE_REASON : informationalGuard
     ? intent === 'status_query' ? 'task_status' : 'clarification_needed'
     : publicDeliveryReason(
         textLeaks ? PUBLIC_RECOVERY_FAILURE_REASON : delivery.reason,
@@ -517,7 +515,8 @@ export function sanitizeExecutionResponseForDelivery<
         ? formatExecutionStatusFeedback(task, options.toolRecords || [])
         : formatExecutionRecoveryFailure(task, options.toolRecords || [])
     : String(delivery.text || '');
-  const sanitizedText = sanitizeUserFacingExecutionOutput(fallbackText, options);
+  const publicText = projectExecutionReferenceText(fallbackText, privateReferences, verifiedText);
+  const sanitizedText = sanitizeUserFacingExecutionOutput(publicText || formatExecutionRecoveryFailure(task, options.toolRecords || []), options);
   // The exact confirmation envelope is equality-bound to its pending action;
   // changing its bytes here would break that security contract. Every other
   // response gets the same final layout pass, including deterministic replies
@@ -833,6 +832,7 @@ export interface OutboundExecutionFinalizationInput<
   attempt?: ExecutionGuardRecoveryRunInput<TFinalization>['attempt'];
   /** Server-formatted text of the exact pending proposal, read after any recovery. */
   trustedConfirmationRequestText?: () => string | undefined;
+  publicContext?: Pick<UserFacingOutputProtectionOptions, 'requestId' | 'taskId' | 'completionRequest'>;
 }
 
 /**
@@ -860,6 +860,7 @@ export async function finalizeExecutionForOutboundDelivery<
   const finalization = sanitizeExecutionResponseForDelivery(
     recovered.finalization as TFinalization & ExecutionResponseDelivery,
     {
+      ...input.publicContext,
       task: input.task,
       toolRecords: recovered.toolRecords,
       intent: recovered.decision.intent,

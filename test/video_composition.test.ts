@@ -42,6 +42,10 @@ beforeEach(() => {
   saveKeys({ RELAY_API_KEY: 'video-test-key', RELAY_BASE_URL: 'https://official.example.test/v1' });
   upsertUserPreferredGenerationModels(user, { video: { provider: 'relay', model: 'aliyun/Wan2.2-T2V-A14B' }, imageToVideo: { provider: 'relay', model: 'aliyun/Wan2.2-I2V-A14B' } });
   vi.stubGlobal('fetch', vi.fn(async (_url: any, init?: RequestInit) => {
+    if (String(_url) === 'https://official.example.test/v1/models') return new Response(JSON.stringify({ data: [
+      { id: 'aliyun/Wan2.2-T2V-A14B', capability: 'video_generation' },
+      { id: 'aliyun/Wan2.2-I2V-A14B', capability: 'image_to_video' },
+    ] }), { headers: { 'content-type': 'application/json' } });
     if (init?.method === 'POST') { posts.push(JSON.parse(String(init.body))); if (posts.length === failPost) throw new Error('injected provider failure'); return new Response(JSON.stringify({ id: 'clip-' + posts.length, status: 'queued' })); }
     return new Response(JSON.stringify({ status: 'completed', video_base64: VALID_MP4.toString('base64') }));
   }));
@@ -83,7 +87,11 @@ describe('automatic long video generation', () => {
     expect(fs.readdirSync(directory).filter(name => !before.has(name))).toHaveLength(0);
   });
   it('preserves completed clips and stops without retrying or submitting later clips on provider failure', async () => {
-    failPost = 2; await expect(generate()).rejects.toThrow(/1\/6/); expect(posts).toHaveLength(2);
+    failPost = 2;
+    const unresolved = await generate();
+    expect(unresolved).toMatchObject({ status: 'unknown', verified: false, compositionSegment: true, wholeTaskCompleted: false, recoveryTool: 'get_video_generation_status' });
+    expect(unresolved).not.toHaveProperty('outputPath');
+    expect(posts).toHaveLength(2);
     expect(manifest().value).toMatchObject({ state: 'failed', currentClip: 2, clips: [{ taskId: 'clip-1' }] });
     expect(fs.existsSync(manifest().value.clips[0].path)).toBe(true); expect(fs.readdirSync(manifest().location)).toEqual(['progress.json']);
   });
@@ -104,7 +112,8 @@ describe('automatic long video generation', () => {
   it('allows a bounded generation deadline for longer sequences', () => {
     expect(getToolExecutionTimeoutMs('generate_video')).toBe(15 * 60_000);
     expect(getToolExecutionTimeoutMs('generate_video', { duration: 30 })).toBe(17 * 60_000);
-    expect(getToolExecutionTimeoutMs('generate_video', { duration: 120 })).toBe(45 * 60_000);
+    expect(getToolExecutionTimeoutMs('generate_video', { duration: 120 })).toBe(53 * 60_000);
+    expect(getToolExecutionTimeoutMs('generate_video', { duration: 1200 })).toBe(53 * 60_000);
   });
 });
 

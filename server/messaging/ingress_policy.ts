@@ -3,7 +3,7 @@ import type { IncomingMessage } from './types';
 
 export interface MessagingIngressDecision {
   allowed: boolean;
-  reason: 'allowed' | 'group_not_mentioned' | 'group_not_authorized' | 'rate_limited';
+  reason: 'allowed' | 'group_not_mentioned' | 'group_not_authorized' | 'rate_limited' | 'message_expired' | 'invalid_message_timestamp';
   retryAfterMs?: number;
 }
 
@@ -12,6 +12,8 @@ interface RateBucket {
   count: number;
 }
 
+const MESSAGE_MAX_AGE_MS = 10 * 60_000;
+const MESSAGE_CLOCK_SKEW_MS = 60_000;
 const RATE_WINDOW_MS = 60_000;
 const PRIVATE_RATE_LIMIT = 20;
 const GROUP_RATE_LIMIT = 10;
@@ -52,6 +54,9 @@ export function evaluateMessagingIngress(
   message: IncomingMessage,
   now = Date.now(),
 ): MessagingIngressDecision {
+  const createdAt = Date.parse(message.timestamp);
+  if (!Number.isFinite(createdAt) || createdAt <= 0 || createdAt > now + MESSAGE_CLOCK_SKEW_MS) return { allowed: false, reason: 'invalid_message_timestamp' };
+  if (now - createdAt > MESSAGE_MAX_AGE_MS) return { allowed: false, reason: 'message_expired' };
   if (message.platform === 'feishu' && message.chatType === 'group') {
     if (message.botMentioned !== true) {
       return { allowed: false, reason: 'group_not_mentioned' };

@@ -12,7 +12,7 @@ vi.mock('../services/authService', async () => ({
   isNativeDesktopRuntime: () => false,
   getMe: mocks.me,
 }));
-vi.mock('../services/socketService', () => ({ socketService: { disconnect: mocks.disconnect, refreshAuth: vi.fn() } }));
+vi.mock('../services/socketService', () => ({ socketService: { disconnect: mocks.disconnect, refreshAuth: vi.fn(), getSocket: () => ({ on: vi.fn(), off: vi.fn() }) } }));
 const reply = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 function initialRead(url: string) {

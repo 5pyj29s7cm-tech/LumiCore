@@ -1,4 +1,7 @@
 export const CN_TASK_EXECUTION_MESSAGES = {
+  incompleteWholeRequest: '整项请求是否全部完成尚未核验；已取得的结果予以保留。',
+  remainingGoals: (goals: string[]) => '以下要求尚未完成或缺少核验结果：\n' + goals.map(goal => '- ' + goal).join('\n'),
+  answerDeliveryIncomplete: '部分内容未能完整交付，本次请求尚未全部完成。',
   persistenceUnknown: '本轮最终状态未能可靠保存，我没有把它标记为完成。若刚才涉及外部操作，请先核对实际结果后再重试。',
   cancellationOutcomeUnknown: '已停止继续执行，已完成的步骤会保留。但还有已开始的操作未返回可靠结果，请先核对实际情况后再重试。',
   noResumableTask: '现在没有可续接的工作任务。',

@@ -1,7 +1,6 @@
 import type { ToolExecutionRecord } from "../../tools/types";
 import type { AutonomousTask } from "../task_queue";
 import { finalizeLumiResponse, type LumiResultFinalizerInput } from "../../cognition/result_finalizer";
-import { finalizeExecutionForOutboundDelivery } from "../../cognition/execution_guard_recovery";
 import { taskActionContract, resultTaskText, hasResultCoreActionEvidence } from "../../cognition/result_finalizer_support";
 import { parseStructuredToolResult, isSuccessfulAutonomousToolRecord } from './receipts';
 import type { AutonomousTaskOutcome } from './contracts';
@@ -153,29 +152,4 @@ export function evaluateAutonomousTaskOutcome(
     reason,
     successfulToolRecords,
   };
-}
-
-export async function finalizeAutonomousTaskOutcomeForDelivery(
-  taskText: string,
-  outcome: Pick<AutonomousTaskOutcome, 'text' | 'blocked' | 'reason'>,
-  toolRecords: ToolExecutionRecord[],
-) {
-  return (await finalizeExecutionForOutboundDelivery({
-    task: taskText,
-    responseText: outcome.text,
-    finalization: {
-      text: outcome.text,
-      blocked: outcome.blocked,
-      reason: outcome.reason,
-    },
-    // Autonomous retries are owned by the durable queue. The public boundary
-    // sanitizes this attempt without starting an untracked nested executor.
-    allowToolUse: false,
-    toolRecords,
-    finalize: candidateText => ({
-      text: candidateText,
-      blocked: outcome.blocked,
-      reason: outcome.reason,
-    }),
-  })).finalization;
 }

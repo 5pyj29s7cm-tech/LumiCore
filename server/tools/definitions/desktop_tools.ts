@@ -242,7 +242,7 @@ export function registerDesktopTools(registry: ToolRegistry): void {
   registry.register({
     name: 'desktop_capability_status',
     description:
-      'Read native desktop readiness by capability: app discovery and launch, screen capture, input control, and macOS Accessibility/Screen Recording authorization. Use this before diagnosing desktop permissions. There is no separate Lumi external-app automation switch.',
+      'Read native desktop readiness by capability: app discovery and launch, screen capture, input control, and macOS Accessibility/Screen Recording authorization. Use this before diagnosing desktop permissions. Internal/External is an execution preference independent of wallpaper and does not replace native desktop permissions or exact action confirmation.',
     parameters: {
       type: 'object',
       properties: {},

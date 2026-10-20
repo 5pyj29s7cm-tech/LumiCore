@@ -1,11 +1,15 @@
 import { PERSONAL_CLIENT_SURFACES } from '../../shared/client_surfaces';
+import { hasExplicitNoToolInstruction } from './no_tool_instruction';
+
+export const CLIENT_STATE_INSPECTION_REQUEST = /(?:(?:介绍|说明|讲讲|告诉我|读取|查看|检查).{0,24}(?:Lumi\s*)?客户端.{0,24}(?:每一?个|各个|所有|全部)?(?:页面|界面|模块|状态|分区)|(?:Lumi\s*)?客户端.{0,24}(?:每一?个|各个|所有|全部)(?:页面|界面|模块).{0,24}(?:干什么|作用|功能|用途|介绍|说明)|(?:检查|查看|告诉我|现在).{0,18}(?:你的|lumi\s*的)?(?:模式|模态|运行模式|模)状态|(?:你现在|当前).{0,12}(?:是什么|什么)?模式)/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+
 import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import { classifyExternalCliIntent, requestedCliProviders } from './external_cli_intent';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
 import { withoutLocationLiterals } from './location_literals';
 import { matchesCnTaskReceiptQuestion, matchesCnBoundArtifactEdit } from "../regions/input/zh_action_continuation";
 
-/** Read/search verbs in an explicitly forbidden clause are not requests.
+/** Read/search/navigation verbs in an explicitly forbidden clause are not requests.
  * Keep the original user message for the model and side-effect authorization.
  * This projection is only for matching action-shaped lookup language.
  */
@@ -13,11 +17,11 @@ export function withoutNegatedLookupClauses(value: string): string {
   if (isExplicitArtifactCreationText(value)) return value;
   if (/(?:内容(?:是|为)?|正文|以下文字|with\s+(?:this|the|following)\s+content)\s*[:：]/iu.test(value)) return value; // i18n-allow: preserve explicit data payloads.
 
-  return String(value || '').split(/([，,。！？!?；;\n]|\.(?=\s|$))/u).map(clause => { // i18n-allow: multilingual clause boundaries.
+  return String(value || '').split(/([，。！？!?；;\n]|\.(?=\s|$))/u).map(clause => { // i18n-allow: multilingual clause boundaries.
     const parts = clause.split(/((?:但是|不过|但)|\b(?:but|instead)\b)/iu); // i18n-allow: preserve a following affirmative instruction.
     const head = parts[0];
-    if (/^\s*(?:(?:请|也|并且|并|且)\s*)?(?:不要|别|无需|不需要|不用|禁止|请勿)|^\s*(?:please\s+)?(?:do\s+not|don't|never|no\s+need\s+to)\b/iu.test(head) // i18n-allow: negated lookup clause recognition.
-      && /搜索|查找|查阅|读取|查看|浏览|查询|\b(?:search|look\s*up|read|browse|fetch|inspect)\b/iu.test(head)) { // i18n-allow: read-only lookup verbs.
+    if (/^\s*(?:(?:请|也|并且|并|且)\s*)?(?:不要|别|无需|不需要|不用|禁止|请勿|不(?=打开|切换|进入|关闭))|^\s*(?:please\s+)?(?:do\s+not|don't|never|no\s+need\s+to)\b/iu.test(head) // i18n-allow: negated lookup clause recognition.
+      && /搜索|查找|查阅|读取|查看|浏览|查询|打开|切换|进入|关闭|\b(?:search|look\s*up|read|browse|fetch|inspect|open|switch|enter|close)\b/iu.test(head)) { // i18n-allow: read-only lookup verbs.
       parts[0] = ' ';
     }
     return parts.join('');
@@ -388,6 +392,7 @@ function correctionOrExplanation(text: string): NormalizedActionIntent | null {
   // i18n-allow: Chinese correction/authorization input recognition; not user-visible copy.
   const negativeAuthorization = // i18n-allow: Chinese correction/authorization input recognition; not user-visible copy.
     /(?:我|我们)?(?:没有|没|并没有|从没)(?:让|叫|要求|授权|同意)你.{0,80}(?:打开|发送|执行|操作|创建|删除)|(?:不是|并不是)(?:让|叫|要)你.{0,80}(?:打开|发送|执行|操作|创建|删除)/u;
+  if (/^(?:你|lumi)?[，,\s]*(?:能不能|不要|别|以后不要|别再|不准再)[^。！？!?\n]{0,80}(?:动不动|总是|老是|每次|随便|擅自)[^。！？!?\n]{0,80}(?:进入|打开|切换|跳到|回复|回答|说|讲)/iu.test(text)) return { kind: 'correction_explanation', operation: 'explain', subject: 'lumi', target: 'previous_action', payload: text, sideEffectClass: 'none', relation: 'correction', confidence: 0.98, rule: 'product-behaviour-correction' }; // i18n-allow: Product behaviour feedback, not navigation authorization.
   // i18n-allow: Multilingual authorization objections and retrospective challenges; not user-visible copy.
   const authorizationOrExecutionObjection =
     /(?:谁|哪个人|是谁)(?:让|叫|允许|授权|批准)你|未经(?:我|我们)?(?:的)?(?:允许|授权|同意|批准)|(?:你)?(?:没有|无|没)(?:这个)?权限|(?:我|我们)?什么时候(?:允许|授权|同意|让)你|凭什么(?:打开|发送|执行|操作|创建|删除)?|为什么不(?:先)?(?:问|确认|征得)|(?:你|lumi).{0,24}(?:刚才|刚刚|之前|上一轮)[^。！？!?\n]{0,48}(?:打开|发送|执行|操作|创建|删除)[^。！？!?\n]{0,36}(?:干什么|为什么|凭什么|怎么回事)|\bwho\s+(?:asked|told|authorized|allowed|gave)\s+you\b|\bwithout\s+(?:my|our)\s+(?:permission|authorization|approval)\b|\byou\s+(?:(?:do|did)\s+not|don['\u2019]?t|didn['\u2019]?t)\s+have\s+(?:my\s+)?permission\b|\bwhy\s+(?:didn['\u2019]?t\s+you|did\s+you\s+not)\s+(?:ask|confirm)\b|\bwhy\s+did\s+(?:you|lumi)\s+(?:just\s+)?(?:open|send|run|execute|create|delete)\b/iu;
@@ -543,6 +548,97 @@ export function hasMixedStatusExecutionIntent(value: string): boolean {
     || (hasRecentActionStatusSignal && englishIndependentAction);
 }
 
+function isConversationExecutionFactCandidate(text: string): boolean {
+  const normalized = String(text || '').trim();
+  if (!normalized) return false;
+  if (classifySkillAuthoringIntent(normalized) !== 'none') return false;
+  if (isPriorArtifactDeliveryQuestion(normalized) && !hasMixedStatusExecutionIntent(normalized)) return true;
+  if (isPriorWorkDeliveryFactQuestion(normalized)) return true;
+  if (isPriorFailureExplanationQuestion(normalized)) return true;
+  if (isPriorTurnToolReceiptQuestion(normalized)) return true;
+  if (isPriorSingleFileReadFactQuestion(normalized)) return true;
+  // i18n-allow -- Chinese prior-open fact-question recognition; not user-visible copy.
+  const asksAboutPriorOpen = /(?:你)?(?:不是|不都|难道没)?(?:已经|刚才|刚刚|之前).{0,16}(?:打开|启动|运行).{0,24}(?:吗|没有|没|不知道|忘了)|(?:你)?(?:已经|刚才|刚刚).{0,16}(?:打开|启动|运行)了[，,。！？!?\s]*(?:你)?(?:自己)?(?:不知道|忘了)|\b(?:didn'?t|did\s+you\s+not|you\s+already).{0,40}\b(?:open|launch|start)(?:ed)?\b/iu.test(normalized);
+  if (asksAboutPriorOpen) return true;
+  const conversationScope = /(?:这|本|当前|刚才|刚刚|整个).{0,10}(?:轮|段|次)?(?:对话|会话|聊天)|\b(?:this|current|that)\s+(?:conversation|chat|session)\b/iu.test(normalized); // i18n-allow: Multilingual execution-fact question recognition; not user-visible copy.
+  const asksWhether = /(?:有没有|有没|是否|究竟|到底|真的)|\b(?:did|have|was|were)\b/iu.test(normalized); // i18n-allow: Multilingual execution-fact question recognition; not user-visible copy.
+  const executionSubject = /(?:(?:调用|执行|使用|跑).{0,10}(?:工具|插件|技能)|(?:创建|新建|建立).{0,10}(?:任务|计划))|\b(?:call|use|run|execute)(?:d|ing)?\s+(?:any\s+)?tools?\b|\bcreat(?:e|ed|ing)\s+(?:any\s+)?tasks?\b/iu.test(normalized); // i18n-allow: Multilingual execution-fact question recognition; not user-visible copy.
+  const asksVerifiedClientNavigation = /(?:成功|实际|真实|回执).{0,24}(?:客户端)?(?:导航|界面动作|页面动作)|(?:哪一个|哪个|什么).{0,24}(?:客户端)?(?:导航动作|界面动作)/u.test(normalized); // i18n-allow: Multilingual execution-fact question recognition; not user-visible copy.
+  return (conversationScope && asksWhether && executionSubject) || asksVerifiedClientNavigation;
+}
+
+export function isConversationExecutionFactQuestion(text: string): boolean {
+  if (!isConversationExecutionFactCandidate(text)) return false;
+  const intent = normalizeActionIntent(text);
+  return intent.kind === 'status_query' && intent.sideEffectClass === 'none';
+}
+
+export function isPriorSingleFileReadFactQuestion(text: string): boolean {
+  const normalized = String(text || '').replace(/\s+/gu, ' ').trim();
+  if (!normalized) return false;
+  // A correction that names a concrete file is executable work even when it
+  // also says "previous task" or contains the word "path".  Let the normal
+  // task-continuation path bind it to the server-owned task; never consume it
+  // as a read-only history lookup before the tool loop runs.
+  // i18n-allow: multilingual action/target recognition; not user-visible copy.
+  const hasExplicitFileTarget = /(?:[A-Za-z]:[\\/]|\\\\)[^\r\n“”"'<>|?*，,；;。！？!?]{1,440}\.[A-Za-z0-9]{1,16}(?=$|[\s，,；;。！？!?)）\]}'"])/u.test(normalized)
+    || /\/(?:Users|home|tmp|var|opt|Volumes)\/[^\r\n“”"'<>]{1,440}\.[A-Za-z0-9]{1,16}(?=$|[\s，,；;。！？!?)）\]}'"])/u.test(normalized);
+  // i18n-allow: multilingual correction/continuation recognition; not user-visible copy.
+  const explicitTargetAction = /(?:不是|不对|纠正|改成|改为|换成|而是|应该是)|(?:继续|接着|重试).{0,32}(?:任务|读取|读|打开|分析)|(?:请|帮我|现在|然后|继续|接着|重新|再次|再|改成|改为|换成)\s*(?:读取|读一下|打开|分析)|\b(?:instead|correct|change|replace|continue|resume|retry|re-?read|read\s+again)\b/iu.test(normalized);
+  if (hasExplicitFileTarget && explicitTargetAction) return false;
+  // A request to re-read is executable work. This fast path is only for
+  // recalling the immediately preceding, already verified read receipt.
+  // i18n-allow: multilingual previous-file fact recognition; not user-visible copy.
+  const freshReadMarkers = Array.from(normalized.matchAll(
+    /(?:重新\s*读取|再次\s*读取|再\s*读(?:取)?|重读)|\b(?:re-?read(?:ing)?|read\s+again)\b/giu,
+  ));
+  const asksForFreshRead = freshReadMarkers.some(marker => {
+    const markerIndex = marker.index ?? 0;
+    const prefix = normalized.slice(Math.max(0, markerIndex - 48), markerIndex);
+    const clausePrefix = prefix.slice(Math.max(
+      prefix.lastIndexOf('，'),
+      prefix.lastIndexOf(','),
+      prefix.lastIndexOf('。'),
+      prefix.lastIndexOf('.'),
+      prefix.lastIndexOf('！'),
+      prefix.lastIndexOf('!'),
+      prefix.lastIndexOf('？'),
+      prefix.lastIndexOf('?'),
+      prefix.lastIndexOf('；'),
+      prefix.lastIndexOf(';'),
+    ) + 1);
+    // "不要重新读取" and "without re-reading" explicitly forbid a new
+    // tool call. They must not be mistaken for an executable re-read request.
+    // Keep the negation close to the marker so a separate clause such as
+    // "不要猜，重新读取" still requests fresh work.
+    // i18n-allow: multilingual negated re-read recognition; not user-visible copy.
+    const negated = /(?:不要|别|无需|无须|不用|不必|不需要|请勿|禁止|不是(?:要|让你)?|并非(?:要|让你)?)[^，,。.!！？?；;\n]{0,6}$/u.test(clausePrefix)
+      || /(?:do\s+not|don't|dont|never|without|no\s+need\s+to|need\s+not|needn't|must\s+not)(?:\s+(?:actually|really|ever|please|the\s+file|it)){0,3}\s*$/iu.test(clausePrefix);
+    return !negated;
+  });
+  if (asksForFreshRead) return false;
+  // i18n-allow: multilingual previous-file fact recognition; not user-visible copy.
+  const prior = /(?:刚才|刚刚|上一轮|上次|前一轮|此前)|\b(?:just\s+now|previous(?:ly)?|last\s+turn|prior\s+turn|earlier)\b/iu.test(normalized);
+  // i18n-allow: multilingual previous-file fact recognition; not user-visible copy.
+  const read = /(?:读取|读过|读的|所读)|\b(?:read|file)\b/iu.test(normalized);
+  // i18n-allow: multilingual previous-file fact recognition; not user-visible copy.
+  const asksFact = /(?:哪个|哪一个|什么|精确|路径|字段|值|名称|版本)|\b(?:which|what|exact|path|field|value|name|version)\b/iu.test(normalized);
+  // A fact lookup must actually ask for, recall, or request presentation of a
+  // stored value. Merely mentioning "previous", "read", and "path" is not a
+  // question and must not steal an executable correction from the task lane.
+  // i18n-allow: multilingual fact-query recognition; not user-visible copy.
+  const asksForRecall = /[？?]/u.test(normalized)
+    || /(?:告诉我|列出|给我|回答|说(?:一)?下|回忆|根据.{0,20}回执|分.{0,8}(?:行|列))/u.test(normalized)
+    || /\b(?:tell|report|list|give|recall|show|based\s+(?:only\s+)?on)\b/iu.test(normalized);
+  return prior && read && asksFact && asksForRecall;
+}
+
+export function isPriorFailureExplanationQuestion(text: string): boolean {
+  // i18n-allow: Chinese previous-turn failure question recognition; not user-visible copy.
+  return /^(?:(?:这次|刚才|刚刚|上次|前面|那个任务)\s*)?(?:为什么|怎么(?:会)?|为何)\s*(?:失败|没(?:有)?(?:做成|完成|成功)|没做成|出错|报错|受阻|卡住)(?:了|的)?[啊呀呢，,。！？?!\s]*$/u.test(text)
+    || /^why\s+(?:did\s+)?(?:it|that|the\s+(?:task|request))?\s*(?:fail|failed|not\s+(?:finish|complete|succeed))[?!.\s]*$/iu.test(text);
+}
+
 function statusQuery(text: string): NormalizedActionIntent | null {
   const namedArtifact = relativeArtifactPath(text, false);
   // A concrete new write owns the turn even when a separate scope fence uses
@@ -668,9 +764,7 @@ function statusQuery(text: string): NormalizedActionIntent | null {
     };
   }
 
-  // i18n-allow: Chinese client-state input recognition; not user-visible copy.
-  const clientState = /(?:检查|查看|告诉我|现在).{0,18}(?:你的|lumi\s*的)?(?:模式|模态|运行模式|模)状态|(?:你现在|当前).{0,12}(?:是什么|什么)?模式/iu;
-  if (clientState.test(text)) {
+  if (CLIENT_STATE_INSPECTION_REQUEST.test(text)) {
     return {
       kind: 'client_state',
       operation: 'read',
@@ -678,7 +772,7 @@ function statusQuery(text: string): NormalizedActionIntent | null {
       target: 'client_state',
       payload: '',
       sideEffectClass: 'none',
-      relation: 'status',
+      relation: 'new',
       confidence: 0.96,
       rule: 'client-state-query',
     };
@@ -694,7 +788,7 @@ function statusQuery(text: string): NormalizedActionIntent | null {
   if (/(?:\u6253\u5f00|\bopen\b)\s+https?:\/\//iu.test(text)) return null;
 
   const registeredSurfaceStatus =
-    /(?:进度|状态|结果呢|做到哪|到哪了|怎么样|做完了吗|完成了吗|好了吗)/u.test(text) // i18n-allow: Reviewed Chinese status-follow-up input recognition.
+    /(?:进度(?:怎么样|如何|呢)|状态(?:是什么|怎么样|如何|呢)|结果呢|做到哪|到哪了|做完了吗|完成了吗|好了吗)/u.test(text) // i18n-allow: Reviewed Chinese status-follow-up input recognition.
       ? CLIENT_SURFACE_RULES.find(candidate => candidate.pattern.test(text.replace(/https?:\/\/\S+/giu, '')))
       : undefined;
   if (registeredSurfaceStatus) {
@@ -840,7 +934,7 @@ function inboundMessageRead(text: string): NormalizedActionIntent | null {
 
   // i18n-allow: Chinese messaging-read input recognition; not user-visible copy.
   const generalRead = // i18n-allow: Chinese messaging-read input recognition; not user-visible copy.
-    /(?:微信|wechat|weixin|聊天记录|聊天内容|消息).{0,40}(?:看看|查看|看一下|读取|读|最近|记录|总结)|(?:看看|查看|看一下|读取|读|最近|总结).{0,40}(?:微信|wechat|weixin|聊天记录|聊天内容|消息)/iu;
+    /(?:微信|wechat|weixin|聊天记录|聊天内容|消息).{0,40}(?:看看|查看|看一下|读取|读|最近|记录|总结)|(?:看看|查看|看一下|读取|读|最近|总结).{0,40}(?:微信|wechat|weixin|聊天记录|聊天内容|消息)|\b(?:read|view|inspect|summari[sz]e)\b.{0,40}\b(?:wechat|weixin|messages?|chat)\b/iu;
   if (!generalRead.test(text) || /(?:发给|发送给|帮我发|替我发|直接发|send\s+to)/iu.test(text)) return null; // i18n-allow: Chinese outbound-message exclusion.
   // Resolve contact slots here so all channels share the accepted read target.
   const contact = trimSlot(
@@ -862,11 +956,17 @@ function inboundMessageRead(text: string): NormalizedActionIntent | null {
   };
 }
 
+export function hasNegatedMessagingSendIntent(text: string): boolean {
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  if (/^(?:我)?(?:没有|没|并未|从未|不是|并不是).{0,100}(?:发给|发送给|给.{0,24}发|让你.{0,24}(?:发|回复|告诉))/u.test(text)) return true;
+  return /(?:不要|别|无需|禁止).{0,32}(?:发送|发消息|回复|发出)|\b(?:do\s+not|don't|dont|never)\b.{0,64}\b(?:send|message|reply)\b|\bwithout\b.{0,40}\b(?:sending|messaging|replying)\b/iu.test(text);
+}
+
 function outgoingMessageSend(text: string): NormalizedActionIntent | null {
   if (isExplicitArtifactCreationText(text)) return null;
   const confirmationOnly = isExternalCommitConfirmationOnlyRequest(text);
   // i18n-allow: Chinese negative-send input recognition; not user-visible copy.
-  if (!confirmationOnly && /(?:不要|别|无需|不用).{0,12}(?:发|发送|回复)|(?:没有|没|并未).{0,30}(?:让我|叫我|让你).{0,20}(?:发|发送|回复)/u.test(text)) return null;
+  if (!confirmationOnly && hasNegatedMessagingSendIntent(text)) return null;
   const patterns = [ // i18n-allow: Chinese outbound-message semantic-role recognition; not user-visible copy.
     /(?:请)?(?:准备)?给(?:测试联系人)?\s*[「『“"']([^」』”"']{1,32})[」』”"']\s*(?:发送消息|发消息|发)\s*[「『“"']([\s\S]{1,1000}?)[」』”"']/u, // i18n-allow: confirmation-only outbound-message semantic-role recognition.
     /(?:发|发送|回复)给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})\s*[「『“"']([\s\S]{1,1000}?)[」』”"']/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
@@ -904,7 +1004,8 @@ function localWorkflowIntent(text: string): NormalizedActionIntent | null {
     confidence: 0.95, rule: `local-workflow-${intent}` };
 }
 
-function genericExternalCommit(text: string): NormalizedActionIntent | null {
+export function genericExternalCommit(text: string): NormalizedActionIntent | null {
+  text = withoutNegatedLookupClauses(currentTurnText(text));
   // Explicit negation and retrospective/explanatory language must never be
   // promoted into an external mutation merely because it contains an action
   // verb.
@@ -912,7 +1013,7 @@ function genericExternalCommit(text: string): NormalizedActionIntent | null {
   if (/(?:不要|别|无需|不用|取消|没有|并未|没让你|为什么|怎么会|刚才|之前).{0,30}(?:发布|提交|付款|支付|签署|签字|上传|post|publish|submit|pay|sign)/iu.test(text)) return null;
 
   // i18n-allow: Chinese payment semantic-role input recognition.
-  const payment = text.match(/(?:付款|支付|转账|打款|pay|transfer)\s*(?:给|to)?\s*([^，。！？!?\n]{1,80})/iu);
+  const payment = text.match(/(?:^|[，。！？!?；;\n])\s*(?:现在\s*)?(?:请(?:你)?|帮我|替我|麻烦你|please)?\s*(?:付款|支付|转账|打款|pay|transfer)\s*(?:给|to)?\s*([^，。！？!?\n]{1,80})/iu);
   if (payment) {
     return {
       kind: 'payment', operation: 'mutate', subject: 'user',
@@ -1028,11 +1129,12 @@ export function mediaGenerationIntent(value: string): NormalizedActionIntent | n
   // prompt, script, configuration question or historical result does not.
   if (!/^(?:(?:请|帮我|给我|现在|直接)\s*)*(?:生成|创建|制作|绘制|画|做(?:成)?|合成|转成|转换为|变成|编辑|修改|重绘|替换).{0,100}(?:图片|图像|照片|插画|海报|视频|短片|人像)|^(?:please\s+)?(?:generate|create|make|draw|render|edit|modify|redraw)\b.{0,60}\b(?:image|images|picture|photo|poster|video|clip)\b/iu.test(head)) return null; // i18n-allow: affirmative media operations.
   if (/(?:提示词|脚本|文案|方案|大纲|字幕|标题|配置|模型|代码|网页|组件|是否|了吗|了没|吗[？?]?|不要生成|不要创建)|\b(?:prompt|script|copy|plan|outline|caption|configuration|model|code|webpage)\b|\?/iu.test(head)) return null; // i18n-allow: non-media deliverables and questions.
-  const target = /^(?:(?:请|帮我|给我|现在|直接)\s*)*(?:编辑|修改|重绘|替换)|^(?:please\s+)?(?:edit|modify|redraw)\b/iu.test(head) // i18n-allow: media editing.
-    ? 'ai_edit_image' : /视频|短片|\b(?:video|clip)\b/iu.test(head) ? 'generate_video' : 'generate_image'; // i18n-allow: media kind.
+  const editing = /^(?:(?:请|帮我|给我|现在|直接)\s*)*(?:编辑|修改|重绘|替换)|^(?:please\s+)?(?:edit|modify|redraw)\b/iu.test(head); // i18n-allow: media editing.
+  const target = /视频|短片|\b(?:video|clip)\b/iu.test(head)
+    && !/(?:视频|\b(?:video|clip)\b)\s*(?:封面|缩略图|cover|thumbnail|poster)/iu.test(head) ? 'generate_video' : editing ? 'ai_edit_image' : 'generate_image'; // i18n-allow: media kind.
   const expressionWorkflow = target === 'generate_image' && isAvatarAuthoringRequest(text)
     && /闭眼|开口|表情变体|expression\s*variants/iu.test(text); // i18n-allow: requested expression variants use the same source image.
-  return { kind: 'media_generation', operation: 'create', subject: 'user', target,
+  return { kind: 'media_generation', operation: editing && target === 'generate_video' ? 'mutate' : 'create', subject: 'user', target,
     ...(expressionWorkflow ? { mediaTools: ['generate_image', 'ai_edit_image'] as const as Array<'generate_image' | 'ai_edit_image'> } : {}),
     payload: text, sideEffectClass: 'external_commit', relation: 'new', confidence: 0.98, rule: 'explicit-media-generation' };
 }
@@ -1101,7 +1203,6 @@ export function normalizeActionIntent(value: string, analysis?: ActionIntentAnal
     explicitArtifactCreation ? null : externalAiHistoryRead(text),
     explicitArtifactCreation ? null : inboundMessageRead(text),
     explicitArtifactCreation ? null : outgoingMessageSend(text),
-    explicitArtifactCreation ? null : genericExternalCommit(text),
     explicitArtifactCreation ? null : localWorkflowIntent(text),
     explicitArtifactCreation ? null : localDesktopOperation(text),
   ].find(Boolean);
@@ -1134,5 +1235,9 @@ export function normalizeActionIntent(value: string, analysis?: ActionIntentAnal
     };
   }
 
+  if ((hasExplicitNoToolInstruction(text) || !hasMixedStatusExecutionIntent(text)) && isConversationExecutionFactCandidate(text)) return {
+    kind: 'status_query', operation: 'status', subject: 'lumi', target: 'previous_action',
+    payload: '', sideEffectClass: 'none', relation: 'status', confidence: 0.99, rule: 'conversation-execution-facts',
+  };
   return { ...EMPTY_INTENT };
 }

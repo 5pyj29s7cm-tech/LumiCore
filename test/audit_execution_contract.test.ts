@@ -5,7 +5,6 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase } from '../db_layer';
 import { buildLumiExecutionPipeline } from '../server/cognition/execution_pipeline';
 import { buildActionContract } from '../server/cognition/action_contract';
-import { buildClientSurfaceContinuationBridge } from '../server/socket/chat';
 import { registerAllTools } from '../server/tools/definitions';
 import { ToolRegistry } from '../server/tools/registry';
 const registry = new ToolRegistry();
@@ -55,8 +54,7 @@ describe('accepted-turn decision consistency', () => {
         expect(p.execution.promptOverlay).toContain('tools=off');
     });
     it('does not authorize an unbound continuation through a UI bridge', () => {
-        const bridge = buildClientSurfaceContinuationBridge('继续', [{ role: 'user', content: '看看知识库界面' }]);
-        expect(bridge).not.toBe('');
+        const bridge = 'Use client_get_state first to inspect the interface.';
         const p = plan('继续', bridge);
         expect(p.trustedActionContinuation).toBe(false);
         expect(p.executionRequested).toBe(false);
@@ -70,6 +68,19 @@ describe('accepted-turn decision consistency', () => {
         expect(p.modelToolProjection.toolNames).not.toContain('desktop_ai_collect_answer');
         expect(p.modelToolProjection.toolNames).not.toContain('runtime_work_status');
         expect(buildActionContract(text).kind).not.toBe('external_ai_request');
+    });
+    it.each([
+        '查看 Lumi 客户端当前界面状态，介绍当前页面和各个分区。只读取客户端状态，不做桌面控制，也不切换页面。',
+        '介绍 Lumi 客户端各个页面的作用',
+        '读取客户端状态，不要打开设置页面',
+    ])('uses current-state evidence rather than a saved task or navigation for %s', text => {
+        const p = plan(text);
+        expect(p.normalizedIntent).toMatchObject({ kind: 'client_state', operation: 'read', relation: 'new' });
+        expect(p.executionRequested).toBe(true);
+        expect(p.turnIntent.flow.acceptedActionContract!.contract.label).toBe('Verified Lumi client state');
+        expect(p.turnIntent.flow.acceptedActionContract!.contract.verificationTools).toEqual(['client_get_state']);
+        expect(p.modelToolProjection.toolNames).toContain('client_get_state');
+        expect(p.execution.promptOverlay).not.toContain('then call client_action');
     });
     it('retains explicitly requested external AI actions', () => {
         expect(buildActionContract('Ask Codex to review this implementation and collect its answer.').kind).toBe('external_ai_request');

@@ -4,7 +4,6 @@ import * as THREE from 'three';
 import { RingDef } from './types';
 
 interface OrbitalRingsProps {
-  hue: number;
   syncRate: number;
 }
 
@@ -17,7 +16,7 @@ const DEFAULT_RINGS: RingDef[] = [
   { y: 1.3, radius: 0.45, tube: 0.008, tiltX: -0.65, tiltZ: 0.4, hue: 150, speed: -0.25, particleCount: 40 },
 ];
 
-export function OrbitalRings({ hue, syncRate }: OrbitalRingsProps) {
+export function OrbitalRings({ syncRate }: OrbitalRingsProps) {
   const groupRef = useRef<THREE.Group>(null);
 
   const rings = useMemo(() => DEFAULT_RINGS, []);

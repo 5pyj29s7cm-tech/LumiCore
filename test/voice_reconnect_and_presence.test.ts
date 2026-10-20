@@ -170,6 +170,19 @@ describe('voice reconnect and perception continuity', () => {
     expect(client).toContain('if (data?.workContinues)');
   });
 
+
+  it('recognizes a fullwidth STOP through the existing local control comparison', () => {
+    expect(isPureInterruptCommand('ＳＴＯＰ')).toBe(true);
+    expect(isVoiceCallEndCommand('ＳＴＯＰ')).toBe(false);
+  });
+
+  it('does not treat a quoted fullwidth STOP file payload as a transport control', () => {
+    const text = '在 D:/fixtures/stop-literal.txt 新建文本文件，只写入“ＳＴＯＰ”。';
+    expect(isPureInterruptCommand(text)).toBe(false);
+    expect(isVoiceCallEndCommand(text)).toBe(false);
+    expect(isEchoedImmediateVoiceControl(text, true, 'literal-stop-payload')).toBe(false);
+  });
+
   it('keeps a semantic stop lane open during TTS before voiceprint gating', () => {
     const root = process.cwd();
     const server = readVoiceImplementationSource();

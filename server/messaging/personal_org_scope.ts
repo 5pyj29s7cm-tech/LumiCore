@@ -150,6 +150,8 @@ function scopedMessage(
 export function planPersonalOrganizationScope(
   message: IncomingMessage,
   requiresOrganization: boolean,
+  selectedOrganizationId?: string,
+  requireExplicitOrganizationSelection = false,
 ): PersonalOrganizationScopePlan {
   const noMutation = (resolution: PersonalOrganizationScopeResolution): PersonalOrganizationScopePlan => ({
     resolution,
@@ -198,6 +200,14 @@ export function planPersonalOrganizationScope(
   }
 
   const organizations = activeOrganizations(message.boundUserId);
+  if (selectedOrganizationId) {
+    const selected = organizations.find(org => org.id === selectedOrganizationId);
+    if (!selected) return planned({ kind: 'reply', message, reply: '所选组织权限已变化，本轮没有归档。请重新选择可访问的组织案件。' }); // i18n-allow: pending notice scope selection.
+    return planned({ kind: 'organization', message: scopedMessage(message, selected), org: selected, entered: true }, {
+      key, userId: message.boundUserId, platform: message.platform, platformUserId: message.userId, chatId: message.chatId,
+      activeOrgId: selected.id, lastRoutedDomain: 'work', updatedAt: now(),
+    });
+  }
   if (record?.pending) {
     const pendingOrganizations = record.pending.orgIds
       .map(orgId => organizations.find(org => org.id === orgId))
@@ -260,7 +270,7 @@ export function planPersonalOrganizationScope(
     );
   }
 
-  if (!requiresOrganization) {
+  if (!requiresOrganization || requireExplicitOrganizationSelection) {
     if (record && record.lastRoutedDomain !== 'personal') {
       return planned(
         { kind: 'personal', message },

@@ -1,12 +1,14 @@
+import { hasExplicitNoToolInstruction, explicitNoMutationScope, isInformationOnlyQuestion } from '../../../../cognition/tool_intent';
+import { createConversationReceiptObserver } from '../../../../conversation/execution_receipt_archive';
+import { resolveCapabilitySideEffectClass } from "../../../../cognition/capability_execution_plan";
 import { extendTurnBindings } from "../../../../cognition/turn_bindings";
-import { requestsOrganizationScope } from "../../../../messaging/personal_org_scope";
 import { toolRegistry } from "../../../../tools/registry";
 import { getConversationActionStatus, settleConversationActionExecutionRequest, setConversationActionExecutionStatus } from "../../../../conversation/manager";
 import { formatPendingConfirmationRequest, type recordPendingConfirmationDurably } from "../../../../tools/pending_confirmation";
-import { bindOrganizationWorkItemTask, registerOrganizationWorkExecution, routeOrganizationWork, setOrganizationWorkItemExecutionStatus, type RouteOrganizationWorkResult } from "../../../../org/work_routing";
+import { bindOrganizationWorkItemTask, registerOrganizationWorkExecution, routeOrganizationWork, isStrongerOrganizationWorkSideEffect, setOrganizationWorkItemExecutionStatus, type RouteOrganizationWorkResult } from "../../../../org/work_routing";
 import { formatConversationExecutionFactAnswer, getConversationExecutionFacts, isConversationExecutionFactQuestion } from "../../../../conversation/execution_facts";
 import { coalesceToolExecutionRecords, mergeToolExecutionRecords, taskReceiptsToRecords } from "../../../../cognition/task_execution_ledger";
-import type { ToolExecutionRecord } from "../../../../tools/types";
+import type { ToolContext, ToolExecutionRecord } from "../../../../tools/types";
 import { buildDesktopExecutionStabilityPolicy } from "../../../../cognition/desktop_execution_stability";
 import { createDesktopExecutionTracker } from "../../../../desktop/execution_runtime";
 import { buildInteractionModeOverlay } from "../../../../cognition/turn_flow";
@@ -19,13 +21,14 @@ import { resolveModelRequestInputBudget } from "../../../../llm/request_context_
 import type { NormalizedMessage } from "../../../../llm/providers";
 import { createTurnConfirmation } from "../../../../tools/turn_confirmation";
 import type { MessagingDesktopLifecycle } from "../messaging_finalization";
-import { assertMessagingAuthorization } from "../messaging_ingress_runtime";
+import { assertMessagingAuthorization, isMessagingAuthorizationCurrent } from "../messaging_ingress_runtime";
 import { removeSupersededAssistantMessage, persistBoundMessagingMessage } from "../messaging_persistence";
 import type { MessagingTurnContext } from './admission';
 import { resolveMentionedOrganizationMembers } from './remote_plan';
 
 export async function prepareMessagingExecution(context: MessagingTurnContext) {
 
+  const refreshDesktopRelays = () => {
   if (context.isIdentityBound) {
     const lifecycle: MessagingDesktopLifecycle = {
       taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
@@ -34,6 +37,8 @@ export async function prepareMessagingExecution(context: MessagingTurnContext) {
     context.desktopRelay = context.options?.createScopedDesktopRelay?.(context.effectiveUserId, context.source, context.domain, context.orgId, lifecycle);
     context.personalDesktopRelay = context.options?.createPersonalDesktopRelay?.(context.effectiveUserId, context.source, lifecycle);
   }
+  };
+  refreshDesktopRelays();
   if (context.isIdentityBound && context.conversation && context.actionFollowupIntent === 'status') {
     const executionFactQuestion = isConversationExecutionFactQuestion(context.requestText);
     const statusText = executionFactQuestion
@@ -57,102 +62,67 @@ export async function prepareMessagingExecution(context: MessagingTurnContext) {
     } })), context: undefined };
   }
   let organizationWorkRoute: RouteOrganizationWorkResult | null = null;
-  const shouldRouteOrganizationWork = Boolean(
-    context.isOrganizationBound
-    && context.conversation
-    && context.actionTaskExecution.state?.taskId
-    && (
-      context.executionPlan.capabilityPlan.taskLedgerRequired
-      || requestsOrganizationScope(context.requestText)
-      || context.actionTaskExecution.kind === 'resume'
-      || Boolean(context.options?.onMessage)
-    )
-    && !context.directlyAppliedMode
-    && context.executionPlan.normalizedIntent.operation !== 'status'
-    && context.executionPlan.normalizedIntent.operation !== 'explain',
-  );
-  if (shouldRouteOrganizationWork) {
-    try {
+  let organizationAdmissionBlocker = '';
+  let activeAdapters = 0;
+  let admission = Promise.resolve();
+  const onAdapterStart: NonNullable<ToolContext['onAdapterStart']> = call => {
+    const next = admission.then(async () => {
+      if (!context.isOrganizationBound) return;
+      assertMessagingAuthorization(context.msg);
+      context.throwIfActionLeaseWasLost();
+      if (!context.conversation || !context.actionTaskExecution.state?.taskId) {
+        throw new Error('The organization action has no accepted conversation task.');
+      }
+      const sideEffectClass = resolveCapabilitySideEffectClass([call.capability]);
+      if (organizationWorkRoute && isStrongerOrganizationWorkSideEffect(sideEffectClass, organizationWorkRoute.workItem.sideEffectClass)) {
+        if (activeAdapters) throw new Error('The earlier organization adapter has not settled.');
+        context.organizationWorkExecution?.release();
+        context.organizationWorkExecution = null;
+      }
       const mentionedMemberIds = resolveMentionedOrganizationMembers(context.msg, context.orgId);
       organizationWorkRoute = routeOrganizationWork({
-        orgId: context.orgId,
-        requesterUserId: context.effectiveUserId,
-        source: context.source,
-        requestId: context.requestId,
-        idempotencyKey: `organization-work:${context.requestId}`,
-        text: context.routingText,
-        intentKind: context.executionPlan.normalizedIntent.kind,
-        operation: context.executionPlan.normalizedIntent.operation,
-        sideEffectClass: context.executionPlan.normalizedIntent.sideEffectClass,
-        conversationId: context.conversation!.id,
-        taskId: context.actionTaskExecution.state!.taskId,
-        platform: context.msg.platform,
-        targetMemberId: mentionedMemberIds[0],
-        targetMemberIds: mentionedMemberIds,
+        orgId: context.orgId, requesterUserId: context.effectiveUserId,
+        source: context.source, requestId: context.requestId,
+        idempotencyKey: `organization-work:${context.requestId}`, text: context.routingText,
+        intentKind: 'work_task', operation: call.capability.operation, sideEffectClass,
+        conversationId: context.conversation.id, taskId: context.actionTaskExecution.state.taskId,
+        platform: context.msg.platform, targetMemberId: mentionedMemberIds[0], targetMemberIds: mentionedMemberIds,
       });
-      bindOrganizationWorkItemTask({
-        orgId: context.orgId,
-        workItemId: organizationWorkRoute.workItem.id,
-        conversationId: context.conversation!.id,
-        taskId: context.actionTaskExecution.state!.taskId,
-      });
+      bindOrganizationWorkItemTask({ orgId: context.orgId, workItemId: organizationWorkRoute.workItem.id,
+        conversationId: context.conversation.id, taskId: context.actionTaskExecution.state.taskId });
       const route = organizationWorkRoute.workItem;
-      if (!['waiting_approval', 'waiting_human'].includes(route.status)) {
-        context.organizationWorkExecution = registerOrganizationWorkExecution({
-          orgId: context.orgId,
-          workItemId: route.id,
-          actorUserId: context.effectiveUserId,
-          abortController: context.actionAbortController,
+      organizationAdmissionBlocker = route.status === 'waiting_approval'
+        ? `任务尚未执行，正在等待组织管理员审批（审批单 ${route.approvalId || ''}）。审批通过后，在当前会话说“继续”即可恢复原任务。`
+        : route.status === 'waiting_human'
+          ? `任务已交给组织成员 ${route.humanOwnerUserId || route.assignedMemberId || '指定成员'}，Lumi 已停止自动执行。` : '';
+      if (organizationAdmissionBlocker) {
+        setConversationActionExecutionStatus(context.conversation.id, context.effectiveUserId, 'blocked', {
+          blocker: organizationAdmissionBlocker, requestId: context.requestId,
         });
+        await context.flushTerminalReply();
+        throw new Error(organizationAdmissionBlocker);
       }
-      context.systemPrompt += [
-        '',
-        '## Organization Business Route',
-        `Work item: ${route.id}. Status: ${route.status}.`,
-        `Department: ${route.departmentId || 'organization-default'}. Position: ${route.positionId || 'none'}.`,
-        `Primary member: ${route.assignedMemberId || 'none'}. Collaborators: ${(route.collaboratorMemberIds || []).join(', ') || 'none'}.`,
-        `Required skill tags: ${route.skillTags.join(', ') || 'none'}.`,
-        'Do not claim another department, member, position, or skill handled the task unless this durable route or a later handoff receipt says so.',
-      ].join('\n');
-    } catch (error: any) {
-      const blocker = `Organization work routing failed: ${error?.message || error}`;
-      setConversationActionExecutionStatus(context.conversation!.id, context.effectiveUserId, 'blocked', { blocker, requestId: context.requestId });
-      settleConversationActionExecutionRequest(context.conversation!.id, context.effectiveUserId, context.requestId, blocker);
-      const response = `组织任务没有开始执行：${error?.message || '业务路由校验失败'}。请由组织管理员检查部门、岗位、成员或技能配置。`;
-      return { terminal: await ( await context.commitReply(response)), context: undefined };
-    }
-  }
-  if (organizationWorkRoute?.workItem.status === 'waiting_approval') {
-    const approvalId = organizationWorkRoute.approval?.id || organizationWorkRoute.workItem.approvalId || '';
-    const blocker = `Organization approval ${approvalId} is required before execution.`;
-    setConversationActionExecutionStatus(context.conversation!.id, context.effectiveUserId, 'blocked', { blocker, requestId: context.requestId });
-    settleConversationActionExecutionRequest(context.conversation!.id, context.effectiveUserId, context.requestId, blocker);
-    const response = `任务已完成组织路由，但尚未执行。工作项 ${organizationWorkRoute.workItem.id} 正在等待组织管理员审批（审批单 ${approvalId}）。审批通过后，在当前会话说“继续”即可恢复原任务。`;
-    return { terminal: await ( await context.commitReply(response)), context: undefined };
-  }
-  if (organizationWorkRoute?.workItem.status === 'waiting_human') {
-    const owner = organizationWorkRoute.workItem.humanOwnerUserId || organizationWorkRoute.workItem.assignedMemberId || '指定成员';
-    const blocker = `Organization work item is owned by human member ${owner}.`;
-    setConversationActionExecutionStatus(context.conversation!.id, context.effectiveUserId, 'blocked', { blocker, requestId: context.requestId });
-    settleConversationActionExecutionRequest(context.conversation!.id, context.effectiveUserId, context.requestId, blocker);
-    const response = `任务已转交给组织成员 ${owner}，LumiCore 已停止自动执行。工作项：${organizationWorkRoute.workItem.id}。后续只有收到新的持久转派回执后才会恢复。`;
-    return { terminal: await ( await context.commitReply(response)), context: undefined };
-  }
+      if (!context.organizationWorkExecution) context.organizationWorkExecution = registerOrganizationWorkExecution({
+        orgId: context.orgId, workItemId: route.id, actorUserId: context.effectiveUserId,
+        abortController: context.actionAbortController,
+      });
+      setOrganizationWorkItemExecutionStatus({ orgId: context.orgId, workItemId: route.id,
+        actorUserId: context.effectiveUserId, status: 'executing', execution: context.organizationWorkExecution });
+      await context.flushTerminalReply();
+      assertMessagingAuthorization(context.msg);
+      context.organizationWorkExecution.assertCurrent();
+      context.throwIfActionLeaseWasLost();
+      activeAdapters++;
+    });
+    admission = next.catch(() => {});
+    return next;
+  };
   if (
     context.conversation
     && (context.toolSessionActive || Boolean(context.directlyAppliedMode))
     && (context.actionTaskExecution.kind === 'new' || context.actionTaskExecution.kind === 'resume')
   ) {
     setConversationActionExecutionStatus(context.conversation.id, context.effectiveUserId, 'executing', { requestId: context.requestId });
-    if (organizationWorkRoute) {
-      setOrganizationWorkItemExecutionStatus({
-        orgId: context.orgId,
-        workItemId: organizationWorkRoute.workItem.id,
-        status: 'executing',
-        actorUserId: context.effectiveUserId,
-        execution: context.organizationWorkExecution,
-      });
-    }
   }
   const priorTaskRecords = context.actionTaskExecution.kind === 'resume'
     ? taskReceiptsToRecords(context.actionTaskExecution.state?.receipts || [])
@@ -165,7 +135,8 @@ export async function prepareMessagingExecution(context: MessagingTurnContext) {
     text: context.routingText,
     flow: context.turnFlow,
     capabilitySelection: context.capabilitySelection,
-    capabilityExecutionPlan: context.executionPlan.executionPlan,
+    actionIntent: context.executionPlan.normalizedIntent,
+    taskId: context.actionTaskExecution.state?.taskId || context.requestId,
   });
   const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
 
@@ -266,6 +237,41 @@ export async function prepareMessagingExecution(context: MessagingTurnContext) {
     collectToolRecord(record);
   };
 
+  const prepareNativeAction: NonNullable<import('../remote_org_commands').RemoteOrganizationAdapterControl['prepareNativeAction']> = async call => {
+    assertMessagingAuthorization(context.msg);
+    context.throwIfActionLeaseWasLost();
+    const effects = resolveCapabilitySideEffectClass([call.capability]);
+    const veto = explicitNoMutationScope(context.requestText);
+    const policy = context.personalityToolPolicy;
+    const blocker = hasExplicitNoToolInstruction(context.requestText) || isInformationOnlyQuestion(context.requestText)
+      || veto.local && effects !== 'none' || veto.external && effects === 'external_commit'
+      ? '当前指令仅允许说明或禁止该操作，本轮没有执行组织业务。'
+      : policy && (!policy.allowedTools.includes('*') || policy.forbiddenTools.length > 0
+        || policy.requireConfirmation.length > 0
+        || Object.values(policy.securityOverrides || {}).some(level => level === 'forbidden' || level === 'confirm'))
+        ? '当前人格工具策略未授权这项原生组织业务，本轮没有执行。' : '';
+    if (blocker) { organizationAdmissionBlocker = blocker; throw new Error(blocker); }
+    const needsBinding = !context.actionTaskExecution.state?.taskId;
+    if (needsBinding && (activeAdapters || toolRecords.length || remoteToolContext.priorToolRecords.length)) {
+      organizationAdmissionBlocker = '当前请求已有执行记录，不能再追补任务身份；本轮组织业务未执行。';
+      throw new Error(organizationAdmissionBlocker);
+    }
+    try { await context.bindPreparedNativeTask(); }
+    catch (error) {
+      organizationAdmissionBlocker = '当前受理租约或任务身份已变化，本轮组织业务没有执行。';
+      throw error;
+    }
+    if (!needsBinding) return;
+    const taskId = context.actionTaskExecution.state!.taskId;
+    context.receiptObserver = createConversationReceiptObserver({ userId: context.effectiveUserId,
+      conversationId: context.conversation!.id, taskId, requestId: context.requestId,
+      turnRowId: context.actionTaskExecution.turnRowId, externalMessageId: context.msg.messageId,
+      domain: context.domain, orgId: context.orgId,
+    }, () => isMessagingAuthorizationCurrent(context.msg));
+    refreshDesktopRelays();
+    Object.assign(remoteToolContext, { taskId, turnRowId: context.actionTaskExecution.turnRowId,
+      desktopRelay: context.desktopRelay, personalDesktopRelay: context.personalDesktopRelay });
+  };
   const remoteToolContext = {
     userId: context.effectiveUserId,
     taskId: context.actionTaskExecution.state?.taskId,
@@ -282,6 +288,7 @@ export async function prepareMessagingExecution(context: MessagingTurnContext) {
     supervisedExternalCommits: context.isIdentityBound,
     toolPolicy: context.modelToolPolicy,
     source: context.source,
+    priorToolRecords: [] as ToolExecutionRecord[],
     llmGetters: context.llm as any,
     desktopRelay: context.desktopRelay,
     personalDesktopRelay: context.personalDesktopRelay,
@@ -290,11 +297,15 @@ export async function prepareMessagingExecution(context: MessagingTurnContext) {
     executionSignal: context.actionAbortController.signal,
     onToolRecord: observeToolRecord,
     requestConfirmation: requestToolConfirmation,
+    prepareNativeAction,
+    onAdapterStart,
+    onAdapterSettlement: () => { activeAdapters = Math.max(0, activeAdapters - 1); },
   };
   return { terminal: undefined, context: extendTurnBindings(context, {
     get organizationWorkRoute(): typeof organizationWorkRoute { return organizationWorkRoute; },
     set organizationWorkRoute(value: typeof organizationWorkRoute) { organizationWorkRoute = value; },
     remoteToolContext,
+    get organizationAdmissionBlocker() { return organizationAdmissionBlocker; },
     collectToolRecord,
     get pendingConfirmationCreatedThisTurn(): typeof pendingConfirmationCreatedThisTurn { return pendingConfirmationCreatedThisTurn; },
     set pendingConfirmationCreatedThisTurn(value: typeof pendingConfirmationCreatedThisTurn) { pendingConfirmationCreatedThisTurn = value; },

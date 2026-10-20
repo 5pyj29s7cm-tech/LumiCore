@@ -1,7 +1,7 @@
 /** Inspect instruction clauses, not descriptive words such as hair/发 in a brief. */
 export function mediaCreationInstruction(text: string): string | null {
   // i18n-allow: multilingual imperative/media intent recognition.
-  for (const clause of String(text || '').split(/[。！？!?；;：:\n]/u)) {
+  for (const clause of String(text || '').split(/[，,。！？!?；;：:\n]/u)) {
     if (/(?:不要|别|无需|不用|不需要|禁止|不是要|并非要|不再生图)|\b(?:don't|do not|never|without)\b/iu.test(clause)) continue;
     // i18n-allow: explanatory questions do not order image generation.
     if (/^(?:为什么|怎么|如何|是否|能否|介绍|说明|解释)|\b(?:why|explain|describe how)\b/iu.test(clause.trim())) continue;

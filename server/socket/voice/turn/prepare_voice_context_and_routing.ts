@@ -17,7 +17,7 @@ import { collectAnticipatoryContext } from "../../../context/anticipatory_contex
 import { queryMemories } from "../../../memory/store";
 import { CONVERSATIONAL_MEMORY_EVIDENCE } from "../../../memory/types";
 import { retrieveChunks } from "../../../agents/rag";
-import { searchKnowledgeBase } from "../../../org/kb";
+import { retrieveConversationKnowledge } from "../../../knowledge/conversation_retrieval";
 import { personalityRegistry } from "../../../personality";
 import { getStoredOperationMode } from "../../../cognition/operation_mode_store";
 import type { LumiExecutionPipeline, BuildLumiExecutionPipelineInput } from "../../../cognition/execution_pipeline";
@@ -115,12 +115,14 @@ export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited
           signal,
         }),
       })),
-      ...(context.voiceScope.domain === 'work' && context.voiceScope.orgId ? [{
+      {
         key: 'organization',
         operation: 'read' as const,
         sideEffectClass: 'none' as const,
-        run: (signal?: AbortSignal) => searchKnowledgeBase(context.voiceScope.orgId, routedUserText, { limit: 3, userId: context.session.userId, signal }),
-      }] : []),
+        run: (signal?: AbortSignal) => retrieveConversationKnowledge({
+          userId: context.session.userId, domain: context.voiceScope.domain, orgId: context.voiceScope.orgId,
+        }, routedUserText, { signal }),
+      },
     ], { deadlineMs: 1_300, signal: context.pipelineAbort.signal });
 
     voiceMemories = Array.isArray(prefetch.values.memory) ? prefetch.values.memory : [];
@@ -128,18 +130,14 @@ export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited
       const chunks = prefetch.values[`rag:${ragAgentId}`];
       if (!Array.isArray(chunks)) continue;
       for (const chunk of chunks) {
-        const content = String((chunk as any)?.content || '').trim();
+        const content = chunk.content ? `${chunk.citation}\n${chunk.content}` : '';
         if (content && !voiceRagKnowledge.includes(content)) voiceRagKnowledge.push(content);
         if (voiceRagKnowledge.length >= 5) break;
       }
       if (voiceRagKnowledge.length >= 5) break;
     }
     const organizationResults = prefetch.values.organization;
-    if (Array.isArray(organizationResults)) {
-      voiceOrganizationKnowledge = organizationResults
-        .map((result: any) => `[${result.title}] ${result.chunk}`)
-        .join('\n');
-    }
+    if (typeof organizationResults === "string") voiceOrganizationKnowledge = organizationResults;
     if (prefetch.failed.length > 0 || prefetch.timedOut.length > 0) {
       logger.warn(`[Audio] Read-only context prefetch partial: failed=${prefetch.failed.map(item => item.key).join(',') || 'none'} timedOut=${prefetch.timedOut.join(',') || 'none'} elapsedMs=${prefetch.elapsedMs}`);
     }
@@ -242,7 +240,6 @@ export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited
     {
       userId: context.session.userId,
       memories: voiceMemories.length > 0 ? voiceMemories : undefined,
-      ragKnowledge: voiceRagKnowledge.length > 0 ? voiceRagKnowledge : undefined,
       userText: routedUserText,
       domain: context.voiceScope.domain,
       orgId: context.voiceScope.orgId,
@@ -263,7 +260,8 @@ export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited
     text: turnFlow.routeText,
     flow: turnFlow,
     capabilitySelection,
-    capabilityExecutionPlan: executionPipeline.executionPlan,
+    actionIntent: executionPipeline.normalizedIntent,
+    taskId: executionPipeline.taskRelation.taskId || context.requestId,
   });
   const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
   const routedToolPolicy = executionPipeline.authorizationPolicy;
@@ -420,6 +418,7 @@ export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited
     routedUserText,
     baseVoiceOverlay,
     turnDispatch,
+    voiceKnowledgeContext: [voiceRagKnowledge.join('\n\n'), voiceOrganizationKnowledge].filter(Boolean).join('\n\n'),
     get voiceOrganizationKnowledge(): typeof voiceOrganizationKnowledge { return voiceOrganizationKnowledge; },
     set voiceOrganizationKnowledge(value: typeof voiceOrganizationKnowledge) { voiceOrganizationKnowledge = value; },
     fullPersonalityPrompt,

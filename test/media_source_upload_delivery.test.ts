@@ -13,6 +13,9 @@ import { makeChatArtifact } from '../shared/chat_artifacts';
 import { registerKnowledgeImportRoutes } from '../server/files/knowledge/import_routes';
 import * as extraction from '../server/files/knowledge/extraction';
 
+const testBackend = vi.hoisted(() => ({ origin: '' }));
+vi.mock('../src/services/apiBridge', () => ({ getBackendOrigin: () => testBackend.origin }));
+
 let app: Awaited<ReturnType<typeof makeApp>>;
 const owner = 'source-upload-user';
 let bytes: Buffer;
@@ -20,7 +23,7 @@ const realFetch = globalThis.fetch;
 let extractSpy: ReturnType<typeof vi.spyOn>;
 beforeAll(async () => {
   bytes = await sharp(Buffer.from('<svg width="4" height="4"><rect width="4" height="4" fill="#3366aa"/></svg>')).png().toBuffer();
-  app = await makeApp();
+  app = await makeApp(); testBackend.origin = app.url;
   registerKnowledgeImportRoutes(app.apiRouter);
   extractSpy = vi.spyOn(extraction, 'extractKnowledgeFileContent');
   vi.stubGlobal('localStorage', { getItem: (key: string) => key === 'lumi_auth_token' ? jwt.sign({ uid: owner, username: owner }, JWT_SECRET) : null });

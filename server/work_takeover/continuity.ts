@@ -1,7 +1,8 @@
 import type { WorkTakeoverTask } from './tasks';
 import { listWorkTakeoverTasks } from './tasks';
 import { getWorkTakeoverExecutionProgress, planWorkTakeoverExecution } from './execution_planner';
-import { isImmediateAssistantRestatementRequest } from '../cognition/normalized_action_intent';
+import { normalizeActionIntent, isImmediateAssistantRestatementRequest } from '../cognition/normalized_action_intent';
+import { hasExplicitToolIntent } from '../cognition/tool_intent';
 
 export type WorkTakeoverContinuationIntent = 'advance' | 'status';
 export type WorkTakeoverTurnSurface = 'chat' | 'work' | 'voice';
@@ -26,7 +27,6 @@ const REFERENTIAL_STATUS_RE = /(刚刚|刚才|上一个|上一条|这个任务|�
 const REFERENTIAL_ACTION_RE = /(刚刚|刚才|上一个|上一条|这个任务|这个事|那件事|它|这个).*(继续|下一步|接着|推进|执行|处理|跑|做)/u;
 const AFFIRMATIVE_RE = /^(好|好的|可以|行|嗯|嗯嗯|嗯哼|ok|okay|收到|继续吧)[。！？?!?]*$/i;
 const WORK_CONTEXT_RE = /任务|工作|客户|微信|接管|任务中心|交付|方案|报价|店铺|账号|发布|立案|装修|设计|cad|revit|短视频|电商|自动化/u;
-const WORK_STATUS_RE = /做完|完成|结果|进度|状态|卡|失败|成功|怎么回事|验证|检查/u;
 const WORK_ACTION_RE = /继续|下一步|接着|推进|执行|处理|跑|做|开始/u;
 
 const EN_WORK_CONTEXT_RE = /\b(task|work|customer|client|wechat|message|takeover|delivery|package|store|account|seller|creator|publish|filing|case|renovation|design|cad|revit|short\s*video|ecommerce)\b/i;
@@ -123,6 +123,9 @@ function classifyWorkTakeoverContinuationSignal(
   if (!clean || MUSIC_CONTINUATION_RE.test(clean)) return { intent: null, strength: 'none' };
   if (isImmediateAssistantRestatementRequest(text)) return { intent: null, strength: 'none' };
 
+  const nativeClientIntent = normalizeActionIntent(text);
+  if (nativeClientIntent.subject === 'lumi' && nativeClientIntent.relation === 'new') return { intent: null, strength: 'none' };
+
   const hasWorkContext = WORK_CONTEXT_RE.test(clean);
   const hasEnglishWorkContext = EN_WORK_CONTEXT_RE.test(text);
   if (isConversationalWorkSupportQuestion(text)) return { intent: null, strength: 'none' };
@@ -140,6 +143,8 @@ function classifyWorkTakeoverContinuationSignal(
     (hasWorkContext || hasEnglishWorkContext)
     && hasExplicitWorkExecutionRequest(text)
   ) return { intent: 'advance', strength: 'direct' };
+  if (CN_WORK_EXECUTION_QUESTION_RE.test(text.trim())) return { intent: 'status', strength: 'direct' };
+  if (hasExplicitToolIntent(text)) return { intent: null, strength: 'none' };
 
   const isWorkSurface = normalizedSurface === 'work';
   const recoveryPressure = hasRecoveryPressure(latestTask);
@@ -166,7 +171,6 @@ function classifyWorkTakeoverContinuationSignal(
 
   if (REFERENTIAL_STATUS_RE.test(clean)) return { intent: 'status', strength: 'direct' };
   if (REFERENTIAL_ACTION_RE.test(clean)) return { intent: 'advance', strength: 'direct' };
-  if (hasWorkContext && WORK_STATUS_RE.test(clean)) return { intent: 'status', strength: 'direct' };
   if (hasWorkContext && WORK_ACTION_RE.test(clean)) return { intent: 'advance', strength: 'direct' };
 
   if (STATUS_RE.test(clean)) {

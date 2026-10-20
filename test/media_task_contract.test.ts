@@ -133,3 +133,23 @@ describe('one completion contract across the media task lifecycle', () => {
       .toMatchObject({ status: 'blocked', completed: [] });
   });
 });
+
+
+describe('existing-video editing evidence', () => {
+  it.each(['修改刚才生成的视频，把背景换成雪景', 'Edit the generated video and make the lighting warmer.'])('keeps a video edit out of the image editor: %s', taskText => {
+    expect(normalizeActionIntent(taskText)).toMatchObject({ kind: 'media_generation', operation: 'mutate', target: 'generate_video' });
+    expect(buildActionContract(taskText).mediaGeneration).toMatchObject({ toolName: 'generate_video', sourceVideoRequired: true });
+  });
+  it('does not count a newly generated video as an edit of the existing video', () => {
+    const replay = replays[0];
+    const contract = buildActionContract('修改刚才生成的视频，让灯光更暖');
+    expect(evaluateMediaGenerationEvidence(contract, [replay.record as ToolExecutionRecord], replay))
+      .toMatchObject({ complete: false, reason: 'media_output_type_mismatch' });
+  });
+});
+
+
+it.each(['修改刚才生成的视频封面图片，把背景换成蓝色', 'Edit the video cover image and make the lighting warmer.'])('keeps video covers in the image editor: %s', taskText => {
+  expect(normalizeActionIntent(taskText)).toMatchObject({ kind: 'media_generation', target: 'ai_edit_image', operation: 'create' });
+  expect(buildActionContract(taskText).mediaGeneration?.sourceVideoRequired).toBeUndefined();
+});

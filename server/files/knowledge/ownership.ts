@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import { getDataPath } from "../../config/data_path";
 import { getPersonalKnowledgeDirectory } from "../knowledge_directory";
-import { type GeneratedArchiveEntry, listGeneratedArchive } from "../generated_archive";
+import { type GeneratedArchiveEntry, listGeneratedArchiveProjection } from "../generated_archive";
 import { requireAuth as requireUnifiedAuth } from "../../middleware/auth";
 import { getMember } from "../../org/db";
 import type { FileScope } from './contracts';
@@ -124,16 +124,16 @@ export function findFileMeta(db: any, filename: string, scope: FileScope, archiv
   return meta;
 }
 
-export async function readRequestArchive(req: Request, scope: FileScope, filename?: string) {
+export async function readRequestArchiveProjection(req: Request, scope: FileScope, filename?: string) {
   const member = scope.domain === 'work' ? getMember(scope.orgId!, scope.userId) : null;
   const identity = member && [member.id, member.role];
-  const entries = await listGeneratedArchive(scope, filename);
+  const projection = await listGeneratedArchiveProjection(scope, filename);
   getFileScope(req);
   const current = identity && getMember(scope.orgId!, scope.userId);
   if (identity && (!current || current.id !== identity[0] || current.role !== identity[1])) {
     throw Object.assign(new Error('Organization access changed while reading files.'), { status: 403 });
   }
-  return entries;
+  return projection;
 }
 
 export function archiveFileMeta(entry: GeneratedArchiveEntry) {
@@ -148,4 +148,8 @@ export function removeFileMeta(db: any, filename: string, scope: FileScope): voi
 
 export function sendRouteError(res: Response, err: any, fallbackStatus = 400): void {
   res.status(err?.status || fallbackStatus).json({ error: err?.message || 'Request failed' });
+}
+
+export async function readRequestArchive(req: Request, scope: FileScope, filename?: string) {
+  return (await readRequestArchiveProjection(req, scope, filename)).entries;
 }
