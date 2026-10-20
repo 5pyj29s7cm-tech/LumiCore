@@ -1,4 +1,3 @@
-import { listenForNativeChatFileDrop, type ChatUploadKind, type ChatUploadSource } from '../../lib/chatAttachmentUploads';
 import { ChatViewWorkRegistry } from '../../lib/chatViewWork';
 import { useConversationAttachments } from '../../hooks/useConversationAttachments';
 import React, { useCallback, useState, useRef, useEffect } from 'react';
@@ -117,7 +116,6 @@ function useCentralChatAttachmentsAndHistory() {
   const streamingMessageIdRef = useRef<string | null>(null);
   const streamingRawTextRef = useRef('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const nativeDropHandledAtRef = useRef(0);
   const attachmentContextStoragePrefix = `lumi_org_chat_attachment_context:${user?.uid || user?.username || 'anonymous'}:${orgConnection?.orgId || 'unbound'}`;
   const resetAttachmentConversationView = useCallback(() => {
     chatViewWorkRef.current.invalidate();
@@ -245,10 +243,10 @@ function useCentralChatAttachmentsAndHistory() {
     }
   }, [appendPendingAttachments, scopedFileUrl, notifyKnowledgeUpdated]);
 
-  const runAttachmentImport = useCallback(async (kind: ChatUploadKind, sources: ChatUploadSource[]) => {
+  const runAttachmentImport = useCallback(async (sources: File[]) => {
     if (sources.length === 0 || uploadWorkRef.current) return;
     if (!orgConnection?.orgId) {
-      if (kind === 'files') toast.error('Please connect an organization workspace first.');
+      toast.error('Please connect an organization workspace first.');
       return;
     }
     const remainingSlots = MAX_CHAT_ATTACHMENTS - mergeChatAttachmentReferences(
@@ -263,49 +261,32 @@ function useCentralChatAttachmentsAndHistory() {
     setUploading(true);
     try {
       const selected = sources.slice(0, remainingSlots);
-      let res: Response;
-      if (kind === 'files') {
-        const formData = new FormData();
-        selected.forEach(file => formData.append('files', file as File));
-        formData.append('domain', 'work');
-        formData.append('orgId', orgConnection.orgId);
-        res = await fetch('/api/files/upload', { method: 'POST', body: formData, credentials: 'include', signal: work.signal });
-      } else {
-        res = await fetch(scopedFileUrl('/api/files/import-paths'), {
-          method: 'POST', credentials: 'include', signal: work.signal,
-          headers: { 'Content-Type': 'application/json', 'X-Lumi-Desktop-Import': 'file-drop' },
-          body: JSON.stringify({ paths: selected }),
-        });
-      }
+      const formData = new FormData();
+      selected.forEach(file => formData.append('files', file));
+      formData.append('domain', 'work');
+      formData.append('orgId', orgConnection.orgId);
+      const res = await fetch('/api/files/upload', { method: 'POST', body: formData, credentials: 'include', signal: work.signal });
       const data = await res.json().catch(() => ({}));
       if (!work.isCurrent()) return;
-      if (!res.ok) throw new Error(data.error || (kind === 'files' ? `Upload failed (${res.status})` : 'Upload failed.'));
+      if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
       const files = Array.isArray(data.files) ? data.files : [];
-      if (kind === 'files' && files.length === 0) throw new Error('No files were returned by upload.');
-      acceptImportedAttachments(files, Math.max(0, sources.length - selected.length) + (kind === 'paths' && Array.isArray(data.skipped) ? data.skipped.length : 0));
+      if (files.length === 0) throw new Error('No files were returned by upload.');
+      acceptImportedAttachments(files, Math.max(0, sources.length - selected.length));
     } catch (err: any) {
       if (work.isCurrent()) toast.error(err?.message || 'Upload failed.');
     } finally {
       if (work.isCurrent()) {
         uploadWorkRef.current = null;
         setUploading(false);
-        if (kind === 'files' && fileInputRef.current) fileInputRef.current.value = '';
+        if (fileInputRef.current) fileInputRef.current.value = '';
       }
       work.finish();
     }
-  }, [conversationAttachmentsRef, acceptImportedAttachments, orgConnection?.orgId, scopedFileUrl]);
+  }, [conversationAttachmentsRef, acceptImportedAttachments, orgConnection?.orgId]);
 
   const uploadChatAttachments = useCallback((files: FileList | null) => (
-    runAttachmentImport('files', Array.from(files || []))
+    runAttachmentImport(Array.from(files || []))
   ), [runAttachmentImport]);
-  const importChatAttachmentPaths = useCallback((paths: string[]) => (
-    runAttachmentImport('paths', [...new Set(paths.map(item => String(item || '').trim()).filter(Boolean))])
-  ), [runAttachmentImport]);
-
-  useEffect(() => {
-    return listenForNativeChatFileDrop(setDragActive, nativeDropHandledAtRef, importChatAttachmentPaths);
-  }, [importChatAttachmentPaths]);
-
   const removePendingAttachment = useCallback((id: string) => {
     setPendingAttachments(prev => {
       const next = prev.filter(item => item.id !== id);
@@ -355,7 +336,7 @@ function useCentralChatAttachmentsAndHistory() {
   return {
     socket, activeRequestIdRef, setMessages, streamingMessageIdRef, setLoading, setRequestNotice,
     streamingRawTextRef, locale, clearActiveRequest, attachmentConversationIdRef,
-    bindAttachmentContextToConversation, loadConversationMessages, setDragActive, nativeDropHandledAtRef,
+    bindAttachmentContextToConversation, loadConversationMessages, setDragActive,
     uploadChatAttachments, input, pendingAttachments, conversationAttachmentsRef, loading, uploadWorkRef,
     orgConnection, messages, timeoutRef, setInput, pendingAttachmentsRef, setPendingAttachments,
     rememberConversationAttachments, previewFile, isZh, setPreviewFile, dragActive, t, modelPreferenceValue,
@@ -365,7 +346,7 @@ function useCentralChatAttachmentsAndHistory() {
 }
 
 function useCentralChatEventsAndView(previousBindings: ReturnType<typeof useCentralChatAttachmentsAndHistory>) {
-  const { socket, activeRequestIdRef, setMessages, streamingMessageIdRef, setLoading, setRequestNotice, streamingRawTextRef, locale, clearActiveRequest, attachmentConversationIdRef, bindAttachmentContextToConversation, loadConversationMessages, setDragActive, nativeDropHandledAtRef, uploadChatAttachments, input, pendingAttachments, conversationAttachmentsRef, loading, uploadWorkRef, orgConnection, messages, timeoutRef, setInput, pendingAttachmentsRef, setPendingAttachments, rememberConversationAttachments, previewFile, isZh, setPreviewFile, dragActive, t, modelPreferenceValue, modelPreferenceLabel, openModelSettings, endRef, fileInputRef, requestNotice, conversationAttachments, clearConversationAttachments, removePendingAttachment, uploading } = previousBindings;
+  const { socket, activeRequestIdRef, setMessages, streamingMessageIdRef, setLoading, setRequestNotice, streamingRawTextRef, locale, clearActiveRequest, attachmentConversationIdRef, bindAttachmentContextToConversation, loadConversationMessages, setDragActive, uploadChatAttachments, input, pendingAttachments, conversationAttachmentsRef, loading, uploadWorkRef, orgConnection, messages, timeoutRef, setInput, pendingAttachmentsRef, setPendingAttachments, rememberConversationAttachments, previewFile, isZh, setPreviewFile, dragActive, t, modelPreferenceValue, modelPreferenceLabel, openModelSettings, endRef, fileInputRef, requestNotice, conversationAttachments, clearConversationAttachments, removePendingAttachment, uploading } = previousBindings;
 
 
   useEffect(() => {
@@ -512,7 +493,6 @@ function useCentralChatEventsAndView(previousBindings: ReturnType<typeof useCent
     event.preventDefault();
     event.stopPropagation();
     setDragActive(false);
-    if (Date.now() - nativeDropHandledAtRef.current < 700) return;
     void uploadChatAttachments(event.dataTransfer.files);
   };
 

@@ -1,6 +1,7 @@
 import type { ClientStateSnapshot, ClientStateDigest } from './contracts';
 
 export const stateByUser = new Map<string, ClientStateSnapshot>();
+const stateBySocket = new Map<string, { userId: string; state: ClientStateSnapshot }>();
 
 export function updateClientState(userId: string, state: ClientStateSnapshot): ClientStateSnapshot {
   const compactList = (values?: string[]) => Array.from(new Set(
@@ -24,8 +25,26 @@ export function updateClientState(userId: string, state: ClientStateSnapshot): C
       : undefined,
     updatedAt: Date.now(),
   };
-  stateByUser.set(userId || 'anonymous', snapshot);
+  const uid = userId || 'anonymous';
+  stateByUser.set(uid, snapshot);
+  if (snapshot.socketId) {
+    const previous = stateBySocket.get(snapshot.socketId);
+    if (previous && previous.userId !== uid && stateByUser.get(previous.userId)?.socketId === snapshot.socketId) {
+      stateByUser.set(previous.userId, { ...previous.state, connected: false });
+    }
+    stateBySocket.set(snapshot.socketId, { userId: uid, state: snapshot });
+  }
   return snapshot;
+}
+
+export function disconnectClientState(userId: string, socketId: string): void {
+  const uid = userId || 'anonymous';
+  const current = stateBySocket.get(socketId);
+  if (current?.userId !== uid) return;
+  stateBySocket.delete(socketId);
+  if (stateByUser.get(uid)?.socketId === socketId) {
+    stateByUser.set(uid, { ...current.state, connected: false });
+  }
 }
 
 export function getClientState(userId: string): ClientStateSnapshot | null {
@@ -34,9 +53,13 @@ export function getClientState(userId: string): ClientStateSnapshot | null {
 
 export function getClientStateForScope(
   userId: string,
-  scope: { domain?: string; orgId?: string } = {},
+  scope: { domain?: string; orgId?: string; socketId?: string } = {},
 ): ClientStateSnapshot | null {
-  const state = getClientState(userId);
+  const session = scope.socketId ? stateBySocket.get(scope.socketId) : undefined;
+  const state = scope.socketId
+    ? session?.userId === (userId || 'anonymous') ? session.state : null
+    : getClientState(userId);
+  if (state?.connected === false) return null;
   if (!state || !scope.domain) return state;
   if (scope.domain === 'work') {
     const knowledgeMatches = !state.knowledge

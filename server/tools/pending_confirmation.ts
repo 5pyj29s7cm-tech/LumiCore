@@ -605,7 +605,7 @@ export async function getPendingConfirmationDurably(
 /** Shared task-control vocabulary. Recognition never grants authority: callers
  * must still bind an unexpired, exact pending action before consuming it. */
 export function isExplicitConfirmationReply(text: string): boolean {
-  return /^(?:(?:我)?(?:确认|确定|同意|允许|接受|批准|授权)(?:(?:这个|该|上述|当前|刚才的)?(?:操作|方案|修改|执行|权限扩张))?了?|(?:嗯|好|好的|可以|行|没问题|就这样|按这个做|开始吧|开始|继续执行|授权继续|可以执行)|(?:yes|ok|okay|confirmed?|approved?|accepted?|go(?:\s+ahead)?|looks\s+good|proceed))[。！？.!?\s]*$/iu.test(String(text || '').trim()); // i18n-allow: shared task confirmation recognition.
+  return /^(?<reply>(?:我)?(?:确认|确定|同意|允许|接受|批准|授权)(?:(?:这个|该|上述|当前|刚才的)?(?:操作|方案|修改|执行|权限扩张))?了?|(?:嗯|好|好的|可以|行|没问题|就这样|按这个做|开始吧|开始|继续执行|授权继续|可以执行)|(?:yes|ok|okay|confirmed?|approved?|accepted?|go(?:\s+ahead)?|looks\s+good|proceed))(?:(?:[，,。！？.!?；;\s]*)\k<reply>)*[。！？.!?\s]*$/iu.test(String(text || '').trim()); // i18n-allow: shared task confirmation recognition.
 }
 
 export function isConfirmationCancellation(text: string): boolean {

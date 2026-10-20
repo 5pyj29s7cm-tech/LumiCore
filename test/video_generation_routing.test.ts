@@ -8,6 +8,7 @@ import { saveKeys } from '../server/config/keys';
 import { getGeneratedOutputDir } from '../server/config/data_path';
 import { upsertUserPreferredGenerationModels } from '../server/llm/generation_preferences';
 import { registerVideoTools } from '../server/tools/definitions/video_tools';
+import * as videoMeasurements from '../server/tools/video_measurements';
 import { ToolRegistry } from '../server/tools/registry';
 import { buildActionContract } from '../server/cognition/action_contract';
 import type { ToolContext } from '../server/tools/types';
@@ -146,6 +147,11 @@ describe('video generation model routing', () => {
   });
 
   it('routes Qwen through the DashScope async video API', async () => {
+    // Provider routing is independent of whether a developer has staged the bundled probe.
+    // The synthetic container fixture has two 16x16 frames and no audio track.
+    const measurement = vi.spyOn(videoMeasurements, 'measureGeneratedVideo').mockResolvedValueOnce({
+      actualSettings: { size: '16x16', duration: 2, hasAudio: false }, settingsMatch: false,
+    });
     saveKeys({ DASHSCOPE_API_KEY: 'qwen-test-key' });
     upsertUserPreferredGenerationModels('video-qwen-user', {
       image: { provider: 'auto' },
@@ -174,6 +180,8 @@ describe('video generation model routing', () => {
         model: 'wanx2.1-t2v-plus',
         taskId: 'qwen-task',
         artifactDurability: 'local_file',
+        actualSettings: { size: '16x16', duration: 2, hasAudio: false },
+        settingsMatch: false,
       });
       expect(result.outputPath).toMatch(/qwen_video_\d+_[0-9a-f-]{36}\.mp4$/);
       expect(fs.readFileSync(result.outputPath)).toEqual(MINIMAL_MP4);
@@ -186,6 +194,7 @@ describe('video generation model routing', () => {
         '视频文件已保存，但实际尺寸或时长尚未满足请求，需要核对。 文件不含音轨。',
       ]);
     } finally {
+      measurement.mockRestore();
       removeGeneratedVideo(result);
     }
   });
@@ -561,12 +570,12 @@ describe('video generation model routing', () => {
     const fetchMock = vi.fn(async (..._request: Parameters<typeof fetch>): Promise<Response> => jsonResponse({ video_base64: MINIMAL_MP4.toString('base64') })); stubVideoFetch( fetchMock);
     let result: any;
     try {
-      result = await runVideo(user, { prompt, first_frame_image: 'data:image/png;base64,' + reference.toString('base64'), duration: 15, size: '480x832', prompt_extend: true, seed: 42 });
+      result = await runVideo(user, { prompt, first_frame_image: 'data:image/png;base64,' + reference.toString('base64'), duration: 15, size: '480x832', audio: true, prompt_extend: true, seed: 42 });
       const body = fetchMock.mock.calls[0][1]?.body;
       const payload = format === 'json' ? JSON.parse(String(body)) : Object.fromEntries((body as FormData).entries());
       expect(payload.prompt).toBe(prompt);
       const parameters = format === 'json' ? payload.extra_body.parameters : JSON.parse(payload.extra_body).parameters;
-      expect(parameters).toEqual({ duration: 15, resolution: '480P', prompt_extend: true, ratio: 'adaptive', seed: 42 });
+      expect(parameters).toEqual({ duration: 15, resolution: '480P', prompt_extend: true, ratio: 'adaptive', audio: true, seed: 42 });
       const image = String(payload.image || payload.input_reference);
       const decoded = await sharp(Buffer.from(image.split(',')[1], 'base64')).removeAlpha().raw().toBuffer({ resolveWithObject: true });
       expect([decoded.info.width, decoded.info.height]).toEqual([480, 832]);

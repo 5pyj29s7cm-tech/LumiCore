@@ -215,6 +215,16 @@ function isTerminal(status: AutonomousTaskStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'blocked' || status === 'cancelled';
 }
 
+/** Preserve unresolved blockers while bounding ordinary terminal history. */
+function retainTaskHistory(tasks: readonly AutonomousTask[], at = Date.now()): AutonomousTask[] {
+  const ordered = tasks.filter(task => isTerminal(task.status))
+    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+  const cutoff = at - TASK_TTL_DAYS * 86_400_000;
+  const recent = new Set(ordered.filter(task => task.status !== 'blocked'
+    && new Date(task.createdAt).getTime() > cutoff).slice(-MAX_HISTORY));
+  return ordered.filter(task => task.status === 'blocked' || recent.has(task));
+}
+
 function normalizeStoredTask(value: unknown): AutonomousTask | null {
   const task = value as Partial<AutonomousTask> | null;
   if (!task || !task.id || !task.userId || !task.createdAt) return null;
@@ -314,7 +324,8 @@ export function recoverPersistedTask(task: AutonomousTask, recoveredAt = nowIso(
 function persist(): void {
   try {
     const db = readDatabaseTables(["autonomousTasks"]);
-    db.autonomousTasks = [...queue, ...history.slice(-MAX_HISTORY)].map(cloneTask);
+    history = retainTaskHistory(history);
+    db.autonomousTasks = [...queue, ...history].map(cloneTask);
     commitDatabaseTables(db);
   } catch {
     // Unit tests and early bootstrap can legitimately run before SQLite exists.
@@ -324,7 +335,8 @@ function persist(): void {
 /** Admission/terminal lifecycle barriers may never use best-effort persistence. */
 export async function persistAutonomousTaskQueue(): Promise<void> {
   const db = readDatabaseTables(["autonomousTasks"]);
-  db.autonomousTasks = [...queue, ...history.slice(-MAX_HISTORY)].map(cloneTask);
+  history = retainTaskHistory(history);
+  db.autonomousTasks = [...queue, ...history].map(cloneTask);
   commitDatabaseTables(db);
   await flushDBOrThrow();
 }
@@ -464,7 +476,6 @@ export function hydrateAutonomousTasksFromDb(force = false): number {
       || next.conversationId !== task.conversationId) recoveredCount += 1;
     return next;
   });
-  const cutoff = Date.now() - TASK_TTL_DAYS * 86_400_000;
   const currentById = new Map([...queue, ...history].map(task => [task.id, task]));
   for (const task of recovered) {
     const current = currentById.get(task.id);
@@ -473,10 +484,7 @@ export function hydrateAutonomousTasksFromDb(force = false): number {
   }
   const all = Array.from(currentById.values());
   queue = all.filter(task => task.status === 'pending' || task.status === 'running' || task.status === 'pausing' || task.status === 'paused');
-  history = all
-    .filter(task => isTerminal(task.status) && new Date(task.createdAt).getTime() > cutoff)
-    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
-    .slice(-MAX_HISTORY);
+  history = retainTaskHistory(all);
   cancellationRequests.clear();
   for (const task of queue) if (task.cancelRequestedAt) cancellationRequests.add(task.id);
   hydrated = true;
@@ -871,8 +879,7 @@ function findTask(id: string, userId?: string): AutonomousTask | null {
 function moveToHistory(task: AutonomousTask): void {
   queue = queue.filter(item => item.id !== task.id);
   cancellationRequests.delete(task.id);
-  history.push(task);
-  if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+  history = retainTaskHistory([...history, task]);
 }
 
 export function resetAutonomousTaskQueueForTest(options: { clearPersisted?: boolean; markHydrated?: boolean } = {}): void {

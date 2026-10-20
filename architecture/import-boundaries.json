@@ -1131,6 +1131,7 @@
       ],
       "allowedExports": [
         "commitDatabaseTables",
+        "flushDBOrThrow",
         "readDatabaseTables"
       ],
       "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."

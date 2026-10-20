@@ -75,6 +75,27 @@ export function runResolvedLumiTurn(input: ResolvedTurnModelInput): Promise<LLMR
       const envelope = canonical.envelope!;
       return [{ id: 'prior:' + row.id, argumentsVerified: digest(record.arguments || {}) === row.inputDigest, record: { ...record, envelope, result: typeof envelope.result === 'string' ? envelope.result : envelope.result === undefined ? record.result : JSON.stringify(envelope.result) } }];
     }) : [];
+  const modelContext: NonNullable<ToolSessionOptions['context']> = {
+    ...toolSession.context,
+    requestId, turnId: requestId, resolutionId: execution.resolution.id,
+    toolPolicy: execution.authorizationPolicy,
+    modelToolProjection: execution.modelToolProjection,
+    currentTurnExecutionRequested: execution.taskId || toolSession.context?.taskId ? true : undefined,
+    completionRequest: { currentText: execution.resolution.userText, ...(root ? { rootText: String(root.message || '') } : {}), history },
+    priorToolRecords: [...history.map(item => item.record), ...(toolSession.context?.priorToolRecords || []).filter(record => record.requestId === requestId && isCanonicalToolExecutionRecord(record))],
+    acceptedActionContract: execution.turnIntent.flow.acceptedActionContract,
+    trustedActionContinuation: execution.trustedActionContinuation,
+    actionIntent: toolSession.context?.actionIntent ?? execution.resolution.userText,
+    routedTaskText: toolSession.context?.routedTaskText ?? execution.turnIntent.flow.routeText,
+    acceptedTaskTarget: toolSession.context?.acceptedTaskTarget ?? execution.turnIntent.flow.acceptedTaskTarget,
+    currentAppTarget: toolSession.context?.currentAppTarget ?? execution.turnIntent.flow.currentAppEditTarget,
+  };
+  if (toolSession.context?.prepareSelectedToolCall) modelContext.prepareSelectedToolCall = async () => {
+    input.assertCurrent?.();
+    const binding = await toolSession.context!.prepareSelectedToolCall!();
+    Object.assign(modelContext, binding, { currentTurnExecutionRequested: true });
+    return binding;
+  };
   return runLumiTurn({
     ...toolSession,
     config,
@@ -95,20 +116,6 @@ export function runResolvedLumiTurn(input: ResolvedTurnModelInput): Promise<LLMR
     } : undefined,
     maxIterations: Math.min(toolSession.maxIterations ?? execution.authorizationPolicy.maxIterations,
       execution.authorizationPolicy.maxIterations),
-    context: {
-      ...toolSession.context,
-      requestId, turnId: requestId, resolutionId: execution.resolution.id,
-      toolPolicy: execution.authorizationPolicy,
-      modelToolProjection: execution.modelToolProjection,
-      currentTurnExecutionRequested: true,
-      completionRequest: { currentText: execution.resolution.userText, ...(root ? { rootText: String(root.message || '') } : {}), history },
-      priorToolRecords: [...history.map(item => item.record), ...(toolSession.context?.priorToolRecords || []).filter(record => record.requestId === requestId && isCanonicalToolExecutionRecord(record))],
-      acceptedActionContract: execution.turnIntent.flow.acceptedActionContract,
-      trustedActionContinuation: execution.trustedActionContinuation,
-      actionIntent: toolSession.context?.actionIntent ?? execution.resolution.userText,
-      routedTaskText: toolSession.context?.routedTaskText ?? execution.turnIntent.flow.routeText,
-      acceptedTaskTarget: toolSession.context?.acceptedTaskTarget ?? execution.turnIntent.flow.acceptedTaskTarget,
-      currentAppTarget: toolSession.context?.currentAppTarget ?? execution.turnIntent.flow.currentAppEditTarget,
-    },
+    context: modelContext,
   });
 }

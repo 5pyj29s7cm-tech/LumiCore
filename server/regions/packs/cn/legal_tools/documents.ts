@@ -5,6 +5,7 @@ import { type LegalArticleType } from "../../../../legal/kb";
 import path from "path";
 import os from "os";
 import { parseDocument } from "../../../../legal/parser";
+import { PdfPasswordError } from "../../../../utils/pdf_text";
 import { textArg, sanitizeLegalWorkProductOutput, listArg, expandLocalPath, safeFileSegment, LEGAL_MATERIAL_EXTENSIONS, LEGAL_IMAGE_EXTENSIONS } from "./context";
 
 export function markdownTitle(markdown: string, fallback: string): string {
@@ -371,7 +372,10 @@ export async function readLegalFolderMaterials(args: Record<string, any>): Promi
       skipped.push({ path: file, reason: '已达到本次读取字数上限' });
       continue;
     }
-    const parsed = await parseDocument(file);
+    let parsed;
+    try { parsed = await parseLegalDocument(file, args); } catch (error) {
+      skipped.push({ path: file, reason: legalReadError(error) }); continue;
+    }
     if (!parsed?.text?.trim()) {
       skipped.push({ path: file, reason: '解析失败或文本为空' });
       continue;
@@ -468,4 +472,21 @@ export async function readBidRequirementInput(args: Record<string, any>): Promis
     sources,
     skipped,
   };
+}
+
+export function legalDocumentPassword(args: Record<string, any>, filePath: string): string | undefined {
+  const perFile = args.passwords && typeof args.passwords === 'object' ? args.passwords : {};
+  const value = perFile[path.resolve(filePath)] ?? perFile[filePath] ?? args.password;
+  return typeof value === 'string' && value.length ? value : undefined;
+}
+
+export async function parseLegalDocument(filePath: string, args: Record<string, any>) {
+  return parseDocument(filePath, { password: legalDocumentPassword(args, filePath) });
+}
+
+export function legalReadError(error: unknown): string {
+  if (error instanceof PdfPasswordError) return error.code === 'PDF_PASSWORD_INCORRECT'
+    ? 'PDF_PASSWORD_INCORRECT：密码不正确，请提供正确密码后重试原文件。'
+    : 'PDF_PASSWORD_REQUIRED：文件需要打开密码，请提供密码后重试原文件。';
+  return '文件解析或入库失败，请核对原文件后重试。';
 }

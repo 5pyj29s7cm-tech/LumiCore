@@ -15,6 +15,7 @@
         "transparent": false,
         "decorations": true,
         "resizable": true,
+        "dragDropEnabled": false,
         "center": true,
         "alwaysOnTop": false,
         "alwaysOnBottom": false,

@@ -55,3 +55,14 @@ export function formatActiveWallpaperBoundary(
   }
   return '- Wallpaper boundary: personal workbench is a private local-machine focus surface for this user. It is a presentation, not a new task, operation mode, or agent.';
 }
+
+export function formatClientProductState(state: ClientStateSnapshot | null | undefined): string {
+  if (state?.connected !== true) return "- Current client product: no connected client session has reported its edition.";
+  const product = state.product;
+  const edition = product?.identifier === "com.lumiai.legal" && product.name === "Lumi Legal"
+    ? "Lumi Legal (lawyer edition; com.lumiai.legal)"
+    : product?.identifier === "com.lumiai.os" && product.name === "LumiCore"
+      ? "LumiCore (main edition; com.lumiai.os)"
+      : "edition not reported by this client session";
+  return `- Current client product: ${edition}. This is an interface fact, not an authorization or data-scope grant.`;
+}

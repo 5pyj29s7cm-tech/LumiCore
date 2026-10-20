@@ -4,7 +4,7 @@ import { parseDocument } from "../../../../legal/parser";
 import { legalWrite, legalExecutionSignal } from "../../../../legal/execution";
 import { createLegalArticle, indexLegalArticle, verifyMultipleCitations } from "../../../../legal/kb";
 import * as LegalCases from "../../../../org/legal_cases";
-import { legalTemporalOptions, textArg, expandLocalPath, legalWorkspaceId, resolveWritableOutputDir, ensureLegalDeliveryRoot, safeFileSegment } from "./context";
+import { legalTemporalOptions, withActiveLegalWorkspace, textArg, expandLocalPath, legalWorkspaceId, resolveWritableOutputDir, ensureLegalDeliveryRoot, safeFileSegment } from "./context";
 import { formatCitationReportMarkdown, findArchivedLegalReasoningGateText, ownCaseNumbersFromArgs, evaluateCurrentLawGate, evaluateLegalReasoningGate, formatCurrentLawGateBlock, formatCitationList, formatCaseSourceGateBlock } from "./citations";
 import { markdownTitle, normalizeFormalDocumentType, buildFormalLegalMarkdown, writeDocxFromMarkdown, tryConvertDocxToPdf } from "./documents";
 import { appendLegalCaseMaterial } from "./case_workflow";
@@ -394,5 +394,152 @@ export async function finalizeDeliveryPackageHandler(args: Record<string, any>, 
     '',
     '## 人工边界',
     'Lumi 已生成本地交付文件，但没有自动提交、签发、盖章、缴费、发送或确认送达。正式使用前必须由律师复核。',
+  ].join('\n');
+}
+
+export function requestedDeliveryMaterial(caseFile: LegalCases.OrgLegalCaseFile, requestedTitle: string): LegalCases.OrgLegalCaseMaterial | null {
+  const candidates = (caseFile.materials || []).filter(material => (
+    ['pleading', 'contract', 'bid'].includes(material.type)
+    || /草稿|文书|意见|策略|合同|标书|报告/u.test(`${material.title}\n${material.content.slice(0, 240)}`)
+  ) && !/交付包阻断记录|案例来源阻断记录|三段论推理链阻断记录/u.test(material.title));
+  if (!candidates.length) return null;
+  const query = String(requestedTitle || '').trim();
+  if (!query) return candidates[0];
+  return candidates.find(material => material.title.includes(query) || query.includes(material.title)) || null;
+}
+
+export function deliveryCheckLine(status: '通过' | '阻断' | '待确认', detail: string): string {
+  return `- ${status}：${detail}`;
+}
+
+export async function verifyArchivedDeliveryHandler(args: Record<string, any>, context?: any): Promise<string> {
+  args = withActiveLegalWorkspace(args, context);
+  const orgId = legalWorkspaceId(args, context);
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const caseId = textArg(args, 'caseId');
+  const caseName = textArg(args, 'caseName') || textArg(args, 'title') || textArg(args, 'query');
+  const requestedTitle = textArg(args, 'materialTitle') || textArg(args, 'documentTitle') || textArg(args, 'workProductTitle');
+  let caseFile = caseId ? LegalCases.getCase(orgId, caseId, userId) : null;
+  if (!caseFile && caseName) caseFile = LegalCases.listCases(orgId, caseName, 1, userId)[0] || null;
+  if (!caseFile) return '请提供可读取的 caseId 或 caseName，用于核验案件工作台中的已归档文书。';
+
+  const material = requestedDeliveryMaterial(caseFile, requestedTitle);
+  if (!material) {
+    return [
+      '# 已归档文书交付核验',
+      '',
+      `- 案件：${caseFile.title}`,
+      `- 案件 ID：${caseFile.id}`,
+      `- 请求文书：${requestedTitle || '未指定'}`,
+      '',
+      '## 核验结果',
+      deliveryCheckLine('阻断', '案件工作台中未找到与请求名称匹配的已归档草稿；没有用其他文书替代。'),
+      '',
+      '## 总体结论',
+      '- 不可正式交付。请先确认文书名称或将目标草稿归档到当前案件。',
+      '',
+      '## 执行记录',
+      '- 实际使用能力：归档交付核验',
+      '- 任务回执状态：核验已完成；结果为交付阻断。未重新生成文书，未登录外部网站，未发送、提交或签署。',
+    ].join('\n');
+  }
+
+  const documentText = String(material.content || '').trim();
+  const ownCaseNumbers = caseFile.caseNumber ? [caseFile.caseNumber] : [];
+  const lawGate = evaluateCurrentLawGate(documentText, orgId, ownCaseNumbers, caseFile.factDate || textArg(args, 'factDate'), legalTemporalOptions(args));
+  const workflow = LegalCases.evaluateCaseWorkflow(caseFile, {
+    currentLawGate: lawGate.statuteChecks.length === 0 ? 'none' : lawGate.passed ? 'passed' : 'blocked',
+    currentLawBlockingSummary: lawGate.blockingStatutes.length
+      ? formatCitationList(lawGate.blockingStatutes).join('；')
+      : '',
+  });
+  const nonGeneratedEvidence = (caseFile.materials || []).filter(item => (
+    item.id !== material.id
+    && item.source !== 'tool'
+    && ['evidence', 'contract', 'notice', 'identity', 'correspondence', 'hearing'].includes(item.type)
+    && Boolean(item.content || item.localPath || item.fileName)
+  ));
+  const factStatus: '通过' | '待确认' = caseFile.notes && caseFile.party && caseFile.cause && nonGeneratedEvidence.length > 0
+    ? '通过'
+    : '待确认';
+  const deadlineValues = [caseFile.hearingDate, caseFile.appealDeadline, caseFile.enforcementDeadline].filter(Boolean);
+  const deadlineStatus: '通过' | '待确认' = deadlineValues.length > 0 ? '通过' : '待确认';
+  const jurisdictionStatus: '通过' | '阻断' = caseFile.court.trim() && !/待确认|待填写|待补|未提供|未确定|未知|TBD|pending/iu.test(caseFile.court) ? '通过' : '阻断';
+  const localPathExists = material.localPath ? fs.existsSync(path.resolve(material.localPath)) : false;
+  const fileStatus: '通过' | '阻断' | '待确认' = !documentText
+    ? '阻断'
+    : material.localPath
+      ? localPathExists ? '通过' : '阻断'
+      : '待确认';
+  const citationStatus: '通过' | '阻断' = lawGate.passed && lawGate.caseSourcePassed ? '通过' : '阻断';
+  const citationDetail = lawGate.missingStatuteCitation
+    ? '草稿未检测到可核验的现行法条引用，不能把“未引用”说成核验通过。'
+    : lawGate.missingFactDate
+      ? '案件事实日期缺失或无效，尚不能核验实体法律的时间适用。'
+      : lawGate.missingProcedureDate
+        ? '程序行为日期缺失或无效，尚不能核验程序法律的时间适用。'
+        : lawGate.blockingStatutes.length
+          ? `存在 ${lawGate.blockingStatutes.length} 项废止、失效、过期或未确认法条。`
+          : lawGate.missingCaseChecks.length
+            ? `存在 ${lawGate.missingCaseChecks.length} 项未登记或未核验来源的案例引用。`
+            : `已核验 ${lawGate.statuteChecks.length} 项法条引用，未发现来源阻断。`;
+  const factDetail = factStatus === '通过'
+    ? `案件主体、案由、事实摘要及 ${nonGeneratedEvidence.length} 份非工具生成的来源材料可交叉核对。`
+    : `已有主体、案由和事实摘要，但缺少可作为事实来源的原始证据材料；工具生成草稿和财产线索报告不视为原始证据。`;
+  const deadlineDetail = deadlineStatus === '通过'
+    ? `已登记可核对日期：${deadlineValues.join('；')}。`
+    : '案件未登记开庭日、上诉期限或执行期限；诉讼时效起算事实也未形成可核验证据链。';
+  const jurisdictionDetail = jurisdictionStatus === '通过'
+    ? `已登记法院/机构：${caseFile.court}。`
+    : '案件工作台未登记法院或管辖机构，不能确认地域管辖、级别管辖或约定管辖。';
+  const fileDetail = fileStatus === '通过'
+    ? `已归档材料 ${material.id}，本地路径存在：${material.localPath}。`
+    : fileStatus === '阻断'
+      ? `已归档材料 ${material.id} 的正文或本地文件路径无效。`
+      : `已归档材料 ${material.id} 的数据库正文存在，但没有独立本地文件路径；当前只能证明“已入案件账本”，不能证明 DOCX/PDF 交付文件已生成。`;
+  const review = LegalCases.getMaterialReview(orgId, userId, caseFile.id, material.id);
+  const lawyerStatus = review?.status === 'confirmed' ? '通过' : '待确认';
+  const lawyerDetail = review?.status === 'confirmed'
+    ? `当前材料版本已有人工复核记录：${review.reviewerId}；${review.reviewedAt}；范围：${review.scope === 'archived_text_and_file' ? '归档正文及本地文件字节版本' : '归档正文'}。该记录不证明律师资格、签章或正式交付。`
+    : review?.status === 'revoked' ? '当前材料版本的人工复核记录已撤销，须重新复核。'
+      : review?.status === 'stale' ? '材料、来源、案件信息、程序日期或本地文件已有变更，旧人工复核记录不适用于当前版本。'
+        : '当前案件账本没有可核验且绑定本材料版本的承办律师核准记录；正文自称复核通过不能作为签发依据。';
+
+  return [
+    '# 已归档文书交付核验',
+    '',
+    `- 案件：${caseFile.title}`,
+    `- 案件 ID：${caseFile.id}`,
+    `- 核验材料：${material.title}`,
+    `- 材料 ID：${material.id}`,
+    `- 案件闭环完成度：${workflow.doneCount}/${workflow.steps.length}（${workflow.completionRatio}%）`,
+    '',
+    '## 逐项结果',
+    `### 案件事实`,
+    deliveryCheckLine(factStatus, factDetail),
+    `### 引用与法源状态`,
+    deliveryCheckLine(citationStatus, citationDetail),
+    `### 时效与期限`,
+    deliveryCheckLine(deadlineStatus, deadlineDetail),
+    `### 管辖信息`,
+    deliveryCheckLine(jurisdictionStatus, jurisdictionDetail),
+    `### 草稿文件状态`,
+    deliveryCheckLine(fileStatus, fileDetail),
+    `### 律师复核边界`,
+    deliveryCheckLine(lawyerStatus, lawyerDetail),
+    '',
+    '## 总体结论',
+    review?.status === 'confirmed'
+      ? '- 本版本人工复核记录已确认；仍须核对上列缺失项、阻断项及律师签发条件，不自动认定可正式交付。本轮只完成核验，没有重新生成文书。'
+      : '- 不可正式交付。律师核准记录待确认，缺失项和阻断项不得描述为“已通过”；本轮只完成核验，没有重新生成文书。',
+    '',
+    '## 下一步',
+    '- 补齐原始证据及事实时间线，登记诉讼时效起算/中断证据和法院管辖依据。',
+    '- 为草稿补充并逐条核验现行有效法条、类案来源及引用边界。',
+    '- 生成可核对的本地交付文件，并由承办律师完成复核确认后再运行正式交付门禁。',
+    '',
+    '## 执行记录',
+    '- 实际使用能力：归档交付核验（案件账本读取、目标材料精确匹配、现行法与案例引用校验、期限/管辖/文件/律师边界核验）',
+    '- 任务回执状态：核验已完成并形成结构化回执；正式交付结论以上述逐项依据为准。未登录外部网站，未重新生成文书，未发送、提交或签署。',
   ].join('\n');
 }

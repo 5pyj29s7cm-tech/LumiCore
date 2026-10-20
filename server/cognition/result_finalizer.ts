@@ -22,7 +22,7 @@ import { withoutLocationLiterals } from './location_literals';
 import { buildTaskTargetAnchorProjection, isVerifiedProducedDocumentTarget } from '../conversation/task_target_anchor';
 import { missingTaskInputResult } from './missing_task_input';
 import { getArtifactTaskProgress } from './action_contract';
-import { formatArtifactProgress, artifactProgressFeedback } from './artifact_progress';
+import { requestedArtifactInstructions, formatArtifactProgress, artifactProgressFeedback } from './artifact_progress';
 import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
 import { CN_EXTERNAL_CLI_MESSAGES } from "../regions/messages/external_cli_messages";
 import { buildOperationModeMetaResponse } from './capability_meta';
@@ -37,7 +37,7 @@ import { hasContinuousStockWatchIntent, hasContinuousStockWatchEvidence, require
 import { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from "./result_finalizer_types";
 import { taskActionContract, isInternalRuntimeWorkNarration, resultTaskText, isChineseText, summarizeToolFailure, hasResultCoreActionEvidence, isVerifiedCurrentTurnRecord, requiresSourceGroundedArtifactContent, sanitizeInternalExecutionText } from "./result_finalizer_support";
 import { formatGroundedDesktopEvidence, formatGroundedSimpleDesktopOpenResult, formatGroundedClientActionResult, formatGroundedCurrentAuthoringDocumentResult, formatGoalSpecificDesktopResult, formatObservedDesktopOpenResult, formatGroundedPartialActionResult, formatCurrentAuthoringDocumentClarification, formatCreatedArtifactWithoutInAppCompletion } from "./result_desktop_presenter";
-import { unsupportedOngoingExecutionClaim, withoutUnsupportedOngoingExecutionTail, leakedLegacyToolProtocol, unsupportedClientStateVerificationClaim, unsupportedLedgerOnlyWorkTaskCompletion, unsupportedToolModeClaim, unsupportedToolAvailabilityExcuse, groundedVerifiedDocumentObservation, VERIFIED_DOCUMENT_OBSERVATION_TOOL_RE, unsupportedPriorDiagnosticClaim, unsupportedToolExecutionClaim, realWorldClaimKind, isExecutionClaimGuardTurn, isFirstPersonConcreteRealWorldClaim, hasVerifiedEvidenceForRealWorldClaim, unsupportedRealWorldClaim } from "./result_claim_guards";
+import { unsupportedOngoingExecutionClaim, withoutUnsupportedOngoingExecutionTail, leakedLegacyToolProtocol, unsupportedClientStateVerificationClaim, unsupportedLedgerOnlyWorkTaskCompletion, groundedVerifiedDocumentObservation, VERIFIED_DOCUMENT_OBSERVATION_TOOL_RE, unsupportedPriorDiagnosticClaim, unsupportedToolExecutionClaim, realWorldClaimKind, isExecutionClaimGuardTurn, isFirstPersonConcreteRealWorldClaim, hasVerifiedEvidenceForRealWorldClaim, unsupportedRealWorldClaim } from "./result_claim_guards";
 import { groundedMediaGeneration, formatGroundedWorkflowProgress, formatGroundedSkillDraft, formatGroundedArtifactResult, formatGroundedCadRunResult, formatGroundedBlankAutoCadDocumentResult, formatGroundedWpsMutationResult, formatGroundedCadGeometryExtractionResult, formatExternalAiHistoryResult } from "./result_artifact_presenter";
 
 const TOOL_ITERATION_LIMIT_RESPONSE_RE =
@@ -512,7 +512,18 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const windowObservation = groundedReadOnlyWindowObservation(input);
   if (windowObservation) return windowObservation;
   const actionContract = taskActionContract(input);
-  const artifactProgress = actionContract.kind === 'artifact_work'
+  const artifactComponents = actionContract.kind === 'artifact_work' && actionContract.components?.every(item =>
+    item.contract.kind === 'artifact_work' && requestedArtifactInstructions(item.text).length === 1)
+    ? actionContract.components : [];
+  const componentProgress = artifactComponents.map(item => ({ ...item,
+    progress: getArtifactTaskProgress(item.text, input.toolRecords || [], input) }));
+  if (componentProgress.some(item => !item.progress?.complete)) return {
+    text: componentProgress.map(item => item.progress ? formatArtifactProgress(item.progress, item.text)
+      : [buildTaskTargetAnchorProjection({ taskText: item.text }).target.path,
+        isChineseText(actionText) ? CN_EXECUTION_EVIDENCE_MESSAGES.artifactStillIncomplete : 'The whole task is not complete.'].filter(Boolean).join('\n')).join('\n'),
+    blocked: true, reason: 'artifact_components_pending',
+  };
+  const artifactProgress = actionContract.kind === 'artifact_work' && !artifactComponents.length
     ? getArtifactTaskProgress(actionText, input.toolRecords || [], input) : null;
   if (artifactProgress && !artifactProgress.complete) return {
     text: formatArtifactProgress(artifactProgress, actionText), blocked: true,
@@ -549,8 +560,15 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   }
   if (composite.components?.length) {
     const outcomes = composite.components.map(component => {
-      const verified = hasResultCoreActionEvidence(input, component.contract, input.toolRecords || [], component.text);
-      const result = finalizeLumiResponse({ ...input, taskText: component.text, flow: undefined, completionGuard: undefined, responseText: '' });
+      const outputs = component.contract.kind === 'artifact_work' ? requestedArtifactInstructions(component.text) : [];
+      const records = outputs.length === 1 ? (input.toolRecords || []).filter(record => !isArtifactProducerRecord(record)
+        || sameArtifactPath(artifactPathFromRecord(record), outputs[0].path)) : input.toolRecords || [];
+      const scoped = { ...input, toolRecords: records };
+      const verified = hasResultCoreActionEvidence(scoped, component.contract, records, component.text);
+      const componentInput = { ...scoped, taskText: component.text, flow: undefined, completionGuard: undefined,
+        responseText: outputs.length === 1 ? '' : input.responseText };
+      const result = (outputs.length === 1 ? formatGroundedArtifactResult(componentInput) : null)
+        || finalizeLumiResponse(componentInput);
       const complete = verified && !result.blocked && Boolean(result.text);
       return { complete, text: complete ? result.text
         : isChineseText(actionText) ? CN_EXECUTION_EVIDENCE_MESSAGES.incompleteComponent(component.text) : `Not completed: ${component.text}` };
@@ -647,32 +665,6 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const modeSafeResponseText = sanitizeContradictoryOperationModeText(input);
   if (modeSafeResponseText !== input.responseText) {
     input = { ...input, responseText: modeSafeResponseText };
-  }
-  const unsupportedMode = unsupportedToolModeClaim(input);
-  if (unsupportedMode) {
-    return {
-      text: unsupportedMode,
-      blocked: true,
-      reason: 'Response claimed a fictional tool-mode switch without a matching receipt.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Response claimed a fictional tool-mode switch without a matching receipt.',
-      },
-    };
-  }
-  const unsupportedAvailability = unsupportedToolAvailabilityExcuse(input);
-  if (unsupportedAvailability) {
-    return {
-      text: unsupportedAvailability,
-      blocked: true,
-      reason: 'Response blamed a fictional user-switchable tool availability state without evidence.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Response blamed a fictional user-switchable tool availability state without evidence.',
-      },
-    };
   }
   const groundedClientAction = formatGroundedClientActionResult(input);
   if (groundedClientAction) {

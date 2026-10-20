@@ -176,7 +176,7 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
     conversationId: conversationTurn.conversation.id,
   };
   resources.request = Object.freeze({ ...executionScope, requestId, agentId: session.agentId,
-    personalityId: session.personalityId, provenance: voiceTurnProvenance, authorization: turnAuthorization });
+    personalityId: session.personalityId, provenance: voiceTurnProvenance, authorization: turnAuthorization, signal: pipelineAbort.signal });
   let trustedVoiceConfirmationText: string | undefined;
   const normalizeAgentPayload = (
     event: string,

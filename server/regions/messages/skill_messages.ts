@@ -7,3 +7,5 @@ export const CN_LEGAL_REASONING_DRAFT_MESSAGES = {
   ready: '底稿结构已齐，法律结论仍待复核',
   missing: '尚未形成完整法律分析底稿',
 };
+
+export const CN_LEGAL_CASE_DEFAULTS = { title: '未命名案件', materialTitle: '案件材料' } as const;

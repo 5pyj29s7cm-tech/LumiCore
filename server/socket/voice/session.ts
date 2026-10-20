@@ -16,7 +16,7 @@ export interface VoiceInputResources extends ConversationResourceLifetime {
   owner?: ReturnType<typeof captureVoiceTurnOwner>;
   request?: Readonly<ChatExecutionScope & {
     requestId: string; agentId: string; personalityId: string;
-    provenance: VoiceTurnProvenance | null; authorization: RequestAuthorization;
+    provenance: VoiceTurnProvenance | null; authorization: RequestAuthorization; signal: AbortSignal;
   }>;
 }
 

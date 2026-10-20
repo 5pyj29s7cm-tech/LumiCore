@@ -143,7 +143,7 @@ describe('model tool declaration projection', () => {
     },
   );
 
-  it('keeps ordinary conversation tool-free instead of exposing registry-order noise', () => {
+  it('keeps ordinary conversation model-owned with a bounded authorized discovery projection', () => {
     const registry = new ToolRegistry();
     registerAllTools(registry);
     const text = '你好，陪我聊一会儿';
@@ -163,12 +163,21 @@ describe('model tool declaration projection', () => {
     });
     const selection = buildLumiCapabilitySelection({ dispatch, execution, text, registry });
 
-    expect(execution.allowToolUse).toBe(false);
-    expect(selection.lane).toBe('conversation');
-    expect(buildModelToolProjection(execution, {
-      lane: selection.lane,
-      preferredTools: selection.preferredTools,
-    }).toolNames).toEqual([]);
+    expect(execution.allowToolUse).toBe(true);
+    expect(selection.lane).toBe('external_tool');
+    const projection = buildModelToolProjection(execution, {
+      lane: selection.lane, preferredTools: selection.preferredTools,
+    });
+    expect(projection.maxTools).toBeLessThanOrEqual(32);
+    expect(projection.toolNames.length).toBeGreaterThan(0);
+    expect(projection.toolNames.length).toBeLessThanOrEqual(projection.maxTools);
+    expect(projection.toolNames).toContain('client_capability_manifest');
+    expect(projection.allowDynamicDiscovery).toBe(true);
+    const authorized = registry.getToolDeclarationsForPolicy(buildModelCapabilityPolicy(execution))
+      .map(tool => tool.function.name);
+    expect(projection.toolNames.every(name => authorized.includes(name))).toBe(true);
+    expect(projection.toolNames.length).toBeLessThan(registry.getToolDeclarations().length);
+    expect(dispatch.flow.acceptedActionContract).toBeUndefined();
   });
 
   it('projects a bounded real computer inventory instead of capability metadata alone', () => {
@@ -673,8 +682,8 @@ describe('model tool declaration projection', () => {
       .toEqual(['mcp_dynamic-skill_probe', 'client_capability_manifest']);
     expect(installedProbe).toHaveBeenCalledTimes(1);
     expect(confirmation.mock.calls).toEqual([
-      ['skill_marketplace_install', { skillId: 'skill-dynamic-skill' }, expect.objectContaining({ capabilityId: 'skills.marketplace.install' })],
-      ['mcp_dynamic-skill_probe', {}, expect.objectContaining({ capabilityId: 'test.mcp.dynamic-skill.probe' })],
+      ['skill_marketplace_install', { skillId: 'skill-dynamic-skill' }, expect.objectContaining({ capabilityId: 'skills.marketplace.install' }), { acceptedActionContract: undefined }],
+      ['mcp_dynamic-skill_probe', {}, expect.objectContaining({ capabilityId: 'test.mcp.dynamic-skill.probe' }), { acceptedActionContract: undefined }],
     ]);
     expect(observedTaskIds).toEqual([
       'task-live-skill-chain',
@@ -797,8 +806,8 @@ describe('model tool declaration projection', () => {
     expect(mocks.makeLLMCall.mock.calls[1][1].map((item: any) => item.function.name))
       .toEqual(['mcp_dynamic-external_probe', 'client_capability_manifest']);
     expect(confirmation.mock.calls).toEqual([
-      ['external_control_configure_candidate', { candidateId: 'dynamic-external', enabled: true }, expect.objectContaining({ capabilityId: 'external-control.candidate.configure' })],
-      ['mcp_dynamic-external_probe', {}, expect.objectContaining({ capabilityId: 'test.external-mcp.dynamic-probe' })],
+      ['external_control_configure_candidate', { candidateId: 'dynamic-external', enabled: true }, expect.objectContaining({ capabilityId: 'external-control.candidate.configure' }), { acceptedActionContract: undefined }],
+      ['mcp_dynamic-external_probe', {}, expect.objectContaining({ capabilityId: 'test.external-mcp.dynamic-probe' }), { acceptedActionContract: undefined }],
     ]);
     expect(observedTaskIds).toEqual([
       'task-live-external-mcp-chain',

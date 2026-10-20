@@ -42,7 +42,7 @@ export async function runPreparedLumiTurn(input: PreparedLumiTurnInput) {
   const policy = input.finalization?.({ result, responseText, toolRecords });
   const outbound = await finalizeLumiResponseForDelivery({
     taskText: input.taskText, responseText, completionGuard: result.completionGuard, source,
-    flow: input.model.execution.turnIntent.flow, taskId: input.taskId, requestId: input.requestId,
+    flow: input.model.execution.turnIntent.flow, taskId: input.model.execution.taskId || input.taskId, requestId: input.requestId,
     allowToolUse: input.model.execution.executionRequested && !input.skipModel,
     isAborted: () => Boolean(input.model.config.signal?.aborted || input.model.isCancelled?.()),
     isPendingConfirmation: () => false, ...policy, toolRecords,

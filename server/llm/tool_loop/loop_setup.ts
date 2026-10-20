@@ -47,6 +47,14 @@ export function prepareToolLoop(messages: NormalizedMessage[], toolRegistry: Too
           : {}),
       }
     : undefined;
+  if (toolExecutionContext?.prepareSelectedToolCall && context) {
+    const prepareSelected = toolExecutionContext.prepareSelectedToolCall;
+    toolExecutionContext.prepareSelectedToolCall = async () => {
+      const binding = await prepareSelected();
+      Object.assign(context, binding, { currentTurnExecutionRequested: true });
+      return binding;
+    };
+  }
   const usageRecords: LLMUsageRecord[] = usageRecordSink || [];
   const invocationBudget: ToolInvocationBudgetState = invocationBudgetState || newToolInvocationBudget();
   function finish(text: string, completionGuard?: LLMResult['completionGuard']): LLMResult {

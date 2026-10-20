@@ -13,7 +13,7 @@ import { formatCompactClientSelfPrompt } from './self/prompt_compact';
 import { getClientStateForScope } from './self/state';
 import { getClientHealthReport, getClientSelfAwarenessReport } from './self/health';
 import { getSelfModelSnapshot } from './self/snapshot';
-import { formatLearnedCapabilityRoutes, formatWallpaperState, formatActiveWallpaperBoundary } from './self/prompt_context';
+import { formatLearnedCapabilityRoutes, formatWallpaperState, formatActiveWallpaperBoundary, formatClientProductState } from './self/prompt_context';
 import { getClientCapabilities } from './self/capabilities';
 import { CLIENT_INTERFACE_SURFACES, VISIBLE_EXECUTION_HABITS } from './self/catalog';
 
@@ -73,7 +73,7 @@ export function shouldUseFullClientSelfPrompt(userText: string): boolean {
 export function formatClientSelfPromptForTurn(
   userId: string,
   userText: string,
-  scope: { domain?: 'personal' | 'work'; orgId?: string } = { domain: 'personal', orgId: '' },
+  scope: { domain?: 'personal' | 'work'; orgId?: string; socketId?: string } = { domain: 'personal', orgId: '' },
 ): string {
   return shouldUseFullClientSelfPrompt(userText)
     ? formatClientSelfPrompt(userId, scope)
@@ -82,16 +82,17 @@ export function formatClientSelfPromptForTurn(
 
 export function formatClientSelfPrompt(
   userId: string,
-  scope: { domain?: 'personal' | 'work'; orgId?: string } = { domain: 'personal', orgId: '' },
+  scope: { domain?: 'personal' | 'work'; orgId?: string; socketId?: string } = { domain: 'personal', orgId: '' },
 ): string {
   const isWork = scope.domain === 'work' && Boolean(scope.orgId);
   const state = sanitizeDiagnosticValue(getClientStateForScope(userId, {
     domain: isWork ? 'work' : 'personal',
     orgId: isWork ? scope.orgId : '',
+    socketId: scope.socketId,
   }));
-  const selfSnapshot = getSelfModelSnapshot(userId, { domain: isWork ? 'work' : 'personal', orgId: scope.orgId });
+  const selfSnapshot = getSelfModelSnapshot(userId, { domain: isWork ? 'work' : 'personal', orgId: scope.orgId, socketId: scope.socketId });
   const health = selfSnapshot.health;
-  const awareness = getClientSelfAwarenessReport(userId, { domain: isWork ? 'work' : 'personal', orgId: scope.orgId }, health);
+  const awareness = getClientSelfAwarenessReport(userId, { domain: isWork ? 'work' : 'personal', orgId: scope.orgId, socketId: scope.socketId }, health);
   const stateAge = state?.updatedAt ? Math.round((Date.now() - state.updatedAt) / 1000) : null;
   const gate = getGateConfig(userId);
   const workflows = isWork ? [] : listAutonomousWorkflows(userId);
@@ -128,7 +129,7 @@ export function formatClientSelfPrompt(
     `- ${adapter.label} (${adapter.id}) [${adapter.category}/${adapter.status}]: Actions: ${adapter.actions.join(', ')}${adapter.requiresConfirmation ? ' (hard-boundary-sensitive)' : ''}${adapter.diagnostics?.length ? ` Diagnostics: ${adapter.diagnostics.slice(0, 3).join('; ')}` : ''}`
   ));
 
-  const stateLines = state ? [
+  const stateLines = [formatClientProductState(state), ...(state ? [
     `- Platform: ${state.platform || 'unknown'}`,
     `- Current mode: ${state.mode || 'unknown'}`,
     `- Active tab: ${state.activeTab || 'unknown'}`,
@@ -158,7 +159,7 @@ export function formatClientSelfPrompt(
     `- State age: ${stateAge}s`,
   ] : [
     '- No live desktop client state has been reported yet.',
-  ];
+  ])];
   const healthLines = [
     `- Overall health: ${health.level}`,
     `- State age: ${health.stateAgeSeconds == null ? 'unknown' : `${health.stateAgeSeconds}s`}`,

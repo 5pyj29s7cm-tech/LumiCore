@@ -79,7 +79,7 @@ export async function prepareVoiceRelease(context: NonNullable<Awaited<ReturnTyp
       flush: flushDBOrThrow,
       persistTerminalReceipt: () => persistAuthorizedTerminalReceipt({ scope: context.executionScope, requestId: context.requestId,
         event: 'agent:response', payload: terminalPayload, unknownPayload: context.executionUnknownPayload,
-        authorization: context.turnAuthorization, channel: 'voice', flush: flushDBOrThrow }),
+        authorization: { isCurrent: context.isCurrentTurn }, channel: 'voice', flush: flushDBOrThrow }),
       persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
         context.executionScope,
         context.requestId,

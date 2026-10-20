@@ -68,7 +68,7 @@ describe('admitted model mode across transport entries', () => {
     const call = mocks.tools.mock.calls[0];
     expect(call[4]).toBe(input.execution.authorizationPolicy.maxIterations);
     expect(call[11]).toMatchObject({ requestId: input.execution.resolution.requestId, turnId: input.execution.resolution.requestId,
-      resolutionId: input.execution.resolution.id, currentTurnExecutionRequested: true, onToolRecord: receipt,
+      resolutionId: input.execution.resolution.id, currentTurnExecutionRequested: undefined, onToolRecord: receipt,
       trustedActionContinuation: input.execution.trustedActionContinuation });
     expect(call[11].toolPolicy).toBe(input.execution.authorizationPolicy);
     expect(call[11].modelToolProjection).toBe(input.execution.modelToolProjection);

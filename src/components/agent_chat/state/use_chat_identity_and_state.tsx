@@ -368,7 +368,6 @@ export function useChatIdentityAndState({
   }, [isOpen, isCreationWorkspace]);
   const [previewFile, setPreviewFile] = useState<ChatPreviewFile | null>(null);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  const nativeDropHandledAtRef = useRef(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearchingHistory, setIsSearchingHistory] = useState(false);
@@ -466,7 +465,7 @@ export function useChatIdentityAndState({
     onCreationRequestConsumed, mediaSourceUploading, isTyping, setChatSongOpen,
     chatSongWorkbenchRef, prefillMessage, prefillSource, onPrefillConsumed, isListening, localVoiceSession,
     isElectron, callState, selectedVoiceId, attachmentRequest, onAttachmentRequestConsumed, setIsDraggingFiles,
-    nativeDropHandledAtRef, onClose, workflowStatus, chatAccentTheme, previewFile, layout, commandCenterView,
+    onClose, workflowStatus, chatAccentTheme, previewFile, layout, commandCenterView,
     resolvedAppearanceMode, prefersReducedMotion, mediaStudioMode, mediaGenerationStatus, mediaGenerationDetail,
     mediaSources, mediaGenerationRetryRequest, isWorkChat, chatSongOpen, isDraggingFiles, isCommandCenterUtility,
     onCommandCenterViewChange, onOpenNexus, voices, voicePickerRef, setSelectedVoiceId, audioLevel,

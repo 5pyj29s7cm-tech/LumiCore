@@ -27,6 +27,7 @@ import {
   requiresExternalAiHistory,
   requiresArtifactPostWriteReadback,
 } from '../server/cognition/action_contract';
+import { compositeNavigationInstructions } from '../server/cognition/normalized_action_intent';
 import type { TaskCapsuleV1 } from '../server/conversation/task_capsule';
 import {
   recordsToTaskReceipts,
@@ -1640,5 +1641,42 @@ describe('Lumi action contract', () => {
     expect(prompt).toContain('Core action');
     expect(prompt).toContain('Preparation is not completion');
     expect(prompt).toContain('Required completion evidence');
+  });
+});
+
+
+describe('completion evidence retains a later external final action', () => {
+  it('keeps the existing navigation decomposition independent of the later negative clause', () => {
+    expect(compositeNavigationInstructions('打开 Lumi 设置页面，然后打开 AutoCAD，不要发送消息。')).toHaveLength(2);
+  });
+  it.each([
+    'Read the file D:/work/source.txt and show its complete contents. Then sign the contract.',
+    '读取 D:/work/source.txt 并完整显示内容，然后签署合同。',
+    'Read the file D:/work/source.txt and show its complete contents. Then please sign the contract.',
+  ])('does not let the read receipt complete every obligation: %s', text => {
+    const accepted = buildActionContract(text);
+    const contract = buildActionEvidenceContract(text, undefined, { taskText: text, contract: accepted });
+    expect(contract.components).toHaveLength(2);
+    expect(contract.components?.[1].contract.kind).toBe('external_commit');
+    expect(buildActionContract(text)).toEqual(accepted);
+    expect(hasCoreActionEvidence(contract, [{ name: 'read_file', arguments: { path: 'D:/work/source.txt' },
+      result: 'Complete source body', terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'Exact source read.' } }], text)).toBe(false);
+  });
+
+  it.each([
+    'Read the file D:/work/design-contract.txt and show its complete contents.',
+    'Read the file D:/work/source.txt. The document contains a signature clause.',
+    'Read the file D:/work/source.txt. The layout design includes holiday toys.',
+    'Read the file D:/work/source.txt. Never sign the contract.',
+    'Read the file D:/work/source.txt and show its complete contents. Do not sign the contract.',
+    '读取 D:/work/source.txt 并完整显示内容，不要签署合同。',
+    'Can you read the file D:/work/source.txt? Can you sign the contract?',
+    'Read the file D:/work/source.txt. If appropriate, sign the contract.',
+    'Create D:/work/notes.txt with the following content: Read the file. Then sign the contract.',
+  ])('does not invent an affirmative commit from a plain read, boundary, question or data: %s', text => {
+    const accepted = buildActionContract(text);
+    const evidence = buildActionEvidenceContract(text, undefined, { taskText: text, contract: accepted });
+    expect(evidence.components?.some(item => item.contract.kind === 'external_commit')).not.toBe(true);
+    expect(buildActionContract(text)).toEqual(accepted);
   });
 });

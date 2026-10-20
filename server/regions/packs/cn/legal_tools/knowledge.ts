@@ -1,14 +1,17 @@
 import { searchSimilarCases, searchStatutes, type LegalArticleType, createLegalArticle, indexLegalArticle, type CitationCheck, verifyMultipleCitations, verifyCitation } from "../../../../legal/kb";
 import { searchLegalAuthorityDatabase } from "../../../../legal/sources";
-import { extractLegalMetadata, parseDocument } from "../../../../legal/parser";
-import { legalWrite, legalExecutionSignal } from "../../../../legal/execution";
+import { extractLegalMetadata } from "../../../../legal/parser";
+import { legalWrite, legalExecutionSignal, assertLegalExecutionActive } from "../../../../legal/execution";
 import path from "path";
+import crypto from "node:crypto";
+import * as LegalCases from "../../../../org/legal_cases";
+import * as EDB from "../../../../org/db";
 import fs from "fs";
 import { refreshAuthoritativeStatuteSources, formatStatuteAuthorityRefreshReport } from "../../../../legal/statute_authority_refresh";
 import { loadStatuteAuthorityRefreshState } from "../../../../legal/statute_authority_store";
 import { encodeToolResult } from "../../../../tools/result_envelope";
-import { legalTemporalOptions, legalWorkspaceId, textArg, listArg, LEGAL_MATERIAL_EXTENSIONS, LEGAL_IMAGE_EXTENSIONS } from "./context";
-import { normalizeMaterialArticleType, buildImportedMaterialContent, materialCategory, normalizeTagsFromArgs, collectMaterialFiles } from "./documents";
+import { legalTemporalOptions, legalWorkspaceId, textArg, listArg, expandLocalPath, LEGAL_MATERIAL_EXTENSIONS, LEGAL_IMAGE_EXTENSIONS } from "./context";
+import { normalizeMaterialArticleType, buildImportedMaterialContent, materialCategory, normalizeTagsFromArgs, collectMaterialFiles, parseLegalDocument, legalReadError } from "./documents";
 
 // ── legal_search_case ───────────────────────────────────────────────────
 
@@ -75,142 +78,96 @@ export async function importMaterialsToKbHandler(args: Record<string, any>, cont
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const filePath = textArg(args, 'filePath');
   const folderPath = textArg(args, 'folderPath');
-  const content = textArg(args, 'content');
-  const recursive = args.recursive !== false;
-  const maxFiles = Math.max(1, Math.min(Number(args.maxFiles) || 30, 100));
-  const materialType = textArg(args, 'materialType');
-  const defaultArticleType = normalizeMaterialArticleType(materialType || textArg(args, 'title'));
-
-  if (!filePath && !folderPath && !content) {
-    return '请提供 filePath、folderPath 或 content。Lumi 可以导入本地案件材料、下载后的网页材料或直接粘贴文本。';
-  }
-
-  const imported: Array<{ title: string; articleId: string; chunks: number; category: string }> = [];
+  const content = textArg(args, 'materials') || textArg(args, 'content');
+  const caseId = textArg(args, 'caseId');
+  if (caseId && !LegalCases.getCase(orgId, caseId, userId, 'write')) throw new Error('Legal case unavailable for this user.');
+  if (!filePath && !folderPath && !content) return '请提供 filePath、folderPath 或 content。';
+  const imported: Array<{ title: string; articleId: string; chunks: number; category: string; reused: boolean }> = [];
   const skipped: Array<{ source: string; reason: string }> = [];
-
-  const ingestOne = async (source: string, rawText: string, format: string, title: string, articleType: LegalArticleType) => {
-    const text = rawText.trim();
-    if (text.length < 20) {
-      skipped.push({ source, reason: '文本过短或解析为空' });
-      return;
-    }
+  const ingestOne = async (source: string, text: string, format: string, title: string) => {
+    if (text.trim().length < 20) { skipped.push({ source, reason: '文本过短或解析为空' }); return; }
+    const articleType = normalizeMaterialArticleType(textArg(args, 'materialType') || title);
+    const identity = 'legal-import:' + crypto.createHash('sha256')
+      .update(JSON.stringify([userId, caseId, source, text, articleType])).digest('hex');
+    const existing = EDB.listKbArticles(orgId).find(article => article.authorId === userId && (() => {
+      try { return JSON.parse(article.tags || '[]').includes(identity); } catch { return false; }
+    })());
     const metadata = articleType === 'judgment' ? extractLegalMetadata(text) : undefined;
-    const article = legalWrite(() => createLegalArticle(orgId, userId, {
+    const article = existing || legalWrite(() => createLegalArticle(orgId, userId, {
       title,
       content: buildImportedMaterialContent(args, { title, text, source, format, articleType }),
       category: materialCategory(articleType),
-      tags: normalizeTagsFromArgs(args, articleType, source),
+      tags: [...normalizeTagsFromArgs(args, articleType, source), identity, ...(caseId ? ['legal-case:' + caseId] : [])],
       articleType,
-      metadata: metadata ? {
-        articleType,
-        caseNumber: metadata.caseNumber,
-        court: metadata.court,
-        parties: metadata.parties,
-        causeOfAction: metadata.causeOfAction,
-        judgmentDate: metadata.judgmentDate,
-        statutesCited: metadata.statutesCited,
-        jurisdiction: metadata.court,
-      } : { articleType },
+      metadata: { articleType, ...metadata, jurisdiction: metadata?.court },
     }));
-    const chunks = await indexLegalArticle(orgId, article.id, context?.userId || userId, { signal: context?.executionSignal || legalExecutionSignal() });
-    imported.push({ title, articleId: article.id, chunks, category: article.category });
+    // Retry an interrupted index without making a duplicate article or another case.
+    let chunks = 0;
+    try { chunks = await indexLegalArticle(orgId, article.id, userId, { signal: context?.executionSignal || legalExecutionSignal() }); }
+    catch (error) { assertLegalExecutionActive(context); skipped.push({ source, reason: '原文已保存，向量索引未完成；可重试原材料。' }); }
+    if (caseId) {
+      const marker = 'knowledge-article:' + article.id;
+      const current = LegalCases.getCase(orgId, caseId, userId, 'write');
+      if (!current) throw new Error('Legal case authorization changed.');
+      if (!current.materials.some(material => material.content?.includes(marker))) {
+        const material = legalWrite(() => LegalCases.addMaterial(orgId, userId, caseId, {
+          type: 'evidence', title, content: marker + '\n' + text,
+          fileName: source === 'pasted-content' ? undefined : path.basename(source),
+          localPath: source === 'pasted-content' ? undefined : source, source: 'manual',
+        }));
+        if (!material) throw new Error('Legal case archive failed.');
+      }
+    }
+    imported.push({ title, articleId: article.id, chunks, category: article.category, reused: Boolean(existing) });
   };
-
-  if (content) {
-    const title = textArg(args, 'title') || textArg(args, 'caseName') || '粘贴法律材料';
-    await ingestOne('pasted-content', content, 'text', title, defaultArticleType);
-  }
-
-  if (filePath) {
-    const resolved = path.resolve(filePath);
-    if (!fs.existsSync(resolved)) {
-      skipped.push({ source: resolved, reason: '文件不存在' });
-    } else if (!fs.statSync(resolved).isFile()) {
-      skipped.push({ source: resolved, reason: '不是文件' });
-    } else if (!LEGAL_MATERIAL_EXTENSIONS.has(path.extname(resolved).toLowerCase())) {
-      const ext = path.extname(resolved).toLowerCase();
-      skipped.push({
-        source: resolved,
-        reason: LEGAL_IMAGE_EXTENSIONS.has(ext)
-          ? '图片材料需先使用 ocr_image_file 提取文字，再将 OCR 文本导入知识库'
-          : `暂不支持该格式：${ext || '无扩展名'}`,
-      });
-    } else {
-      const parsed = await parseDocument(resolved);
-      if (!parsed?.text) {
-        skipped.push({ source: resolved, reason: '解析失败或内容为空' });
-      } else {
-        const inferredType = normalizeMaterialArticleType(materialType || path.basename(resolved));
-        await ingestOne(resolved, parsed.text, parsed.format, textArg(args, 'title') || path.basename(resolved), inferredType);
-      }
-    }
-  }
-
+  if (content) await ingestOne('pasted-content', content, 'text', textArg(args, 'title') || textArg(args, 'caseName') || '粘贴法律材料');
+  const files = new Set<string>();
+  if (filePath) files.add(path.resolve(expandLocalPath(filePath)));
   if (folderPath) {
-    const resolvedFolder = path.resolve(folderPath);
-    if (!fs.existsSync(resolvedFolder)) {
-      skipped.push({ source: resolvedFolder, reason: '文件夹不存在' });
-    } else if (!fs.statSync(resolvedFolder).isDirectory()) {
-      skipped.push({ source: resolvedFolder, reason: '不是文件夹' });
-    } else {
-      const files = collectMaterialFiles(resolvedFolder, recursive, maxFiles);
-      if (files.length === 0) skipped.push({ source: resolvedFolder, reason: '未找到可导入的文档格式' });
-      for (const file of files) {
-        try {
-          const ext = path.extname(file).toLowerCase();
-          if (!LEGAL_MATERIAL_EXTENSIONS.has(ext)) {
-            skipped.push({
-              source: file,
-              reason: LEGAL_IMAGE_EXTENSIONS.has(ext)
-                ? '图片材料需先使用 ocr_image_file 提取文字，再将 OCR 文本导入知识库'
-                : `暂不支持该格式：${ext || '无扩展名'}`,
-            });
-            continue;
-          }
-          const parsed = await parseDocument(file);
-          if (!parsed?.text) {
-            skipped.push({ source: file, reason: '解析失败或内容为空' });
-            continue;
-          }
-          const inferredType = normalizeMaterialArticleType(materialType || path.basename(file));
-          await ingestOne(file, parsed.text, parsed.format, path.basename(file), inferredType);
-        } catch (err: any) {
-          skipped.push({ source: file, reason: err?.message || '导入失败' });
-        }
-      }
+    const resolved = path.resolve(expandLocalPath(folderPath));
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) skipped.push({ source: resolved, reason: '文件夹不存在或不可访问' });
+    else {
+      const limit = Math.max(1, Math.min(Number(args.maxFiles) || 30, 100));
+      const found = collectMaterialFiles(resolved, args.recursive !== false, limit + 1);
+      found.slice(0, limit).forEach(file => files.add(file));
+      if (!found.length) skipped.push({ source: resolved, reason: '未找到可导入的材料' });
+      if (found.length > limit) skipped.push({ source: resolved, reason: '超过本次文件数量上限，其余文件尚未导入' });
     }
   }
-
+  for (const source of files) {
+    assertLegalExecutionActive(context);
+    try {
+      const ext = path.extname(source).toLowerCase();
+      if (!fs.existsSync(source) || !fs.statSync(source).isFile()) { skipped.push({ source, reason: '文件不存在或不是文件' }); continue; }
+      if (!LEGAL_MATERIAL_EXTENSIONS.has(ext)) {
+        skipped.push({ source, reason: LEGAL_IMAGE_EXTENSIONS.has(ext)
+          ? '图片材料需先进行图片文字识别，再将识别文本导入知识库'
+          : '暂不支持该格式：' + ext }); continue;
+      }
+      const parsed = await parseLegalDocument(source, args);
+      if (!parsed?.text?.trim()) { skipped.push({ source, reason: '解析失败或内容为空' }); continue; }
+      await ingestOne(source, parsed.text, parsed.format, path.basename(source));
+    } catch (error) {
+      assertLegalExecutionActive(context);
+      skipped.push({ source, reason: legalReadError(error) });
+    }
+  }
   const totalChunks = imported.reduce((sum, item) => sum + item.chunks, 0);
-  const importedLines = imported.length > 0
-    ? imported.map((item, index) =>
-      `${index + 1}. ${item.title}\n   - articleId: ${item.articleId}\n   - category: ${item.category}\n   - indexedChunks: ${item.chunks}`,
-    ).join('\n')
-    : '无';
-  const skippedLines = skipped.length > 0
-    ? skipped.map((item, index) => `${index + 1}. ${item.source} — ${item.reason}`).join('\n')
-    : '无';
-
-  return `# 法律材料导入知识库报告
-
-## 一、导入结果
-- 工具：legal_import_materials_to_kb
-- 组织：${orgId}
-- 成功导入：${imported.length} 份
-- 索引块数：${totalChunks}
-- 跳过/失败：${skipped.length} 份
-
-## 二、已导入材料
-${importedLines}
-
-## 三、跳过/失败材料
-${skippedLines}
-
-## 四、后续可用能力
-- 这些材料已进入组织知识库，可用于案件问答、争议焦点提炼、代理词/法律意见书、证据目录和类案检索底稿。
-- 若 indexedChunks 为 0，通常是当前未配置向量模型；材料仍保存在知识库中，可通过标题、标签和关键词检索。
-- 从外部网站获得的网页、下载文件或摘录，应先由律师确认来源和使用权限，再由本工具入库。
-`;
+  const lines = imported.map((item, index) =>
+    (index + 1) + '. ' + item.title + '\n   - articleId: ' + item.articleId + '\n   - category: ' + item.category
+    + '\n   - indexedChunks: ' + item.chunks + (item.reused ? '\n   - 已复用原入库记录，未重复创建' : '')).join('\n');
+  const report = '# 法律材料导入知识库报告\n\n## 一、导入结果\n- 成功导入：' + imported.length
+    + ' 份\n- 索引块数：' + totalChunks + '\n- 跳过/失败：' + skipped.length + ' 份\n- 案件：' + (caseId || '未指定，不另建案件')
+    + '\n\n## 二、已导入材料\n' + (lines || '无')
+    + '\n\n## 三、跳过/失败材料\n' + (skipped.map(item => '- ' + item.source + ' — ' + item.reason).join('\n') || '无')
+    + '\n\n## 四、后续处理\n' + (imported.length ? '- 已列出的原文已保存，可检索和复用。' : '- 本次没有材料入库。')
+    + '\n- 失败材料仍待处理；补充密码后用相同路径和案件ID重试，密码只用于当次读取。'
+    + '\n- 向量索引为0不等于原文丢失，但语义检索可能尚未就绪。';
+  return encodeToolResult(report, {
+    ok: imported.length > 0 && skipped.length === 0,
+    status: imported.length ? (skipped.length ? 'partial' : 'imported') : 'blocked',
+    existingArticleIds: imported.filter(item => item.reused).map(item => item.articleId),
+  });
 }
 
 function formatCitationVerificationResult(check: CitationCheck): string {
@@ -303,7 +260,7 @@ export async function importJudgmentHandler(args: Record<string, any>, context?:
   const filePath = args.filePath as string;
   const orgId = legalWorkspaceId(args, context);
   const userId = context?.userId || (args.userId as string) || 'system';
-  const content = args.content as string;
+  const content = textArg(args, 'materials') || textArg(args, 'content');
 
   if (!filePath && !content) return '请提供filePath（文件路径）或content（文书正文）。';
 
@@ -311,7 +268,7 @@ export async function importJudgmentHandler(args: Record<string, any>, context?:
   if (content) {
     text = content;
   } else {
-    const result = await parseDocument(filePath);
+    const result = await parseLegalDocument(filePath, args);
     if (!result) return `无法解析文件: ${filePath}`;
     text = result.text;
   }

@@ -30,7 +30,7 @@ export function getBackendHealthReport() {
 
 export function getClientHealthReport(
   userId: string,
-  scope: { domain?: string; orgId?: string } = {},
+  scope: { domain?: string; orgId?: string; socketId?: string } = {},
   models: Record<string, Record<string, unknown>> = (getLumiModelConfiguration(userId) as { roles?: Record<string, Record<string, unknown>> }).roles || {},
 ): ClientHealthReport {
   const state = getClientStateForScope(userId, scope);
@@ -257,7 +257,7 @@ export function getClientHealthReport(
 
 export function getClientSelfAwarenessReport(
   userId: string,
-  scope: { domain?: string; orgId?: string } = {},
+  scope: { domain?: string; orgId?: string; socketId?: string } = {},
   health = getClientHealthReport(userId, scope),
 ): ClientSelfAwarenessReport {
   const state = getClientStateForScope(userId, scope);

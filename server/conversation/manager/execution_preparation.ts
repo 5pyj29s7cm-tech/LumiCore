@@ -5,7 +5,7 @@ import { toolRecordSucceeded } from '../../tools/receipt_payload';
 import { parseObject } from '../ledger/serialization';
 import type { ActiveTaskMessageResolution } from "../../cognition/task_concurrency";
 import { bindConversationActionTurnTask, getConversationActionTurn } from "../action_turn_ledger";
-import { readDatabaseTables, commitDatabaseTables } from "../../../db_layer";
+import { readDatabaseTables, commitDatabaseTables, flushDBOrThrow } from "../../../db_layer";
 import type { Conversation } from "./contracts";
 import { prepareConversationActionTaskState } from "../../cognition/action_continuation";
 import { attachConversationExecutionPlan } from "../ledger/plans";
@@ -19,6 +19,8 @@ import { bindConversationActionExecutionTurnInDb } from './turn_binding';
 
 type PreparedConversationActionExecution = ReturnType<typeof prepareConversationActionTaskState>;
 
+interface DetachedTaskReference { readonly taskId: string; readonly revision: number; }
+
 export type RejectedConversationActionExecution = {
   state: null;
   kind: 'conversation';
@@ -31,7 +33,7 @@ export type RejectedConversationActionExecution = {
 };
 
 export type ConversationActionExecutionPreparation =
-  | (PreparedConversationActionExecution & { turnRowId?: string })
+  | (PreparedConversationActionExecution & { turnRowId?: string; acceptedTranscriptText?: string; detachedTaskReference?: DetachedTaskReference })
   | RejectedConversationActionExecution;
 
 function rejectedConversationActionExecution(
@@ -50,6 +52,7 @@ export function prepareConversationActionExecution(input: {
   userMessageId: string;
   toolPolicy: ToolPolicy;
   preparedTurnUpgrade?: PreparedConversationTurnUpgrade;
+  detachedTaskReference?: DetachedTaskReference;
   forceResume?: boolean;
   forceNewTask?: boolean;
   forceTask?: boolean;
@@ -74,6 +77,9 @@ export function prepareConversationActionExecution(input: {
   }
   hydrateConversationActionState(db, conversation, input.acceptedTaskRelation ? undefined : input.userText);
   const relation = input.acceptedTaskRelation;
+  const detachedTaskReference = !input.preparedTurnUpgrade && relation?.binding === 'new_task'
+    && conversation.actionContinuationState?.unfinished
+    ? Object.freeze({ taskId: conversation.actionContinuationState.taskId, revision: conversation.actionContinuationState.revision || 0 }) : undefined;
   const expectedTaskId = input.confirmationTaskId || (relation && (relation.binding === 'active_task' || relation.binding === 'previous_task') ? relation.taskId : undefined);
   const existingTurn = (db.conversationActionTurns || []).find((turn: any) => turn.conversationId === input.conversationId && turn.userId === input.userId && turn.requestId === input.requestId);
   const currentTaskId = existingTurn?.taskId || conversation.actionContinuationState?.taskId;
@@ -104,6 +110,7 @@ export function prepareConversationActionExecution(input: {
         : 'conversation_action_turn_not_persisted',
     );
   }
+  const acceptedTranscriptText = (db.interactions || []).find((row: any) => row.id === input.userMessageId)?.message;
   const persistedTurn = getConversationActionTurn({
     conversationId: input.conversationId,
     userId: input.userId,
@@ -123,11 +130,25 @@ export function prepareConversationActionExecution(input: {
     // permanent busy response.
     conversation.actionContinuationState = exactBoundTaskState;
   }
-  const prepared = prepareConversationActionTaskState(conversation.actionContinuationState, {
+  const detachedTaskState = input.detachedTaskReference ? getConversationActionStateByTaskId(db, {
+    conversationId: input.conversationId, userId: input.userId, taskId: input.detachedTaskReference.taskId,
+  }) : null;
+  if (input.detachedTaskReference && (!input.preparedTurnUpgrade || relation?.binding !== 'new_task'
+    || !detachedTaskState?.unfinished || (detachedTaskState.revision || 0) !== input.detachedTaskReference.revision
+    || conversation.actionContinuationState && conversation.actionContinuationState.taskId !== input.detachedTaskReference.taskId)) {
+    return rejectedConversationActionExecution('stale', 'conversation_action_task_binding_stale');
+  }
+  const prepared = prepareConversationActionTaskState(
+    detachedTaskState || (input.acceptedTaskRelation?.operation === 'inspect' && input.forceTask && !input.forceResume
+      && !input.confirmationTaskId && !exactBoundTaskState ? null : conversation.actionContinuationState), {
     ...input,
     forceResume: input.forceResume === true || Boolean(exactBoundTaskState),
-    forceNewTask: exactBoundTaskState ? false : input.forceNewTask,
+    forceNewTask: exactBoundTaskState ? false : Boolean(detachedTaskState || input.forceNewTask),
   });
+  if (prepared.kind === 'status') {
+    commitDatabaseTables(db);
+    return { ...prepared, state: null, turnRowId: persistedTurn?.id, acceptedTranscriptText };
+  }
   if (prepared.state?.taskId) {
     const taskBinding = bindConversationActionTurnTask({
       conversationId: input.conversationId,
@@ -177,7 +198,7 @@ export function prepareConversationActionExecution(input: {
     }
     // The ledger may retain the previous task for status/history, but a plain
     // turn never receives that task id for plan/receipt binding.
-    return { state: null, kind: 'conversation', turnRowId: persistedTurn?.id };
+    return { state: null, kind: 'conversation', turnRowId: persistedTurn?.id, acceptedTranscriptText, detachedTaskReference };
   }
   if (prepared.state !== conversation.actionContinuationState) {
     if (prepared.state) conversation.actionContinuationState = prepared.state;
@@ -201,7 +222,15 @@ export function prepareConversationActionExecution(input: {
     }
     commitDatabaseTables(db);
   }
-  return { ...prepared, turnRowId: persistedTurn?.id };
+  return { ...prepared, turnRowId: persistedTurn?.id, acceptedTranscriptText };
+}
+
+export async function prepareAndPersistConversationActionExecution(
+  input: Parameters<typeof prepareConversationActionExecution>[0],
+): Promise<ConversationActionExecutionPreparation> {
+  const prepared = prepareConversationActionExecution(input);
+  if (!('bindingFailure' in prepared)) await flushDBOrThrow();
+  return prepared;
 }
 
 export function persistConversationExecutionPlan(input: {

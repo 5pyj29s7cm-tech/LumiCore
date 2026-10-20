@@ -1554,7 +1554,10 @@ describe('conversation action continuation state', () => {
     const plainTurn = (readDB().conversationActionTurns || []).find((row: any) =>
       row.conversationId === conversation.id && row.userId === userId && row.requestId === 'request-new-model-question');
     expect(plainTurn).toMatchObject({ taskId: '' });
-    expect(plain).toEqual({ state: null, kind: 'conversation', turnRowId: plainTurn.id });
+    expect(plain).toEqual({
+      state: null, kind: 'conversation', turnRowId: plainTurn.id,
+      acceptedTranscriptText: 'Which model are you using right now?', detachedTaskReference: undefined,
+    });
     expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
       .toBeUndefined();
     expect((readDB().conversationActionTasks || []).find((row: any) => row.id === oldTask.state?.taskId))
@@ -1600,7 +1603,10 @@ describe('conversation action continuation state', () => {
     const plainTurn = (readDB().conversationActionTurns || []).find((row: any) =>
       row.conversationId === conversation.id && row.userId === userId && row.requestId === 'request-format-feedback');
     expect(plainTurn).toMatchObject({ taskId: '' });
-    expect(plain).toEqual({ state: null, kind: 'conversation', turnRowId: plainTurn.id });
+    expect(plain).toEqual({
+      state: null, kind: 'conversation', turnRowId: plainTurn.id,
+      acceptedTranscriptText: 'Please format your replies in short paragraphs.', detachedTaskReference: undefined,
+    });
     expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
       .toBeUndefined();
     settleConversationActionExecutionRequest(conversation.id, userId, 'request-format-feedback');

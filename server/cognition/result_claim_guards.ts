@@ -380,28 +380,6 @@ export function unsupportedToolExecutionClaim(input: LumiResultFinalizerInput): 
   ].join('\n');
 }
 
-export function unsupportedToolModeClaim(input: LumiResultFinalizerInput): string | null {
-  const response = String(input.responseText || '');
-  // i18n-allow: Chinese unsupported-mode claim recognition; not user-visible copy.
-  const claimsInventedMode = /(?:已(?:经)?|现在|已经成功).{0,18}(?:切换|切到|进入|开启).{0,32}(?:Fetcher|System\s*Diagnostics|工具可用(?:模式|状态)|诊断工具模式)/iu.test(response);
-  if (!claimsInventedMode) return null;
-  const hasModeReceipt = (input.toolRecords || []).some(record => (
-    !record.error
-    && (
-      /^(?:set_client_mode|operation_mode)$/i.test(String(record.name || ''))
-      || (
-        /^client_action$/i.test(String(record.name || ''))
-        && /^set_client_mode$/i.test(String(record.arguments?.action || ''))
-      )
-    )
-    && String(record.result || '').trim()
-  ));
-  if (hasModeReceipt) return null;
-  return isChineseText(resultTaskText(input)) || isChineseText(response)
-    ? CN_EXECUTION_EVIDENCE_MESSAGES.inventedToolMode
-    : 'No such mode switch occurred. Fetcher/System Diagnostics is not a user-selectable runtime mode; the tools actually declared for this turn are authoritative.';
-}
-
 function hasVerifiedOngoingExecutionReceipt(input: LumiResultFinalizerInput): boolean {
   const records = input.toolRecords || [];
   const task = resultTaskText(input);
@@ -512,32 +490,6 @@ export function unsupportedOngoingExecutionClaim(
       : attemptedButEnded
         ? 'This foreground attempt has ended without verified goal completion; it is not still executing.'
         : 'No tool execution started in this turn. The response described a plan, not an action or result.';
-}
-
-export function unsupportedToolAvailabilityExcuse(input: LumiResultFinalizerInput): string | null {
-  const response = String(input.responseText || '');
-  // A correct explanation may explicitly deny the fictional state (for
-  // example, "the routed subset does not mean tools are unmounted"). Remove
-  // those denial clauses before looking for an unsupported availability claim.
-  const availabilityClaimText = response.replace(
-    /(?:\u4e0d\u4ee3\u8868|\u5e76\u4e0d\u4ee3\u8868|\u4e0d\u7b49\u4e8e|\u4e0d\u80fd\u8bf4\u660e|\u4e0d\u662f\u8bf4|does\s+not\s+mean|doesn'?t\s+mean)[^\u3002\uff01\uff1f.!?\n]{0,100}[\u3002\uff01\uff1f.!?]?/giu,
-    '',
-  );
-  // Keep the state word close to the tool noun. A broad wildcard here makes
-  // truthful plans such as “用桌面打开工具启动计算器，不打开替代软件” look as
-  // if they claimed the tool itself was not open.
-  // i18n-allow: Unsupported user-switchable tool-state excuse recognition; not user-visible copy.
-  const claimsToolsAreOff = /(?:当前|现在|这轮|我这边|当前会话|这个会话)?[^。！？!?\n]{0,32}(?:工具|tool)(?:\s*(?:本身|列表|集合|状态|权限|能力|链路|路由|is|are)){0,2}[\s:：]*(?:没(?:有)?打开|未打开|没开启|未开启|不可用|没有开放|没(?:有)?挂载|未挂载|没带|只有|只(?:挂载|有)|not (?:open|enabled|available|mounted|loaded)|disabled)|(?:当前|现在|这轮|我这边|当前会话|这个会话)?[^。！？!?\n]{0,28}(?:只有|只(?:挂载|有)|没(?:有)?挂载|未挂载|没带)[^。！？!?\n]{0,20}(?:工具|tool)|(?:需要|要不要|可以)(?:我)?[^。！？!?\n]{0,28}(?:切换|切到|进入|开启)[^。！？!?\n]{0,24}(?:工具可用|工具模式|tool mode|tools? enabled)/iu.test(availabilityClaimText);
-  if (!claimsToolsAreOff) return null;
-  const actualUnavailableReceipt = (input.toolRecords || []).some(record => (
-    String(record.error || '').trim()
-    // i18n-allow: Chinese tool-error recognition pattern; not user-visible copy.
-    && /(?:tool[^\n]{0,40}(?:unavailable|not found|not declared|disabled)|工具[^\n]{0,32}(?:不可用|未声明|不存在|已禁用))/iu.test(String(record.error || ''))
-  ));
-  if (actualUnavailableReceipt) return null;
-  return isChineseText(resultTaskText(input)) || isChineseText(response)
-    ? CN_EXECUTION_EVIDENCE_MESSAGES.inventedToolAvailability
-    : 'No receipt shows that tools were disabled, and there is no user-switchable “tool available mode.” Lumi must resume the real tool route instead of shifting an internal routing failure to the user.';
 }
 
 export function unsupportedPriorDiagnosticClaim(input: LumiResultFinalizerInput): string | null {

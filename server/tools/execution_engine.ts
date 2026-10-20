@@ -552,9 +552,19 @@ export async function executeToolCall(
   const desktopAuthorization = serverPreflight.allowed
     ? input.context?.desktopExecutionTracker?.authorize(semanticToolName, capability)
     : undefined;
-  const preflight = desktopAuthorization && !desktopAuthorization.allowed
+  let preflight = desktopAuthorization && !desktopAuthorization.allowed
     ? { allowed: false, arguments: serverPreflight.arguments, reason: desktopAuthorization.reason }
     : serverPreflight;
+  if (preflight.allowed && capability && input.context?.prepareSelectedToolCall) {
+    try {
+      const binding = await input.context.prepareSelectedToolCall();
+      Object.assign(input.context, binding, { currentTurnExecutionRequested: true });
+    } catch (error) {
+      if (input.context.executionSignal?.aborted || input.context.isCancelled?.()) throw error;
+      preflight = { allowed: false, arguments: preflight.arguments,
+        reason: error instanceof Error ? error.message : 'The selected tool lost its accepted turn.' };
+    }
+  }
   const executionArguments = preflight.arguments || callerArguments;
   // Allocate a durable action identity only after all argument binding. The
   // task-level key is not a tool-call key: distinct steps may use one tool.
@@ -602,12 +612,12 @@ export async function executeToolCall(
       durationMs: Math.max(0, Date.now() - startedMs),
     });
     finishMetric?.(record.envelope.status);
+    const finalized = brandCanonicalToolExecutionRecord(record, toolExecutionInputDigests(executionArguments));
     try {
-      input.context?.desktopExecutionTracker?.record(record);
+      input.context?.desktopExecutionTracker?.record(finalized);
     } catch {
       // Desktop observability must not change the canonical tool outcome.
     }
-    const finalized = brandCanonicalToolExecutionRecord(record, toolExecutionInputDigests(executionArguments));
     rememberServerTargetPolicyRecord(input.context, targetPolicyTaskText, finalized);
     try { input.context?.onToolRecord?.(finalized); } catch { /* Observation never changes execution. */ }
     try { input.context?.onToolFinished?.({ id: record.id, name: record.name, recorded: true }); } catch { /* Observation only. */ }

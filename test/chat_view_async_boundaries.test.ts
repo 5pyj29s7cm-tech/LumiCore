@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { shouldReloadPersistedConversation } from '../src/lib/conversationSync';
 import { ChatViewWorkRegistry } from '../src/lib/chatViewWork';
 import { ChatRequestLedger } from '../src/lib/chatEventReceipts';
-import { ChatAttachmentUploads, listenForNativeChatFileDrop } from '../src/lib/chatAttachmentUploads';
+import { ChatAttachmentUploads } from '../src/lib/chatAttachmentUploads';
+import { readFileSync } from 'node:fs';
 import { chatAttachmentCopy } from '../src/i18n/locales/chatAttachments';
 import { createChatAttachmentReference, mergeChatAttachmentReferences, mergePendingChatAttachments, MAX_CHAT_ATTACHMENTS } from '../src/lib/chatAttachmentReferences';
 
@@ -18,45 +19,14 @@ function deferred<T>() {
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const noop = () => {};
 
-const nativeDrop = vi.hoisted(() => vi.fn());
-vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onDragDropEvent: nativeDrop }) }));
-afterEach(() => { vi.unstubAllGlobals(); nativeDrop.mockReset(); });
+afterEach(() => { vi.unstubAllGlobals(); });
 
-describe('native file drop listener ownership', () => {
-  it('skips browsers and a view closed before native registration', async () => {
-    vi.stubGlobal('window', {});
-    expect(listenForNativeChatFileDrop(noop, { current: 0 }, async () => {})).toBeUndefined();
-    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
-    listenForNativeChatFileDrop(noop, { current: 0 }, async () => {})?.();
-    await settle(); expect(nativeDrop).not.toHaveBeenCalled();
-  });
-
-  it('imports paths once, records the native drop, and ignores events after cleanup', async () => {
-    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
-    const unlisten = vi.fn(), dragging = vi.fn(), imports = vi.fn(async () => {}), lastDrop = { current: 0 };
-    nativeDrop.mockResolvedValue(unlisten);
-    const cleanup = listenForNativeChatFileDrop(dragging, lastDrop, imports)!;
-    await settle(); const receive = nativeDrop.mock.calls[0][0];
-    for (const type of ['enter', 'over', 'leave']) receive({ payload: { type } });
-    expect(dragging.mock.calls.map(args => args[0])).toEqual([true, true, false]);
-    receive({ payload: { type: 'drop', paths: ['D:/synthetic/report.txt'] } });
-    expect(imports.mock.calls).toEqual([[['D:/synthetic/report.txt']]]);
-    expect(lastDrop.current).toBeGreaterThan(0); expect(dragging).toHaveBeenLastCalledWith(false);
-    receive({ payload: { type: 'drop', paths: null } }); expect(imports).toHaveBeenLastCalledWith([]);
-    cleanup(); receive({ payload: { type: 'drop', paths: ['D:/synthetic/stale.txt'] } });
-    expect(unlisten).toHaveBeenCalledTimes(1); expect(imports).toHaveBeenCalledTimes(2);
-  });
-
-  it('disposes a late registration and safely handles native registration failure', async () => {
-    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
-    const registration = deferred<() => void>(), unlisten = vi.fn(), imports = vi.fn(async () => {});
-    nativeDrop.mockReturnValueOnce(registration.promise).mockRejectedValueOnce(new Error('Unavailable'));
-    const cleanup = listenForNativeChatFileDrop(noop, { current: 0 }, imports)!;
-    await settle(); cleanup(); nativeDrop.mock.calls[0][0]({ payload: { type: 'drop', paths: ['stale'] } });
-    registration.resolve(unlisten); await settle();
-    expect(unlisten).toHaveBeenCalledTimes(1); expect(imports).not.toHaveBeenCalled();
-    const failedCleanup = listenForNativeChatFileDrop(noop, { current: 0 }, imports)!;
-    await settle(); expect(failedCleanup).not.toThrow(); expect(nativeDrop).toHaveBeenCalledTimes(2);
+// A configuration contract, not a claim of Windows/WebView2 installation acceptance.
+describe('Windows HTML file-drop configuration', () => {
+  it.each(['tauri.conf.json', 'tauri.automation.conf.json'])('lets WebView2 deliver FileList bytes in %s', name => {
+    const config = JSON.parse(readFileSync(new URL('../src-tauri/' + name, import.meta.url), 'utf8'));
+    expect(config.app.windows).not.toHaveLength(0);
+    for (const window of config.app.windows) expect(window.dragDropEnabled).toBe(false);
   });
 });
 
@@ -192,8 +162,16 @@ function uploadHarness() {
     acceptImportedChatFiles, t: {},
   };
   deps.runChatAttachmentUpload = callback('runChatAttachmentUpload', deps);
+  const upload = callback('uploadChatAttachments', deps);
+  let droppedJob: Promise<unknown> | undefined;
+  deps.uploadChatAttachments = (files: File[]) => (droppedJob = upload(files));
+  deps.setIsDraggingFiles = noop;
+  const drop = callback('handleChatDrop', deps);
   return {
-    upload: callback('uploadChatAttachments', deps), importPaths: callback('importChatAttachmentPaths', deps),
+    upload, drop(files: File[]) {
+      drop({ preventDefault: noop, stopPropagation: noop, dataTransfer: { files } });
+      return droppedJob;
+    },
     response, registry, pendingAttachmentsRef, draft: () => draft, signal: () => signal,
   };
 }
@@ -235,10 +213,10 @@ describe('chat uploads stay attached to their originating view', () => {
     expect(h.draft()).toContain('Synthetic transcript');
   });
 
-  for (const method of ['upload', 'importPaths'] as const) {
+  for (const method of ['upload', 'drop'] as const) {
     it(`ignores a late ${method} result after a conversation/domain switch`, async () => {
       const h = uploadHarness();
-      const job = method === 'upload' ? h.upload([{ name: 'synthetic.wav' }]) : h.importPaths(['C:/audit-synthetic/synthetic.wav']);
+      const job = h[method]([{ name: 'synthetic.wav' }] as File[]);
       h.registry.invalidate();
       h.pendingAttachmentsRef.current = [];
       expect(h.signal()?.aborted).toBe(true);

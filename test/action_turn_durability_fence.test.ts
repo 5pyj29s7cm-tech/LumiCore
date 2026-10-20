@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe('accepted action-turn durability fence', () => {
-  it.each(['ok', 'okay', '行', '没问题', '开始吧', '确认', '好的'])('binds %s only to the exact durable pending action, once', async userText => {
+  it.each(['ok', 'okay', '行', '没问题', '开始吧', '确认', '好的', '确认，确认。', 'yes, yes.'])('binds %s only to the exact durable pending action, once', async userText => {
     const channelScope = buildTransportNeutralConfirmationScope({ domain: 'personal', conversationId: 'shared-confirmation' });
     const taskScope = buildTransportNeutralConfirmationScope({ domain: 'personal', conversationId: 'shared-confirmation', taskId: 'reviewed-task' });
     recordPendingConfirmation('confirmation-user', 'desktop_open', { target: 'Notepad' }, 'chat', taskScope);

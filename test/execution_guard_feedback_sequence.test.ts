@@ -39,7 +39,7 @@ describe('execution guard user-feedback sequence', () => {
       .toBe('action_execution');
   });
 
-  it('turns a guard-blocked casual turn into one natural clarification without tools', async () => {
+  it('reports an unavailable answer without asking for a conversation category or running tools', async () => {
     let attempts = 0;
     const result = await finalizeExecutionForOutboundDelivery<ExecutionGuardRecoveryFinalization>({
       task: '\u4f60\u597d\uff0c\u4ecb\u7ecd\u4e00\u4e0b\u81ea\u5df1',
@@ -61,7 +61,8 @@ describe('execution guard user-feedback sequence', () => {
       decision: { intent: 'conversation' },
       finalization: { blocked: false, reason: 'clarification_needed' },
     });
-    expect(result.responseText).toContain('\u666e\u901a\u5bf9\u8bdd');
+    expect(result.responseText).toContain('未能完整返回');
+    expect(result.responseText).not.toMatch(/普通对话|执行操作/u);
     expectNoGuardLeak(result);
   });
 
@@ -107,7 +108,8 @@ describe('execution guard user-feedback sequence', () => {
     expect(result.attempted).toBe(false);
     expect(result.finalization.blocked).toBe(false);
     expect(result.responseText).not.toContain('文件已经保存成功');
-    expect(result.responseText).toContain('确认你的意图');
+    expect(result.responseText).toContain('未能完整返回');
+    expect(result.responseText).not.toContain('确认你的意图');
     expectNoGuardLeak(result);
   });
 

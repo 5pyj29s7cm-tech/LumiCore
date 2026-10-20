@@ -8871,5 +8871,9 @@
   "sanctuary.request-unavailable.9d1c4a7e20": {
     "en": "This memory avatar could not accept the message. Please try again.",
     "zh": "这个记忆化身暂时无法接收消息，请稍后重试。"
+  },
+  "settings.lumi-official-catalog-model-unavailable.4de170d6b8": {
+    "zh": "当前密钥的模型目录未提供此能力，保留原配置，未完成适配。",
+    "en": "The current key’s catalog does not provide this capability. Its previous configuration was preserved and was not adapted."
   }
 }

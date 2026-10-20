@@ -14,15 +14,15 @@ export function stringValue(value: unknown): string {
 
 export function getSelfModelSnapshot(
   userId: string,
-  scope: { domain?: 'personal' | 'work'; orgId?: string } = {},
+  scope: { domain?: 'personal' | 'work'; orgId?: string; socketId?: string } = {},
 ): SelfModelSnapshot {
   const domain = scope.domain === 'work' && scope.orgId ? 'work' : 'personal';
-  const state = getClientStateForScope(userId, { domain, orgId: domain === 'work' ? scope.orgId : '' });
+  const state = getClientStateForScope(userId, { domain, orgId: domain === 'work' ? scope.orgId : '', socketId: scope.socketId });
   const modelConfiguration = getLumiModelConfiguration(userId) as {
     roles?: Record<string, Record<string, unknown>>;
   };
-  const health = getClientHealthReport(userId, { domain, orgId: scope.orgId }, modelConfiguration.roles);
-  const awareness = getClientSelfAwarenessReport(userId, { domain, orgId: scope.orgId }, health);
+  const health = getClientHealthReport(userId, { domain, orgId: scope.orgId, socketId: scope.socketId }, modelConfiguration.roles);
+  const awareness = getClientSelfAwarenessReport(userId, { domain, orgId: scope.orgId, socketId: scope.socketId }, health);
   const models = LUMI_MODEL_ROLES.map(role => {
     const configuration = modelConfiguration.roles?.[role] || {};
     return {

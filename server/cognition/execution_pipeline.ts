@@ -295,8 +295,6 @@ export function buildLumiExecutionPipeline(
     && (taskRelation.binding === 'active_task' || taskRelation.binding === 'previous_task') ? input.actionTaskState : undefined;
   const actionFollowupIntent = acceptedPlan || mediaRequest || bound ? 'none' : taskRelationFollowupIntent(taskRelation);
   const queryTarget = resolution.queryTarget;
-  const observationalFollowup = queryTarget === 'conversation_receipts'
-    && (actionFollowupIntent === 'status' || actionFollowupIntent === 'repeat');
   const trustedActionContinuation = !acceptedPlan && !mediaRequest && !bound && hasTrustedActionContinuation(input, taskRelation);
   const continuationContext = input.dispatch.continuationContext
     || (trustedActionContinuation ? formatActiveTaskRelationContext(taskRelation, input.actionTaskState) : '');
@@ -361,8 +359,8 @@ export function buildLumiExecutionPipeline(
     turnIntent.flow.routeText = [input.actionTaskState.goal, turnIntent.flow.routeText].join('\n\n');
   }
   turnIntent.flow.acceptedActionContract = Object.freeze({
-    taskText: turnIntent.flow.routeText,
-    contract: analysis.contract(turnIntent.flow.routeText, mediaRequest ? mediaContractForRequest(mediaRequest) : undefined),
+    taskText: actionText,
+    contract: analysis.contract(actionText, mediaRequest ? mediaContractForRequest(mediaRequest) : undefined),
   });
   const visibilityContext = {
     executionBoundary: input.executionBoundary,
@@ -404,7 +402,7 @@ export function buildLumiExecutionPipeline(
       constraintText === resolution.userText ? resolution.userIntent : undefined,
       analysis,
     ),
-    observationalFollowup || taskRelation.binding === 'stale'
+    taskRelation.binding === 'stale'
       ? ['*', ...(input.additionalForbiddenTools || [])] : input.additionalForbiddenTools,
   );
   // Resolve the entry ceiling before publishing any capability, plan or schema.
@@ -464,8 +462,7 @@ export function buildLumiExecutionPipeline(
     schemaVersion: 1,
     capabilityIds,
     taskLedgerRequired: Boolean(
-      executionRequested
-      || turnIntent.boundary === 'task_center'
+      turnIntent.boundary === 'task_center'
       || turnIntent.boundary === 'work_takeover',
     ),
   };

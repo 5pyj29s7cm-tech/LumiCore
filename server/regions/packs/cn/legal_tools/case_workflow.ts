@@ -1,6 +1,9 @@
 import * as LegalCases from "../../../../org/legal_cases";
 import { legalWrite } from "../../../../legal/execution";
-import { textArg, roleLabel } from "./context";
+import { textArg, roleLabel, legalTemporalOptions } from "./context";
+import { buildMaterialSources, type Source } from "../legal_reasoning_generation";
+import { inspectLegalReasoningLinks, type LegalReasoningLink } from "../legal_reasoning_links";
+import { legalCaseSourceFingerprint } from "../../../../../shared/legal_workflow_receipts";
 
 export const LEGAL_CASE_SEARCH_ORDER = ['最高人民法院', '高级人民法院', '中级人民法院', '基层人民法院'];
 
@@ -92,15 +95,7 @@ export function makeWorkspaceWorkflowCase(args: Record<string, any>, params: {
   };
 }
 
-function splitWorkspaceItems(value: string): string[] {
-  return String(value || '')
-    .split(/\r?\n|[;；]/)
-    .map(item => item.trim())
-    .filter(Boolean)
-    .slice(0, 30);
-}
-
-interface EvidenceReviewRow {
+export interface EvidenceReviewRow {
   index: number;
   name: string;
   fact: string;
@@ -109,45 +104,86 @@ interface EvidenceReviewRow {
   legality: string;
   relevance: string;
   gap: string;
+  materialId?: string;
+  sourceLabel: string;
+  sources: Source[];
+  pendingCompilation: boolean;
+  proposals: LegalReasoningLink[];
 }
 
-function inferEvidenceFact(name: string, args: Record<string, any>): string {
-  const caseType = textArg(args, 'caseType') || textArg(args, 'cause');
-  const facts = textArg(args, 'facts') || textArg(args, 'materials');
-  const text = `${name} ${caseType} ${facts}`;
-  if (/合同|协议|订单|要约|确认书|contract|agreement|order/i.test(text)) return '合同关系、交易基础、权利义务内容';
-  if (/发货|送货|签收|物流|收货|交付|delivery|receipt/i.test(text)) return '履行交付、收货确认、付款条件是否成就';
-  if (/发票|银行|流水|转账|付款|收款|对账|invoice|bank|payment/i.test(text)) return '付款事实、欠款金额、资金往来和损失计算';
-  if (/微信|聊天|短信|邮件|通知|催告|沟通|wechat|message|email/i.test(text)) return '通知催告、协商过程、质量异议或对方确认';
-  if (/质量|验收|检测|异议|退货|维修|鉴定|inspection|quality/i.test(text)) return '质量异议、验收状态、拒付或减损抗辩基础';
-  if (/起诉状|答辩状|证据目录|庭审|笔录|complaint|answer|transcript/i.test(text)) return '对方主张、争议焦点、程序事实和质证对象';
-  return facts ? facts.slice(0, 80) : '待匹配待证事实';
-}
-
-export function buildEvidenceReviewRows(args: Record<string, any>): EvidenceReviewRow[] {
-  const evidence = textArg(args, 'evidence');
-  const items = splitWorkspaceItems(evidence);
-  const sourceItems = items.length > 0 ? items : ['待整理证据材料'];
-  return sourceItems.map((rawName, index) => {
-    const name = rawName.replace(/\|/g, ' ');
-    const fact = inferEvidenceFact(name, args);
+export function buildEvidenceReviewRows(args: Record<string, any>, sourceCase?: LegalCases.OrgLegalCaseFile | null): EvidenceReviewRow[] {
+  // Only server-loaded originals own material IDs. Generated drafts and input
+  // metadata cannot promote themselves into evidence records.
+  const originals = sourceCase?.materials.filter(material => material.source !== 'tool') || [];
+  const render = (items: typeof originals) => items.map(material => `[材料 ${material.id}：${material.title}]\n${material.content}`).join('\n\n').trim();
+  const serialized = [render(originals), render(originals.filter(material => material.type === 'evidence' || material.type === 'contract')),
+    render(originals.filter(material => material.type === 'pleading')), ...originals.map(material => material.content.trim())].filter(Boolean);
+  const pending = ['evidence', 'materials'].flatMap(field => {
+    let content = textArg(args, field);
+    if (!content || serialized.includes(content)) return [];
+    // The neutral chat context appends this exact server-owned serialization.
+    // Remove only that complete copy; mixed or edited input remains verbatim.
+    const suffix = field === 'materials' && serialized.find(value => content.endsWith('\n\n' + value));
+    if (suffix) content = content.slice(0, -suffix.length - 2);
+    return content.trim() ? [{ id: `input:${field}`, title: '本次' + (field === 'evidence' ? '证据输入' : '中性材料输入') + '（未编目）', content }] : [];
+  });
+  const sources = buildMaterialSources([...originals, ...pending]);
+  const currentBasis = sourceCase ? legalCaseSourceFingerprint(sourceCase) : '';
+  const links = sourceCase?.materials.filter(material => material.source === 'tool' && material.reasoningBasis === currentBasis && material.reasoningLinks?.length)
+    .flatMap(material => {
+      const inspected = inspectLegalReasoningLinks(material.reasoningLinks, { ...sourceCase, materials: originals }, sourceCase.orgId,
+        { ...legalTemporalOptions(args), actorUserId: textArg(args, 'userId') || undefined });
+      return inspected.passed ? inspected.links : [];
+    }) || [];
+  const records = [...originals, ...pending];
+  return (records.length ? records : [{ id: 'missing', title: '待整理证据材料', content: '' }]).map((material, index) => {
+    const materialSources = sources.filter(source => source.materialId === material.id);
+    const original = originals.find(record => record.id === material.id);
+    const related = original ? links.filter(link => link.evidence.some(evidence => materialSources.some(source =>
+      source.materialId === evidence.materialId && source.quote === evidence.quote && source.locator === evidence.locator))) : [];
     return {
       index: index + 1,
-      name,
-      fact,
-      proofPurpose: fact === '待匹配待证事实' ? '待填写证明目的' : `证明${fact}`,
-      authenticity: '核对原件/形成时间/签章或电子数据原始载体',
-      legality: '核对取得方式、授权来源、隐私与平台规则',
-      relevance: '对应争议焦点和待证事实，排除无关材料',
-      gap: name === '待整理证据材料' ? '需补充证据名称、来源、页码和原件状态' : '待补页码、原件状态、来源登记和反证风险',
+      name: material.title,
+      materialId: original?.id,
+      sourceLabel: original ? `材料 ${index + 1}；登记类型 ${original.type}；来源 ${original.source}` : '本次输入未编目，不代表已取得原件',
+      sources: materialSources,
+      pendingCompilation: !original,
+      proposals: related,
+      fact: materialSources.map(source => source.quote).join('\n'),
+      proofPurpose: related.length ? related.map(link => `拟议关联争点：${link.issue}\n限制与反证：${link.limitations}\n证明目的待律师确定。`).join('\n\n')
+        : '待律师确认证明目的，不根据文件名称推定；当前仅登记材料原句。',
+      authenticity: '未核验；核对原件/形成时间/签章或电子数据原始载体',
+      legality: '未核验；核对取得方式、授权来源、隐私与平台规则',
+      relevance: '未核验；关联争点与拟议分析不代表证明目的成立',
+      gap: original ? '证据用途、页码、原件状态、来源及反证风险待律师核对' : '需逐份编目并补充材料名称、来源、页码和原件状态',
     };
   });
 }
 
+const evidenceCell = (value: unknown) => String(value || '').replace(/\|/g, '｜').replace(/\r?\n/g, '；');
+
+export function formatEvidenceOriginals(rows: EvidenceReviewRow[]): string {
+  return '\n\n## 材料原句与拟议关联（未核准）\n\n本次仅登记材料原句；证据用途、三性及法律分析未因此核准，未编目输入仍须逐份登记。\n\n' + rows.map(row => [
+    `### ${row.index}. ${row.name}`, row.sourceLabel,
+    ...row.sources.flatMap(source => [`- ${source.id}；${source.locator}`, `> ${source.quote}`]),
+    ...(row.proposals.length ? row.proposals.map(link => `拟议关联争点：${link.issue}\n\n拟议分析：${link.application}\n\n拟议结论：${link.conclusion}\n\n限制与反证：${link.limitations}`) : [row.proofPurpose]), row.gap,
+  ].join('\n\n')).join('\n\n');
+}
+
 export function formatEvidenceReviewRows(rows: EvidenceReviewRow[]): string {
   return rows.map(row =>
-    `| ${row.index} | ${row.name} | ${row.fact} | ${row.proofPurpose} | ${row.authenticity} | ${row.legality} | ${row.relevance} | ${row.gap} |`,
-  ).join('\n');
+    [row.index, row.name, row.sources.map(source => source.id).join('、') || '未提供原句', '见下方拟议关联；待律师确认', row.authenticity, row.legality, row.relevance, row.gap]
+      .map(evidenceCell).join(' | '),
+  ).map(row => `| ${row} |`).join('\n') + formatEvidenceOriginals(rows);
+}
+
+export function formatEvidenceCatalogRows(rows: EvidenceReviewRow[]): string {
+  return ['| 编号 | 材料名称 | 登记来源/类型 | 原句位置 | 拟议证明目的 | 编目状态 |',
+    '| --- | --- | --- | --- | --- | --- |', ...rows.map(row => '| ' + [row.index, row.name, row.sourceLabel,
+      row.sources.map(source => `${source.id}：${source.locator}`).join('；') || '未提供', '见下方拟议关联；待律师确认', row.pendingCompilation ? '未编目' : '已登记原文，证据用途待核验']
+      .map(evidenceCell).join(' | ') + ' |')].join('\n')
+    + '\n\n## 编目说明（未核准）\n\n原句详录见03证据审查矩阵及上述材料编号、正文行位；该行位不是外部原件页码。登记材料不等于证明目的或证据三性已成立。\n\n'
+    + rows.map(row => `### ${row.index}. ${row.name}\n\n外部原件页码：[待逐份核对补录]（上述行位仅供本程序定位）\n\n${row.proofPurpose}\n\n${row.gap}`).join('\n\n');
 }
 
 export function formatEvidenceGapList(rows: EvidenceReviewRow[]): string {
@@ -212,6 +248,9 @@ export function archiveLegalReportToCase(args: Record<string, any>, params: {
   cause?: string;
   court?: string;
   localPath?: string;
+  source?: LegalCases.OrgLegalCaseMaterial['source'];
+  reasoningLinks?: LegalCases.OrgLegalCaseMaterial['reasoningLinks'];
+  reasoningBasis?: string;
 }): string {
   if (args.persistCase === false) return '- 案件空间：未归档（persistCase=false）';
 
@@ -221,6 +260,7 @@ export function archiveLegalReportToCase(args: Record<string, any>, params: {
   if (!shouldArchive) return '- 案件空间：未归档（未提供 caseId/caseName；设置 persistCase=true 可创建案件）';
 
   let caseFile = explicitCaseId ? LegalCases.getCase(params.orgId, explicitCaseId, params.userId, 'write') : null;
+  if (explicitCaseId && !caseFile) return '- 案件空间：未归档（caseId 不存在或无权限）';
   if (!caseFile && explicitCaseName) {
     caseFile = LegalCases.listCases(params.orgId, explicitCaseName, 1, params.userId)[0] || null;
   }
@@ -243,7 +283,8 @@ export function archiveLegalReportToCase(args: Record<string, any>, params: {
     title: params.title,
     content: params.content,
     localPath: params.localPath,
-    source: 'tool',
+    source: params.source || 'tool',
+    reasoningLinks: params.reasoningLinks, reasoningBasis: params.reasoningBasis,
   }));
   return material
     ? `- 案件空间：已归档 caseId=${caseFile.id} materialId=${material.id}`

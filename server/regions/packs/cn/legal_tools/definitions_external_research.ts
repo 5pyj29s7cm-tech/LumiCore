@@ -1,12 +1,60 @@
 import type { ToolDefinition } from '../../../../tools/types';
-import { searchExternalAuthoritiesHandler, companyDatabaseLookupHandler } from "./company_research";
+import { searchExternalAuthoritiesHandler, companyDatabaseLookupHandler, searchTenderProjectsHandler } from "./company_research";
 import { externalResearchPlanHandler, prepareExternalBrowserWorkspaceHandler } from "./external_workspace";
 import { withLegalReceipt, legalCapability, legalEvidence, legalInputBlocked } from "./tool_contracts";
-import { generateCitationVerificationReportHandler, finalizeDeliveryPackageHandler } from "./delivery";
+import { generateCitationVerificationReportHandler, finalizeDeliveryPackageHandler, verifyArchivedDeliveryHandler } from "./delivery";
 import { LEGAL_TEMPORAL_FIELDS, defineLegalTool, stringField, numberField, booleanField, stringListField, CASE_ARCHIVE_FIELDS } from "./tool_contracts";
 
 export function external_researchTools(): ToolDefinition[] {
   return [
+defineLegalTool({
+name: 'legal_verify_archived_delivery',
+description: '已归档文书交付核验 — 只读取指定案件和已归档草稿，逐项核对案件事实来源、法条/类案引用、时效期限、管辖、文件状态和律师复核边界；输出通过、阻断、待确认及正式交付结论，不重新生成、发送、提交或签署文书。',
+properties: {
+caseId: stringField('已有案件工作台 ID'),
+caseName: stringField('案件名称；未提供 caseId 时按名称查找'),
+materialTitle: stringField('要核验的已归档草稿或文书名称'),
+documentTitle: stringField('materialTitle 的别名'),
+orgId: stringField('组织 ID，默认使用当前工作域'),
+userId: stringField('操作用户 ID，默认使用当前用户'),
+},
+handler: withLegalReceipt(verifyArchivedDeliveryHandler, { status: 'verified' }),
+capability: legalCapability({
+      id: 'legal.archived-delivery.verify', operation: 'observe', risk: 'low', successStatuses: ['verified'],
+      sideEffects: [{ type: 'local_read', scope: 'organization legal case and archived work product', reversible: true }],
+      limitations: ['This assessment does not create a formal package and never replaces lawyer review, filing, signing, sending, payment, or service confirmation.'],
+    }),
+evidence: legalEvidence('legal.archived-delivery.verify', 'observe', 'caseId')
+}),
+defineLegalTool({
+name: 'legal_search_tender_projects',
+description: '招投标与应收款线索查询 — 调用律所已配置的招投标数据网关；未配置 API 时生成全国公共资源交易平台核验动作、来源登记和证据缺口，不生成模拟项目。',
+properties: {
+keyword: stringField('企业、项目、采购人、招标人或供应商名称'),
+name: stringField('keyword 的别名'),
+companyName: stringField('keyword 的别名'),
+subjectName: stringField('keyword 的别名'),
+sourceIds: stringListField('指定数据源；当前 API 源为 tender-data'),
+sources: stringListField('sourceIds 的别名'),
+platforms: stringListField('sourceIds 的别名'),
+limit: numberField('返回数量上限，默认 10，最高 50'),
+caseId: stringField('已有案件工作台 ID；提供后归档查询报告'),
+caseName: stringField('关联案件名称或简称'),
+caseType: stringField('案由或案件类型'),
+persistCase: booleanField('是否归档到案件空间；设置 false 可关闭'),
+orgId: stringField('组织 ID'),
+userId: stringField('操作用户 ID'),
+},
+required: ['keyword'],
+handler: withLegalReceipt(searchTenderProjectsHandler, { status: 'observed', expectCaseMutation: 'when_requested' }),
+capability: legalCapability({
+  id: 'legal.tender-projects.search', operation: 'observe', risk: 'medium', successStatuses: ['observed'],
+  sideEffects: [{ type: 'network_read', scope: 'authorized configured tender gateway', reversible: true },
+    { type: 'local_state_change', scope: 'optional observed tender report in the selected legal case', reversible: true }],
+  limitations: ['An empty or unavailable source remains partial and is not archived as a successful search. A tender announcement does not prove a due unpaid receivable.'],
+}),
+evidence: legalEvidence('legal.tender-projects.search', 'observe', 'keyword')
+}),
   defineLegalTool({
     name: 'legal_search_external_authorities',
     description: '外部法律数据库 API 检索 — 调用已配置授权网关（如北大法宝、通义法睿）检索法规、法条、案例和裁判规则；未配置时明确降级到授权网页登录协作，不抓取平台数据库。',
@@ -27,12 +75,13 @@ export function external_researchTools(): ToolDefinition[] {
   }),
   defineLegalTool({
     name: 'legal_company_database_lookup',
-    description: '企业主体数据库 API 查询 — 调用已配置的企查查/天眼查官方 API 查询公司、股东和被执行主体基础信息；未配置时输出网页登录协作和材料入库步骤。',
+    description: '企业主体数据库查询 — 企查查单 Key 使用官方 MCP，默认仅工商；queryType 可指定一项股东、实控人或风险查询，每次只调用对应工具。天眼查沿授权 API；未配置或失败保留待核验。',
     properties: {
       ...CASE_ARCHIVE_FIELDS,
       name: stringField('公司、被执行人或主体名称'),
       companyName: stringField('name 的别名'),
       subjectName: stringField('name 的别名'),
+queryType: { ...stringField('企查查本次明确查询范围；默认registration，不自动加查其他范围'), enum: ['registration', 'shareholders', 'controller', 'risk', 'enforcement', 'dishonesty', 'restrictions'] },
       sourceIds: stringListField('指定数据源，如 qichacha、tianyancha'),
       sources: stringListField('sourceIds 的别名'),
       platforms: stringListField('sourceIds 的别名'),

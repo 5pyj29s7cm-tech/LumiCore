@@ -13,6 +13,9 @@ export function material_intakeTools(): ToolDefinition[] {
     properties: {
       filePath: stringField('单个本地材料文件路径，支持 PDF/DOCX/XLSX/PPTX/RTF/TXT/MD/CSV'),
       folderPath: stringField('案件材料文件夹路径，会批量导入支持的文档格式'),
+      caseId: stringField('关联已有案件 ID；使用相同案件和材料重试时不重复入库'),
+      password: stringField('PDF 打开密码，仅用于当次读取，不回显、不入库'),
+      passwords: { type: 'object', additionalProperties: { type: 'string' }, description: '按原文件完整路径提供 PDF 打开密码，仅用于当次读取' },
       content: stringField('直接粘贴的材料文本、网页摘录或律师确认后的外部检索结果'),
       title: stringField('材料标题，未提供时使用文件名或案件名'),
       caseName: stringField('案件名称或简称'),
@@ -27,6 +30,7 @@ export function material_intakeTools(): ToolDefinition[] {
     handler: withLegalReceipt(importMaterialsToKbHandler, {
       status: 'imported',
       requireArticleMutation: true,
+      allowExistingArticles: true,
     }),
     capability: legalCapability({
       id: 'legal.materials.import-to-kb', operation: 'create', risk: 'medium', successStatuses: ['imported'],
@@ -48,6 +52,8 @@ export function material_intakeTools(): ToolDefinition[] {
       caseId: stringField('已有案件工作台 ID；提供后会把短信/通知处理结果归档到该案件空间'),
       caseName: stringField('关联案件名称或简称'),
       title: stringField('材料标题，默认“短信/法院通知链接材料”'),
+      password: stringField('PDF 打开密码，仅用于当次读取，不回显、不入库'),
+      passwords: { type: 'object', additionalProperties: { type: 'string' }, description: '按原文件完整路径提供 PDF 打开密码，仅用于当次读取' },
       includeExtractedText: booleanField('是否在返回结果中包含正文摘录，默认 true'),
       extractedTextLimit: numberField('返回正文摘录最大字符数，默认 4000，最高 20000'),
       persistCase: booleanField('是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭'),
@@ -85,6 +91,8 @@ export function material_intakeTools(): ToolDefinition[] {
       caseId: stringField('已有案件工作台 ID；提供后会把文书链接处理结果归档到该案件空间'),
       caseName: stringField('关联案件名称或简称'),
       title: stringField('材料标题，默认“链接文书材料”'),
+      password: stringField('PDF 打开密码，仅用于当次读取，不回显、不入库'),
+      passwords: { type: 'object', additionalProperties: { type: 'string' }, description: '按原文件完整路径提供 PDF 打开密码，仅用于当次读取' },
       includeExtractedText: booleanField('是否在返回结果中包含正文摘录，默认 true'),
       extractedTextLimit: numberField('返回正文摘录最大字符数，默认 4000，最高 20000'),
       persistCase: booleanField('是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭'),

@@ -237,6 +237,36 @@ export async function prepareMessagingExecution(context: MessagingTurnContext) {
     collectToolRecord(record);
   };
 
+  const bindSelectedAuditTask = async (bind: () => Promise<void>): ReturnType<NonNullable<ToolContext['prepareSelectedToolCall']>> => {
+    assertMessagingAuthorization(context.msg);
+    context.throwIfActionLeaseWasLost();
+    const needsBinding = !context.actionTaskExecution.state?.taskId;
+    if (needsBinding && (activeAdapters || toolRecords.length || remoteToolContext.priorToolRecords.length)) {
+      organizationAdmissionBlocker = '当前请求已有执行记录，不能再追补任务身份；本轮组织业务未执行。';
+      throw new Error(organizationAdmissionBlocker);
+    }
+    try { await bind(); }
+    catch (error) {
+      organizationAdmissionBlocker = '当前受理租约或任务身份已变化，本轮组织业务没有执行。';
+      throw error;
+    }
+    if (!needsBinding) return { taskId: context.actionTaskExecution.state!.taskId, turnRowId: context.actionTaskExecution.turnRowId, desktopRelay: context.desktopRelay, personalDesktopRelay: context.personalDesktopRelay };
+    const taskId = context.actionTaskExecution.state!.taskId;
+    context.receiptObserver = createConversationReceiptObserver({ userId: context.effectiveUserId,
+      conversationId: context.conversation!.id, taskId, requestId: context.requestId,
+      turnRowId: context.actionTaskExecution.turnRowId, externalMessageId: context.msg.messageId,
+      domain: context.domain, orgId: context.orgId,
+    }, () => isMessagingAuthorizationCurrent(context.msg));
+    refreshDesktopRelays();
+    Object.assign(remoteToolContext, { taskId, turnRowId: context.actionTaskExecution.turnRowId,
+      desktopRelay: context.desktopRelay, personalDesktopRelay: context.personalDesktopRelay });
+    return { taskId, turnRowId: context.actionTaskExecution.turnRowId, desktopRelay: context.desktopRelay, personalDesktopRelay: context.personalDesktopRelay };
+  };
+  const prepareSelectedToolCall: NonNullable<ToolContext['prepareSelectedToolCall']> = () => bindSelectedAuditTask(async () => {
+    const owner = context.actionTaskExecution.prepareSelectedToolCall;
+    if (!owner) throw new Error('The selected tool has no accepted audit owner.');
+    await owner(context.actionAbortController.signal);
+  });
   const prepareNativeAction: NonNullable<import('../remote_org_commands').RemoteOrganizationAdapterControl['prepareNativeAction']> = async call => {
     assertMessagingAuthorization(context.msg);
     context.throwIfActionLeaseWasLost();
@@ -251,26 +281,7 @@ export async function prepareMessagingExecution(context: MessagingTurnContext) {
         || Object.values(policy.securityOverrides || {}).some(level => level === 'forbidden' || level === 'confirm'))
         ? '当前人格工具策略未授权这项原生组织业务，本轮没有执行。' : '';
     if (blocker) { organizationAdmissionBlocker = blocker; throw new Error(blocker); }
-    const needsBinding = !context.actionTaskExecution.state?.taskId;
-    if (needsBinding && (activeAdapters || toolRecords.length || remoteToolContext.priorToolRecords.length)) {
-      organizationAdmissionBlocker = '当前请求已有执行记录，不能再追补任务身份；本轮组织业务未执行。';
-      throw new Error(organizationAdmissionBlocker);
-    }
-    try { await context.bindPreparedNativeTask(); }
-    catch (error) {
-      organizationAdmissionBlocker = '当前受理租约或任务身份已变化，本轮组织业务没有执行。';
-      throw error;
-    }
-    if (!needsBinding) return;
-    const taskId = context.actionTaskExecution.state!.taskId;
-    context.receiptObserver = createConversationReceiptObserver({ userId: context.effectiveUserId,
-      conversationId: context.conversation!.id, taskId, requestId: context.requestId,
-      turnRowId: context.actionTaskExecution.turnRowId, externalMessageId: context.msg.messageId,
-      domain: context.domain, orgId: context.orgId,
-    }, () => isMessagingAuthorizationCurrent(context.msg));
-    refreshDesktopRelays();
-    Object.assign(remoteToolContext, { taskId, turnRowId: context.actionTaskExecution.turnRowId,
-      desktopRelay: context.desktopRelay, personalDesktopRelay: context.personalDesktopRelay });
+    await bindSelectedAuditTask(context.bindPreparedNativeTask);
   };
   const remoteToolContext = {
     userId: context.effectiveUserId,
@@ -296,6 +307,7 @@ export async function prepareMessagingExecution(context: MessagingTurnContext) {
     isCancelled: context.actionWasCancelled,
     executionSignal: context.actionAbortController.signal,
     onToolRecord: observeToolRecord,
+    prepareSelectedToolCall,
     requestConfirmation: requestToolConfirmation,
     prepareNativeAction,
     onAdapterStart,

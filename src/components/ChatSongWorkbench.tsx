@@ -144,7 +144,7 @@ const ChatSongWorkbench = React.forwardRef<ChatSongWorkbenchHandle, ChatSongWork
   }
   async function task(step: 'music' | 'edit') {
     const result = await makeBundle();
-    if (!result.handoffs[step]) throw new Error(c.needTiming);
+    if (!result.handoffs[step]) throw new Error(step === 'music' ? c.needMusicRequest : c.needTiming);
     const requestId = await onTask(result.handoffs[step]);
     if (!requestId) throw new Error(c.taskFailed);
     onClose();

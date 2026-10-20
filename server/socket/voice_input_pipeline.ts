@@ -5,7 +5,8 @@ import { logger } from "../../logger";
 import { getConversationForScope, addMessageIdempotent, getMessages, setConversationActionExecutionStatus } from "../conversation/manager";
 import { CN_VOICE_WORK_MESSAGES, formatCnToolFailureDetail } from "../regions/messages/voice_fast_path_messages";
 import { voiceDurabilityUnknownText } from './voice_durability';
-import { recordChatExecutionPersistenceUnknownDurably, recordChatExecutionTerminalEventDurably, type ChatExecutionScope } from './chat_execution_registry';
+import { CN_TASK_EXECUTION_MESSAGES } from '../regions/messages/task_execution_messages';
+import { getChatExecution, recordChatExecutionPersistenceUnknownDurably, recordChatExecutionTerminalEventDurably, type ChatExecutionScope } from './chat_execution_registry';
 import { commitChatTerminalBoundary } from './chat_terminal_boundary';
 import { flushDBOrThrow } from "../../db_layer";
 import { processVoiceInput } from "./voice_conversation_turn";
@@ -160,6 +161,28 @@ export async function runVoiceInputPipeline(
     session.inputQueue = requestIsCurrent ? queuedWork : [];
     socket.emit('audio:status', { status: 'listening', sessionId: session.sessionId, requestId: failedRequestId || undefined });
   } finally {
+    // The executor has settled. Its frozen reservation still needs a durable
+    // terminal when cancellation or a newer owner bypassed in-turn delivery.
+    const request = resources.request;
+    if (request && getChatExecution(request, request.requestId)?.terminal === false) {
+      const scope: ChatExecutionScope = { userId: request.userId, domain: request.domain,
+        orgId: request.orgId, source: 'voice', conversationId: request.conversationId };
+      const cancelled = request.signal.aborted || !request.authorization.isCurrent() || !resources.owner?.isCurrent();
+      const payload = { text: cancelled ? CN_TASK_EXECUTION_MESSAGES.cancelled : CN_VOICE_WORK_MESSAGES.processingFailed,
+        agentName: 'Lumi', source: 'voice', channel: 'voice', requestId: request.requestId,
+        conversationId: request.conversationId, finalized: true, blocked: true,
+        reason: cancelled ? 'cancelled' : 'voice_processing_failed' };
+      const unknown = { ...payload, text: voiceDurabilityUnknownText(), reason: 'persistence_unknown' };
+      try {
+        await recordChatExecutionTerminalEventDurably(scope, request.requestId, 'agent:response', payload, unknown);
+      } catch (error) {
+        try {
+          await recordChatExecutionPersistenceUnknownDurably(scope, request.requestId, unknown);
+        } catch (persistError) {
+          logger.warn('[Audio] Settled voice receipt persistence failed:', persistError);
+        }
+      }
+    }
     if (!resources.ownedByDurableRelease) resources.admission?.release();
     if (!resources.owner?.isCurrent() || !session.isActive || session.isProcessing || session.inputQueue.length === 0) return;
     const next = session.inputQueue.shift();

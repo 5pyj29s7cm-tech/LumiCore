@@ -1,3 +1,4 @@
+import { useFileDrop } from '../hooks/useFileDrop';
 import { mediaGenerationNeedsStatusCheck } from '../../shared/media_generation';
 import { videoGenerationOptions, type VideoGenerationOptions } from '../../shared/video_generation_options';
 import React, { useEffect, useRef, useState } from 'react';
@@ -146,10 +147,11 @@ function SourceImageField({
   onUpload,
 }: SourceImageFieldProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const drop = useFileDrop(files => onUpload?.(files), disabled || !onUpload);
   const selectedArtifact = artifacts.find(artifact => selectedArtifactId === artifact.id
     || (!selectedArtifactId && value === (artifact.path || artifact.url)));
   return (
-    <fieldset className="mb-5 min-w-0 space-y-3 rounded-2xl border border-white/10 bg-black/20 p-3" disabled={disabled} aria-label={label}>
+    <fieldset {...drop.props} className={`mb-5 min-w-0 space-y-3 rounded-2xl border border-white/10 bg-black/20 p-3 ${drop.dragging ? 'ring-2 ring-cyan-300/40' : ''}`} disabled={disabled} aria-label={label}>
       <div className="flex items-center justify-between gap-3">
         <span className="text-[11px] font-bold text-white/48">
           {label}{required ? ' *' : ''}

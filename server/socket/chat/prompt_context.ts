@@ -66,7 +66,7 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
         context.toolSecurityContext.executionBoundary,
       );
       if (!context.isMemoryAvatar && context.toolSecurityContext.executionBoundary !== 'remote_restricted') {
-        effectiveSystemPrompt += '\n\n' + formatClientSelfPromptForTurn(context.uid, context.visibleUserText, { domain: context.resolvedDomain, orgId: context.resolvedOrgId });
+        effectiveSystemPrompt += '\n\n' + formatClientSelfPromptForTurn(context.uid, context.visibleUserText, { domain: context.resolvedDomain, orgId: context.resolvedOrgId, socketId: context.socket?.id });
       }
       if (context.conversationId) {
         const summaryContext = getConversationSummary(context.conversationId);

@@ -243,12 +243,20 @@ export function decideExecutionGuardRecovery(input: ExecutionGuardRecoveryInput)
   const records = input.toolRecords || [];
   const missingFreshConfirmation = input.requiresFreshConfirmation === true
     && input.pendingConfirmation !== true;
-  const intent = input.intent || (input.requiresFreshConfirmation
-    ? 'action_execution'
-    : input.task !== undefined
-      ? classifyExecutionGuardIntent(input.task, records)
-      : 'action_execution');
+  const intent = input.requiresFreshConfirmation ? 'action_execution' : input.intent || (input.task !== undefined
+    ? classifyExecutionGuardIntent(input.task, records)
+    : 'action_execution');
   if (!input.blocked && !missingFreshConfirmation) return { recoverable: false, reason: 'response_not_blocked', intent };
+  if (input.aborted) return { recoverable: false, reason: 'request_cancelled', intent: 'action_execution' };
+  if (input.pendingConfirmation) return { recoverable: false, reason: 'waiting_for_user_confirmation', intent: 'action_execution' };
+  if (hasUncertainExternalCommit(records)) {
+    return { recoverable: false, reason: 'uncertain_external_commit_requires_reconciliation', intent: 'action_execution' };
+  }
+  const reason = String(input.reason || '');
+  const recordDetail = records.map(record => `${record.error || ''}\n${record.result || ''}`).join('\n');
+  if (CONFIRMATION_BLOCK.test(`${reason}\n${recordDetail}`)) {
+    return { recoverable: false, reason: 'waiting_for_user_confirmation', intent: 'action_execution' };
+  }
   if (input.reason === MISSING_TASK_INPUT_REASON) {
     return { recoverable: false, reason: MISSING_TASK_INPUT_REASON, intent };
   }
@@ -262,18 +270,8 @@ export function decideExecutionGuardRecovery(input: ExecutionGuardRecoveryInput)
     return { recoverable: false, reason: 'status_query_requires_receipt_summary', intent };
   }
   if (!input.allowToolUse) return { recoverable: false, reason: 'tool_use_not_allowed', intent };
-  if (input.pendingConfirmation) return { recoverable: false, reason: 'waiting_for_user_confirmation', intent };
-  if (input.aborted) return { recoverable: false, reason: 'request_cancelled', intent };
-  if (hasUncertainExternalCommit(records)) {
-    return { recoverable: false, reason: 'uncertain_external_commit_requires_reconciliation', intent };
-  }
   if (missingFreshConfirmation) {
     return { recoverable: true, code: 'missing_tool_execution', reason: 'retry_fresh_confirmation_route', intent };
-  }
-  const reason = String(input.reason || '');
-  const recordDetail = records.map(record => `${record.error || ''}\n${record.result || ''}`).join('\n');
-  if (CONFIRMATION_BLOCK.test(`${reason}\n${recordDetail}`)) {
-    return { recoverable: false, reason: 'waiting_for_user_confirmation', intent };
   }
   if (MISSING_EXECUTION_REASON.test(reason)) {
     return { recoverable: true, code: 'missing_tool_execution', reason: 'retry_real_tool_route', intent };
@@ -388,7 +386,7 @@ export function formatConversationGuardClarification(task: string): string {
     ? BARE_AMBIGUOUS_REACTION.test(String(task || '').trim())
       ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryBareReaction
       : CN_EXECUTION_EVIDENCE_MESSAGES.recoveryConversationClarification
-    : 'I need to confirm your intent: is this ordinary conversation, or do you want an action performed on a specific target? If it is an action, tell me the target and desired change.';
+    : 'The previous answer did not come through completely. Please retry your last question.';
 }
 
 function safeFailureDetail(records: ToolExecutionRecord[], chinese: boolean): string {
@@ -667,12 +665,13 @@ export async function recoverBlockedExecutionOnce<
     toolRecords: priorToolRecords,
   });
   const unchanged = (): ExecutionGuardRecoveryRunResult<TFinalization> => {
-    const preserveConceptualAnswer = decision.intent === 'conversation'
+    const preserveAnswer = decision.reason === 'conversation_requires_natural_clarification'
       && CONCEPTUAL_STATUS_DISCUSSION.test(input.task)
+      && !INVENTED_RUNTIME_REASON.test(initialFinalization.reason || '')
       && Boolean(String(input.responseText || '').trim())
       && !containsInternalGuardDetail(input.responseText)
       && !UNVERIFIED_TERMINAL_ACTION_ANSWER.test(String(input.responseText || '').trim());
-    if (preserveConceptualAnswer) {
+    if (preserveAnswer) {
       const finalization = {
         ...initialFinalization,
         text: sanitizeUserFacingExecutionOutput(input.responseText, {

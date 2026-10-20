@@ -5,11 +5,12 @@ import { BUSINESS_LINES, type BusinessLine } from './business_catalog';
 export interface IndustryWorkspaceScope { userId: string; domain: 'personal' | 'work'; orgId: string; productLine?: string }
 export interface IndustryWorkspaceContext {
   id: string; productLine: BusinessLine; scopeId: string; ownerUserId: string;
-  kind: 'store' | 'entity'; name: string; attributes: Record<string, string>; createdAt: string; updatedAt: string;
+  kind: 'store' | 'case' | 'entity'; name: string; attributes: Record<string, string>; createdAt: string; updatedAt: string;
 }
 const RECORDS_KEY = 'industry_workspace_contexts_v1';
 const ACTIVE_KEY = 'industry_workspace_active_v1';
 const FIELD_ALLOWLIST = {
+  legal: ['caseId', 'caseName', 'caseNumber', 'clientName', 'court', 'stage'],
   ecommerce: ['platform', 'storeId', 'accountLabel', 'reportingPeriod', 'currency', 'timezone', 'entityId'],
   finance: ['entityName', 'taxpayerId', 'jurisdiction', 'taxpayerType', 'accountingPeriod', 'currency', 'accountingBasis'],
 };
@@ -44,15 +45,15 @@ export function bindIndustryWorkspaceContext(scope: IndustryWorkspaceScope, inpu
     const requested = clean(input.id, 200);
     let record = requested ? all.find(row => row.id === requested && row.scopeId === id && (!scope.productLine || row.productLine === scope.productLine)) : undefined;
     if (requested && !record) throw new Error('Workspace not found in this scope');
-    const line = record?.productLine || input.productLine || scope.productLine;
-    if (line !== 'ecommerce' && line !== 'finance') throw new Error('Select ecommerce or finance explicitly');
+    const line = clean(record?.productLine || input.productLine || scope.productLine) as BusinessLine;
+    if (!BUSINESS_LINES.includes(line)) throw new Error('Select an available business line explicitly');
     const attributes = Object.fromEntries(FIELD_ALLOWLIST[line].map(field => [field, clean(input.attributes?.[field], 500)]).filter(([, value]) => value));
     if (attributes.entityId && !all.some(row => row.id === attributes.entityId && row.scopeId === id && row.productLine === 'finance')) throw new Error('Linked company not found in this scope');
-    const name = clean(input.name, 160) || attributes.accountLabel || attributes.storeId || attributes.entityName;
+    const name = clean(input.name, 160) || attributes.accountLabel || attributes.storeId || attributes.entityName || attributes.caseName;
     if (!record && !name) throw new Error('A store or company name is required');
     const now = new Date().toISOString();
     if (record) { record.name = name || record.name; record.attributes = { ...record.attributes, ...attributes }; record.updatedAt = now; }
-    else { record = { id: `industry_subject_${crypto.randomUUID()}`, productLine: line, scopeId: id, ownerUserId: scope.userId, kind: line === 'ecommerce' ? 'store' : 'entity', name, attributes, createdAt: now, updatedAt: now }; all.push(record); }
+    else { record = { id: `industry_subject_${crypto.randomUUID()}`, productLine: line, scopeId: id, ownerUserId: scope.userId, kind: line === 'ecommerce' ? 'store' : line === 'legal' ? 'case' : 'entity', name, attributes, createdAt: now, updatedAt: now }; all.push(record); }
     const active = readObject(previous[ACTIVE_KEY]); active[selectionKey(scope, line)] = record.id;
     updated = clone(record);
     return { [RECORDS_KEY]: JSON.stringify({ schemaVersion: 1, items: all }), [ACTIVE_KEY]: JSON.stringify(active) };

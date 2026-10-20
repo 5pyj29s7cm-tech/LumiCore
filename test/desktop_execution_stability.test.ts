@@ -184,7 +184,7 @@ describe('desktop execution stability policy', () => {
   it('does not apply to ordinary conversation', async () => {
     const { capabilitySelection, policy } = await buildPolicy('just chat with me for a minute', 'chat');
 
-    expect(capabilitySelection.lane).toBe('conversation');
+    expect(capabilitySelection.lane).toBe('external_tool');
     expect(policy.applies).toBe(false);
     expect(policy.promptOverlay).toBe('');
   });

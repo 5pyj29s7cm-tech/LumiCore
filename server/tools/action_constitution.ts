@@ -96,6 +96,16 @@ export function requiresDesktopPresentationHandoff(toolName: string, args: Recor
     && capability?.operation !== 'observe' && capability?.operation !== 'test';
 }
 
+function requiresUnacceptedSideEffectConfirmation(
+  context: Pick<ToolContext, 'acceptedActionContract'> | undefined,
+  capability?: CapabilityManifestEntry,
+): boolean {
+  if (context?.acceptedActionContract?.contract.kind !== 'none' || !capability) return false;
+  const effects = capability.sideEffects;
+  return ['create', 'mutate', 'communicate', 'unknown'].includes(capability.operation)
+    || effects.some(effect => !['none', 'local_read', 'network_read'].includes(effect.type));
+}
+
 export function evaluateActionConstitution(
   toolName: string,
   args: Record<string, any>,
@@ -135,6 +145,10 @@ export function evaluateActionConstitution(
         requiresUserConfirmation: true,
       };
     }
+  }
+
+  if (requiresUnacceptedSideEffectConfirmation(context, capability)) {
+    return confirm(domain, 'The selected side effect has no accepted action contract and requires exact user confirmation');
   }
 
   if (requiresExternalDesktopConfirmation(toolName, args, context, capability)) {
@@ -266,7 +280,8 @@ export function classifyActionRisk(
   return 'low';
 }
 
-export function canAutoApproveAction(toolName: string, args: Record<string, any> = {}, context?: Pick<ToolContext, 'actionIntent' | 'userId' | 'domain' | 'orgId' | 'autonomous' | 'allowLocalFileWrites'>, capability?: CapabilityManifestEntry): boolean {
+export function canAutoApproveAction(toolName: string, args: Record<string, any> = {}, context?: Pick<ToolContext, 'actionIntent' | 'userId' | 'domain' | 'orgId' | 'autonomous' | 'allowLocalFileWrites' | 'acceptedActionContract'>, capability?: CapabilityManifestEntry): boolean {
+  if (requiresUnacceptedSideEffectConfirmation(context, capability)) return false;
   if (requiresExternalDesktopConfirmation(toolName, args, context, capability)) return false;
   // A self-improvement mandate and a supervised proposal may only be widened
   // or released by the user. Autonomous workers may create proposals and may

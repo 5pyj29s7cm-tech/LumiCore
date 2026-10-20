@@ -20,7 +20,15 @@ export function cancelConversationActionExecution(
   ));
   if (conversation) hydrateConversationActionState(db, conversation);
   const previous = normalizeConversationActionState(conversation?.actionContinuationState);
-  if (!conversation || !previous) return null;
+  if (!conversation) return null;
+  if (expectedRequestId) {
+    const turn = getConversationActionTurn({ conversationId, userId, requestId: expectedRequestId });
+    if (turn && !turn.taskId) {
+      cancelManagerActionTurns({ conversationId, userId, requestId: expectedRequestId, reason });
+      return previous;
+    }
+  }
+  if (!previous) return null;
   if (expectedRequestId && previous.activeRequestId !== expectedRequestId) return previous;
   const requestId = String(
     expectedRequestId

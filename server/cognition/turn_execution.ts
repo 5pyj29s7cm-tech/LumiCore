@@ -89,6 +89,7 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
   let turnRowId: string | undefined;
   let userMessageId: string | undefined;
   let toolRecords: ToolExecutionRecord[] = [];
+  let prepareSelectedToolCall: import('../conversation/planned_execution').PreparedSelectedToolCall | undefined;
   const assertCurrent = () => { controller.signal.throwIfAborted(); authorization.assertCurrent(); };
   const commit = async (finalized: LumiResultFinalizerResult, reason: string) => {
     authorization.assertCurrent();
@@ -124,10 +125,11 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
     const prepared = preparePlannedConversationExecution({ ...identity, execution, userText, userMessageId, bindConversationTurn: true });
     if ('bindingFailure' in prepared) throw new Error('Conversation turn cannot be admitted');
     taskId = prepared.state?.taskId; turnRowId = prepared.turnRowId;
+    prepareSelectedToolCall = prepared.prepareSelectedToolCall;
     await flushDBOrThrow(); assertCurrent();
     heartbeat = startConversationActionExecutionHeartbeat({ ...identity, abortController: controller });
     } else { taskId = externalTask.taskId; turnRowId = externalTask.turnRowId; }
-    const receiptObserver = conversationPersistence ? createConversationReceiptObserver({ ...identity, taskId, turnRowId }, authorization.isCurrent) : undefined;
+    let receiptObserver = conversationPersistence ? createConversationReceiptObserver({ ...identity, taskId, turnRowId }, authorization.isCurrent) : undefined;
     const assembled = await input.assemble(execution);
     if ('terminal' in assembled) return assembled.terminal;
     assertCurrent();
@@ -149,6 +151,15 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
       config: { ...assembled.model.config, conversationId: identity.conversationId || undefined, requestId: identity.requestId, signal: controller.signal },
       ...(toolModel ? { context: { ...toolModel.context, ...identity, taskId, turnRowId,
         source: entry.source, executionSignal: controller.signal, isCancelled: () => controller.signal.aborted || !authorization.isCurrent(),
+        ...(conversationPersistence ? { prepareSelectedToolCall: async () => {
+          assertCurrent();
+          if (!prepareSelectedToolCall) throw new Error('The selected tool has no accepted audit owner.');
+          const binding = await prepareSelectedToolCall(controller.signal);
+          taskId = binding.taskId; turnRowId = binding.turnRowId;
+          receiptObserver = createConversationReceiptObserver({ ...identity, taskId, turnRowId }, authorization.isCurrent);
+          assertCurrent();
+          return binding;
+        } } : {}),
         onToolRecord: async record => { await receiptObserver?.onToolRecord(record); await toolModel.context?.onToolRecord?.(record); },
       }, onToolCall: async record => { toolRecords = mergeToolExecutionRecords(toolRecords, [record]); await toolModel.onToolCall?.(record); } } : {}),
     };

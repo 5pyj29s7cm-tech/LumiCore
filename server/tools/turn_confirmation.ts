@@ -1,5 +1,5 @@
 import { canAutoApproveAction, requiresExternalDesktopConfirmation, requiresDesktopPresentationHandoff } from './action_constitution';
-import type { CapabilityManifestEntry } from './types';
+import type { CapabilityManifestEntry, ToolContext } from './types';
 import {
   consumePendingConfirmationDurably, recordPendingConfirmationDurably,
   confirmationArgumentsMatch, pendingConfirmationMatchesExactProposal,
@@ -29,7 +29,8 @@ export function createTurnConfirmation(input: TurnConfirmationInput) {
   let created = false;
   let consumed = false;
   let busy = false;
-  return async (toolName: string, args: Record<string, any>, capability?: CapabilityManifestEntry): Promise<boolean> => {
+  return async (toolName: string, args: Record<string, any>, capability?: CapabilityManifestEntry,
+    confirmationContext?: Pick<ToolContext, 'acceptedActionContract'>): Promise<boolean> => {
     input.assertCurrent?.();
     if (created || busy || input.isCancelled?.()) return false;
     busy = true;
@@ -43,7 +44,7 @@ export function createTurnConfirmation(input: TurnConfirmationInput) {
       }
       const scope = input.proposalScope();
       if (!input.correctionRequiresFreshConfirmation
-        && canAutoApproveAction(toolName, args, { actionIntent: input.autoApprovalIntent ?? input.actionIntent, userId: input.userId, domain: scope?.domain, orgId: scope?.orgId, allowLocalFileWrites: input.allowLocalFileWrites }, capability)) return true;
+        && canAutoApproveAction(toolName, args, { actionIntent: input.autoApprovalIntent ?? input.actionIntent, userId: input.userId, domain: scope?.domain, orgId: scope?.orgId, allowLocalFileWrites: input.allowLocalFileWrites, acceptedActionContract: confirmationContext?.acceptedActionContract }, capability)) return true;
       if (!scope) return false;
       if (input.exactWriteCorrection) {
         const call = input.recoveryCall?.();

@@ -320,12 +320,13 @@ export function buildLegalWorkProductPreflightSection(
   const blocking = compactCitationListForPreflight(gate.blockingStatutes);
   const missingCases = compactCitationListForPreflight(gate.missingCaseChecks);
   const deliveryRule = gate.passed
-    ? '草稿可继续进入律师复核；正式对外文件仍必须运行 legal_finalize_delivery_package 生成来源登记和交付包。'
-    : '存在已废止、失效或未确认的法条引用，不得标记为正式成果；需先替换或核验后再运行 legal_finalize_delivery_package。';
+    ? '草稿可继续进入律师复核；正式对外文件仍必须完成交付核验，生成来源登记和交付包。'
+    : gate.statuteChecks.length === 0
+      ? '本稿未引用具体法条；正式对外前如补充法条或案例，必须逐项核验来源、效力和适用边界，再完成正式交付核验。'
+      : '如存在已废止、失效或未确认的法条引用，不得标记为正式成果；需先替换或核验后再完成正式交付核验。';
 
   return [
     '## 法律成果预检',
-    `- 内部分析链路：已按“法律依据 / 事实证据 / 适用结论”组织工作稿；普通文书不展开方法论标题。`,
     `- 现行有效法律预检：${statuteStatus}（识别法条 ${gate.statuteChecks.length} 项，阻断 ${gate.blockingStatutes.length} 项）。`,
     `- 法条阻断项：${blocking}。`,
     `- 类案待复核项：${missingCases}。`,
@@ -344,6 +345,8 @@ export function appendLegalWorkProductArchiveSection(
     cause?: string;
     court?: string;
     localPath?: string;
+    reasoningLinks?: LegalCases.OrgLegalCaseMaterial['reasoningLinks'];
+    reasoningBasis?: string;
   },
 ): string {
   const orgId = legalWorkspaceId(args, context);
@@ -360,14 +363,14 @@ export function appendLegalWorkProductArchiveSection(
     cause: params.cause,
     court: params.court,
     localPath: params.localPath,
+    reasoningLinks: params.reasoningLinks, reasoningBasis: params.reasoningBasis,
   });
 
   return `${archivedContent}
 
 ## 案件归档与交付边界
 ${caseLine}
-- 内部法律分析：已完成基础事实、证据、法源和风险的工作稿衔接；正式对外使用前必须完成现行有效法律、证据三性、类案和来源复核。
-- 正式交付：继续使用 legal_finalize_delivery_package 触发现行有效法律硬门槛和来源登记。`;
+- 正式交付：继续进行正式交付核验，核对案件时点法律与来源登记。`;
 }
 
 export function legalReasoningGateStatus(gate: CurrentLawGateResult): string {

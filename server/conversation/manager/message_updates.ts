@@ -418,15 +418,6 @@ export function updateConversationForMessage(
           });
         }
         const terminalRequestId = String(msg.requestId || pending.requestId || '').trim();
-        if (terminalRequestId && conv.actionContinuationState?.taskId) {
-          bindConversationActionTurnTask({
-            conversationId: conv.id,
-            userId: conv.userId,
-            requestId: terminalRequestId,
-            taskId: conv.actionContinuationState.taskId,
-            now,
-          });
-        }
         finalizeConversationActionRequestInDb(
           db,
           conv,

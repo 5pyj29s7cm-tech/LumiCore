@@ -3,7 +3,7 @@ import { formatComputerCapabilityProfileForPrompt } from "../desktop_awareness";
 import { sanitizeDiagnosticValue } from "../diagnostic_sanitizer";
 import { getClientStateForScope } from './state';
 import { getSelfModelSnapshot } from './snapshot';
-import { formatWallpaperState, formatActiveWallpaperBoundary } from './prompt_context';
+import { formatWallpaperState, formatActiveWallpaperBoundary, formatClientProductState } from './prompt_context';
 
 /**
  * Voice turns need the live client facts, not the complete diagnostic manual.
@@ -14,10 +14,10 @@ import { formatWallpaperState, formatActiveWallpaperBoundary } from './prompt_co
  */
 export function formatCompactClientSelfPrompt(
   userId: string,
-  scope: { domain?: 'personal' | 'work'; orgId?: string } = { domain: 'personal', orgId: '' },
+  scope: { domain?: 'personal' | 'work'; orgId?: string; socketId?: string } = { domain: 'personal', orgId: '' },
 ): string {
   const isWork = scope.domain === 'work' && Boolean(scope.orgId);
-  const scoped = { domain: isWork ? 'work' as const : 'personal' as const, orgId: isWork ? scope.orgId : '' };
+  const scoped = { domain: isWork ? 'work' as const : 'personal' as const, orgId: isWork ? scope.orgId : '', socketId: scope.socketId };
   const state = sanitizeDiagnosticValue(getClientStateForScope(userId, scoped));
   const snapshot = sanitizeDiagnosticValue(getSelfModelSnapshot(userId, scoped));
   const configuredModels = snapshot.configuredModels
@@ -27,6 +27,7 @@ export function formatCompactClientSelfPrompt(
 
   return [
     '## Current Lumi Client Facts (compact)',
+    formatClientProductState(state),
     `- Scope: ${snapshot.scope.domain}${snapshot.scope.orgId ? `/${snapshot.scope.orgId}` : ''}`,
     `- Fact digest: ${snapshot.factDigest}`,
     `- Runtime awareness: ${snapshot.runtime.awareness}; health=${snapshot.runtime.health}; stateAgeSeconds=${snapshot.runtime.stateAgeSeconds ?? 'unknown'}`,

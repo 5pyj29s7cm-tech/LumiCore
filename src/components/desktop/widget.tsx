@@ -1,4 +1,4 @@
-import React, { lazy, useRef, useState, useCallback, useEffect } from "react";
+import React, { lazy, useRef, useState, useCallback } from "react";
 import { type PetConfig } from "../../pets/types";
 import { type OperationMode } from "@/contexts/AppContext";
 import { getDefaultPets } from "../../pets/defaults";
@@ -51,7 +51,6 @@ export function DesktopWidgetPanel({
   onOpenPersonalization: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const nativeDropHandledAtRef = useRef(0);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const isCallActive = callState !== 'idle';
@@ -108,74 +107,6 @@ export function DesktopWidgetPanel({
     }
   }, [lang, uploading, workDomain]);
 
-  const uploadKnowledgePaths = useCallback(async (paths: string[]) => {
-    const importPaths = paths.map(p => String(p || '').trim()).filter(Boolean);
-    if (importPaths.length === 0 || uploading) return;
-    setUploading(true);
-    try {
-      const res = await fetch(`/api/files/import-paths?domain=${encodeURIComponent(workDomain)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Lumi-Desktop-Import': 'file-drop' },
-        body: JSON.stringify({ paths: importPaths }),
-        credentials: 'include',
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || (uiMessage('desktop-ui.feed-failed.1e27b5712f', (lang === 'zh') ? 'zh' : 'en')));
-      const count = Array.isArray(data.files) ? data.files.length : importPaths.length;
-      const skipped = Array.isArray(data.skipped) ? data.skipped.length : 0;
-      toast.success(
-        formatUiMessage('desktop-ui.fed-value0-file-s-value1.167b70a2bd', { value0: count, value1: { en: skipped ? `, skipped ${skipped}` : '', zh: skipped ? `，跳过 ${skipped} 个` : '' } }, (lang === 'zh') ? 'zh' : 'en'),
-      );
-      window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
-        detail: {
-          domain: workDomain,
-          files: (data.files || []).map((file: any) => ({ id: file.id, name: file.name, displayName: file.displayName })),
-        },
-      }));
-      window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
-    } catch (err: any) {
-      toast.error(err?.message || (uiMessage('desktop-ui.feed-failed.1e27b5712f', (lang === 'zh') ? 'zh' : 'en')));
-    } finally {
-      setUploading(false);
-      setDragActive(false);
-    }
-  }, [lang, uploading, workDomain]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) return;
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-
-    const setupDropListener = async () => {
-      try {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        if (cancelled) return;
-        unlisten = await getCurrentWindow().onDragDropEvent((event: any) => {
-          const payload = event?.payload;
-          if (payload?.type === 'over') {
-            setDragActive(true);
-            return;
-          }
-          if (payload?.type === 'drop') {
-            nativeDropHandledAtRef.current = Date.now();
-            setDragActive(false);
-            const paths = Array.isArray(payload.paths) ? payload.paths : [];
-            void uploadKnowledgePaths(paths);
-            return;
-          }
-          setDragActive(false);
-        });
-        if (cancelled) unlisten?.();
-      } catch {}
-    };
-
-    void setupDropListener();
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [uploadKnowledgePaths]);
-
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
@@ -193,7 +124,6 @@ export function DesktopWidgetPanel({
     event.preventDefault();
     event.stopPropagation();
     setDragActive(false);
-    if (Date.now() - nativeDropHandledAtRef.current < 700) return;
     void uploadKnowledgeFiles(event.dataTransfer.files);
   };
 

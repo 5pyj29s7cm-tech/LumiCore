@@ -5,7 +5,7 @@ import { AgentChatView } from "../AgentChatView";
 import type { ChatAttachment, ChatFilePanelItem } from "../contracts";
 import React, { useCallback, useEffect, useRef } from "react";
 import type { ChatViewWorkRegistry } from "@/lib/chatViewWork";
-import { listenForNativeChatFileDrop, type ChatUploadKind, type ChatUploadSource } from "@/lib/chatAttachmentUploads";
+import { type ChatUploadKind, type ChatUploadSource } from "@/lib/chatAttachmentUploads";
 import { FileText, Mic, Check, Paperclip, Image as ImageIcon, ExternalLink } from "lucide-react";
 import { makeChatArtifact } from "../../../../shared/chat_artifacts";
 import { toast } from "sonner";
@@ -17,7 +17,7 @@ import type { useChatMediaControls } from './use_chat_media_controls';
 import { CHAT_RENDER_LIMIT } from './shared';
 
 export function useChatUploadsAndView(previousBindings: ReturnType<typeof useChatMediaControls>) {
-  const { onReferenceArtifact, conversationAttachmentsRef, pendingAttachmentsRef, setPendingAttachments, isOpen, attachmentRequest, activeDomain, activeOrgId, setShowAttachmentMenu, messageInputRef, onAttachmentRequestConsumed, scopedFileUrl, setOptimizationProgress, draftTextRef, setDraftText, notifyKnowledgeUpdated, chatUploadsRef, setIsOptimizing, setAttachmentUploadFailures, chatViewWorkRef, t, attachmentUploadText, mediaSourceUploadTargetRef, mediaSourceUploading, mediaGenerationText, setMediaSourceUploading, setMediaSourceArtifacts, handleMediaSourceChange, setIsDraggingFiles, nativeDropHandledAtRef, pendingAttachmentKeys, fileKindLabel, openChatFile, isFounder, user, onClose, chatProgressLines, workflowStatus, isZh, isTyping, chatAccentTheme, searchQuery, searchDisplayMessages, messages, previewFile, setPreviewFile, openChatFileInSystem, layout, commandCenterView, resolvedAppearanceMode, prefersReducedMotion, isOfficeCommandCenter, mediaStudioMode, mediaVideoOptions, mediaVideoOptionsLoading, mediaGenerationStatus, mediaGenerationDetail, mediaGenerationArtifacts, libraryMediaArtifacts, knowledgeLoading, knowledgeFailed, refreshKnowledgeFiles, requestCloseCreativeStudio, availableMediaSourceArtifacts, mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio, isWorkChat, setChatSongOpen, chatSongOpen, chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, checkMediaGenerationStatus, sendText, closeMediaGenerationStudio, setMediaGeneration, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, setShowVoicePicker, showVoicePicker, voices, selectedVoiceId, voicePickerRef, setSelectedVoiceId, callState, audioLevel, startVoiceSession, endVoiceSession, requestMeetingMode, agentName, operationModeMeta, OperationModeIcon, activeDomainDetail, activeDomainLabel, agentCategory, runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, conversationHistoryOpen, conversationHistorySelectorExpanded, setConversationHistorySelectorExpanded, handleConversationHistorySelectorBlur, conversationHistory, startNewTextConversation, isCreatingConversation, restoringConversationId, conversationHistoryListRef, handleConversationHistoryScroll, conversationHistoryLoading, conversationHistoryLoadingMore, orderedConversationHistory, attachmentConversationIdRef, restoreTextConversation, setConversationContextMenu, conversationHistoryHasMore, toggleConversationHistory, knowledgeStatusText, setCommandCenterPlannerOpen, commandCenterPlannerOpen, commandCenterPlannerText, setSearchQuery, setSearchResults, setSearchError, scrollRef, visibleSuggestions, searchError, isSearchingHistory, renderGeneratedFiles, handleCopyMessage, copiedId, conversationAttachments, clearConversationAttachmentContext, pendingAttachments, isOptimizing, attachmentUploadFailures, optimizationProgress, handleSendMessage, attachmentMenuRef, showAttachmentMenu, referenceableChatFiles, updateDraftText, toggleListening, isListening, conversationTransitionPending, hasDraftText, onOpenMemoryAvatar, onOpenKnowledge, chatFileSections, isElectron, activeCapabilities, conversationContextMenu, deletingConversationId, deleteConversationFromHistory } = previousBindings;
+  const { onReferenceArtifact, conversationAttachmentsRef, pendingAttachmentsRef, setPendingAttachments, isOpen, attachmentRequest, activeDomain, activeOrgId, setShowAttachmentMenu, messageInputRef, onAttachmentRequestConsumed, scopedFileUrl, setOptimizationProgress, draftTextRef, setDraftText, notifyKnowledgeUpdated, chatUploadsRef, setIsOptimizing, setAttachmentUploadFailures, chatViewWorkRef, t, attachmentUploadText, mediaSourceUploadTargetRef, mediaSourceUploading, mediaGenerationText, setMediaSourceUploading, setMediaSourceArtifacts, handleMediaSourceChange, setIsDraggingFiles, pendingAttachmentKeys, fileKindLabel, openChatFile, isFounder, user, onClose, chatProgressLines, workflowStatus, isZh, isTyping, chatAccentTheme, searchQuery, searchDisplayMessages, messages, previewFile, setPreviewFile, openChatFileInSystem, layout, commandCenterView, resolvedAppearanceMode, prefersReducedMotion, isOfficeCommandCenter, mediaStudioMode, mediaVideoOptions, mediaVideoOptionsLoading, mediaGenerationStatus, mediaGenerationDetail, mediaGenerationArtifacts, libraryMediaArtifacts, knowledgeLoading, knowledgeFailed, refreshKnowledgeFiles, requestCloseCreativeStudio, availableMediaSourceArtifacts, mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio, isWorkChat, setChatSongOpen, chatSongOpen, chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, checkMediaGenerationStatus, sendText, closeMediaGenerationStudio, setMediaGeneration, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, setShowVoicePicker, showVoicePicker, voices, selectedVoiceId, voicePickerRef, setSelectedVoiceId, callState, audioLevel, startVoiceSession, endVoiceSession, requestMeetingMode, agentName, operationModeMeta, OperationModeIcon, activeDomainDetail, activeDomainLabel, agentCategory, runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, conversationHistoryOpen, conversationHistorySelectorExpanded, setConversationHistorySelectorExpanded, handleConversationHistorySelectorBlur, conversationHistory, startNewTextConversation, isCreatingConversation, restoringConversationId, conversationHistoryListRef, handleConversationHistoryScroll, conversationHistoryLoading, conversationHistoryLoadingMore, orderedConversationHistory, attachmentConversationIdRef, restoreTextConversation, setConversationContextMenu, conversationHistoryHasMore, toggleConversationHistory, knowledgeStatusText, setCommandCenterPlannerOpen, commandCenterPlannerOpen, commandCenterPlannerText, setSearchQuery, setSearchResults, setSearchError, scrollRef, visibleSuggestions, searchError, isSearchingHistory, renderGeneratedFiles, handleCopyMessage, copiedId, conversationAttachments, clearConversationAttachmentContext, pendingAttachments, isOptimizing, attachmentUploadFailures, optimizationProgress, handleSendMessage, attachmentMenuRef, showAttachmentMenu, referenceableChatFiles, updateDraftText, toggleListening, isListening, conversationTransitionPending, hasDraftText, onOpenMemoryAvatar, onOpenKnowledge, chatFileSections, isElectron, activeCapabilities, conversationContextMenu, deletingConversationId, deleteConversationFromHistory } = previousBindings;
 
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -103,22 +103,13 @@ export function useChatUploadsAndView(previousBindings: ReturnType<typeof useCha
     }
     try {
       const uploadItemIds = attempt.items.map(item => item.id);
-      let response: Response;
-      if (attempt.batch.kind === 'files') {
-        const formData = new FormData();
-        attempt.items.forEach(item => formData.append('files', item.source as File));
-        formData.append('domain', activeDomain);
-        if (activeDomain === 'work' && activeOrgId) formData.append('orgId', activeOrgId);
-        formData.append('uploadBatchId', attempt.batch.id);
-        formData.append('uploadItemIds', JSON.stringify(uploadItemIds));
-        response = await fetch('/api/files/upload', { method: 'POST', body: formData, credentials: 'include', signal: work.signal });
-      } else {
-        response = await fetch(scopedFileUrl('/api/files/import-paths'), {
-          signal: work.signal, method: 'POST', credentials: 'include',
-          headers: { 'Content-Type': 'application/json', 'X-Lumi-Desktop-Import': 'file-drop' },
-          body: JSON.stringify({ paths: attempt.items.map(item => item.source), uploadBatchId: attempt.batch.id, uploadItemIds }),
-        });
-      }
+      const formData = new FormData();
+      attempt.items.forEach(item => formData.append('files', item.source as File));
+      formData.append('domain', activeDomain);
+      if (activeDomain === 'work' && activeOrgId) formData.append('orgId', activeOrgId);
+      formData.append('uploadBatchId', attempt.batch.id);
+      formData.append('uploadItemIds', JSON.stringify(uploadItemIds));
+      const response = await fetch('/api/files/upload', { method: 'POST', body: formData, credentials: 'include', signal: work.signal });
       const payload = await response.json().catch(() => ({}));
       if (!work.isCurrent()) return;
       const failures = chatUploadsRef.current.complete(attempt, payload, t.uploadFailed || attachmentUploadText.unknown);
@@ -133,7 +124,7 @@ export function useChatUploadsAndView(previousBindings: ReturnType<typeof useCha
       if (work.isCurrent()) { setIsOptimizing(false); setOptimizationProgress(0); }
       work.finish();
     }
-  }, [chatUploadsRef, conversationAttachmentsRef, pendingAttachmentsRef, setIsOptimizing, setAttachmentUploadFailures, setOptimizationProgress, chatViewWorkRef, t.uploadFailed, t.chatConnError, attachmentUploadText.unknown, acceptImportedChatFiles, activeDomain, activeOrgId, scopedFileUrl]);
+  }, [chatUploadsRef, conversationAttachmentsRef, pendingAttachmentsRef, setIsOptimizing, setAttachmentUploadFailures, setOptimizationProgress, chatViewWorkRef, t.uploadFailed, t.chatConnError, attachmentUploadText.unknown, acceptImportedChatFiles, activeDomain, activeOrgId]);
 
   const uploadChatAttachments = useCallback(async (files: FileList | null) => {
     await runChatAttachmentUpload('files', Array.from(files || []));
@@ -232,16 +223,6 @@ export function useChatUploadsAndView(previousBindings: ReturnType<typeof useCha
     }
   }, [activeDomain, activeOrgId, chatViewWorkRef, handleMediaSourceChange, mediaGenerationText.chooseImageFile, mediaGenerationText.sourceImageTooLarge, mediaGenerationText.sourceImageLoaded, mediaGenerationText.uploadMissingPath, mediaSourceUploadTargetRef, mediaSourceUploading, notifyKnowledgeUpdated, scopedFileUrl, setMediaSourceArtifacts, setMediaSourceUploading, t.chatConnError, t.uploadFailed]);
 
-  const importChatAttachmentPaths = useCallback(async (paths: string[]) => {
-    const uniquePaths = [...new Set(paths.map(item => String(item || '').trim()).filter(Boolean))];
-    await runChatAttachmentUpload('paths', uniquePaths);
-  }, [runChatAttachmentUpload]);
-
-  useEffect(() => {
-    if (!isOpen || layout === 'creation' || mediaStudioMode) return;
-    return listenForNativeChatFileDrop(setIsDraggingFiles, nativeDropHandledAtRef, importChatAttachmentPaths);
-  }, [importChatAttachmentPaths, isOpen, layout, mediaStudioMode, nativeDropHandledAtRef, setIsDraggingFiles]);
-
   const handleChatDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
@@ -257,7 +238,6 @@ export function useChatUploadsAndView(previousBindings: ReturnType<typeof useCha
     event.preventDefault();
     event.stopPropagation();
     setIsDraggingFiles(false);
-    if (Date.now() - nativeDropHandledAtRef.current < 700) return;
     void uploadChatAttachments(event.dataTransfer.files);
   };
 

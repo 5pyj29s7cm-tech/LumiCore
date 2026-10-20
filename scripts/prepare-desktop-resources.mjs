@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { prepareMediaRuntime } from './lib/media-runtime.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(__filename), '..');
@@ -239,7 +240,13 @@ async function prepareServer() {
   await copyIfExists(path.join(src, 'system-explorer-worker.mjs'), path.join(dest, 'system-explorer-worker.mjs'));
   await copyIfExists(path.join(src, 'laya-shadow-worker.py'), path.join(dest, 'laya-shadow-worker.py'));
   await copyIfExists(path.join(src, 'javascript-sandbox-worker.cjs'), path.join(dest, 'javascript-sandbox-worker.cjs'));
+  const maintenance = path.join(src, 'maintenance', 'merge-legal-data-root.mjs');
+  if (!existsSync(maintenance)) throw new Error('Missing reviewed data maintenance runtime. Run npm run build:server before packaging.');
+  await copyIfExists(maintenance, path.join(dest, 'maintenance', 'merge-legal-data-root.mjs'));
   await copyIfExists(path.join(src, 'runtime-meta.json'), path.join(dest, 'runtime-meta.json'));
+  if (process.platform === 'win32') await prepareMediaRuntime({ sourceDirectory: process.env.LUMI_MEDIA_RUNTIME_SOURCE,
+    destinationDirectory: path.join(dest, 'media'), manifestPath: path.join(root, 'scripts', 'media-runtime.manifest.json'),
+    runtimeMetadataPath: path.join(dest, 'runtime-meta.json') });
   await copyIfExists(path.join(src, 'server.cjs'), path.join(dest, 'server.cjs'));
   await copyIfExists(path.join(src, 'package.json'), path.join(dest, 'package.json'));
   if (process.platform === 'win32') {

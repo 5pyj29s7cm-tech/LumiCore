@@ -3,7 +3,6 @@ import { logger } from "../../../../logger";
 import { setConversationActionExecutionStatus, startConversationActionExecutionHeartbeat, updateConversationActionFocus, type ForegroundRequestIdentity as VoiceForegroundRequestIdentity } from "../../../conversation/manager";
 import { recordChatExecutionPersistenceUnknownDurably } from "../../chat_execution_registry";
 import { clearPendingConfirmationDurably } from "../../../tools/pending_confirmation";
-import { isCapabilityMetaQuestion } from "../../../cognition/capability_meta";
 import { toolRegistry } from "../../../tools/registry";
 import { coalesceToolExecutionRecords, taskReceiptsToRecords } from "../../../cognition/task_execution_ledger";
 import type { ToolExecutionRecord } from "../../../tools/types";
@@ -139,8 +138,8 @@ export async function prepareVoiceExecutionAndPrompt(context: NonNullable<Awaite
       ? context.baseVoiceOverlay + '\n\n## Interaction Mode\nThis turn has an authorized execution plan. Use only the declarations provided for this request, keep spoken progress brief, and do not claim completion without a verified receipt.'
       : context.baseVoiceOverlay + '\n\n## Interaction Mode\nThis turn is conversational. Do not call tools, operate the desktop, or claim that you are taking actions. Answer naturally unless the user gives an explicit command.';
 
-  const clientSelfPrompt = !remoteRestricted && (needsExecutionPrompt || isCapabilityMetaQuestion(context.actionIntentText))
-    ? '\n\n' + formatCompactClientSelfPrompt(context.session.userId, context.voiceScope)
+  const clientSelfPrompt = !remoteRestricted
+    ? '\n\n' + formatCompactClientSelfPrompt(context.session.userId, { ...context.voiceScope, socketId: context.socket?.id })
     : '';
   const dispatchOverlay = needsExecutionPrompt ? '\n\n' + context.turnDispatch.promptOverlay : '';
   const executionOverlay = needsExecutionPrompt || remoteRestricted

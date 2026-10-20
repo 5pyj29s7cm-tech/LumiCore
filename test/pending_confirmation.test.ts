@@ -434,6 +434,8 @@ describe('One-time pending tool confirmations', () => {
     expect(isExplicitConfirmationReply('好的')).toBe(true);
     expect(isExplicitConfirmationReply('可以')).toBe(true);
     expect(isExplicitConfirmationReply('确认一下这个文件内容')).toBe(false);
+    for (const reply of ['确认，确认。', '确认确认', '同意，同意。', 'yes, yes.', 'ok ok']) expect(isExplicitConfirmationReply(reply)).toBe(true);
+    for (const mixed of ['确认，取消。', '确认，确认，但不要执行。', '确认，换成另一个目标。', 'yes, no', 'ok okay']) expect(isExplicitConfirmationReply(mixed)).toBe(false);
   });
 
   it('provides one transport-neutral conversation scope for voice-to-text confirmation', async () => {

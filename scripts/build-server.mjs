@@ -1,6 +1,7 @@
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { computeSourceIdentity } from './lib/source-identity.mjs';
 
 const packageMeta = JSON.parse(readFileSync('package.json', 'utf8'));
@@ -22,6 +23,10 @@ const runtimeMeta = {
   sourceDirty: sourceIdentity.dirty,
   builtAt: new Date().toISOString(),
   channel: process.env.LUMI_RELEASE_CHANNEL || 'internal',
+  ...(process.platform === 'win32' ? { mediaRuntime: {
+    manifestSha256: createHash('sha256').update(readFileSync(new URL('./media-runtime.manifest.json', import.meta.url))).digest('hex'),
+    version: JSON.parse(readFileSync(new URL('./media-runtime.manifest.json', import.meta.url), 'utf8')).version,
+  } } : {}),
 };
 
 await build({
@@ -76,6 +81,14 @@ await build({
   },
 });
 
+// Ship the existing reviewed data maintenance command; customers do not need a source checkout or tsx.
+await build({
+  entryPoints: ['scripts/merge-legal-data-root.ts'], bundle: true, platform: 'node', format: 'esm',
+  outfile: 'dist-server/maintenance/merge-legal-data-root.mjs',
+  external: ['sqlite3', 'sharp', '@img/sharp-win32-x64', '@img/sharp-libvips-win32-x64', 'lightningcss', 'playwright-core', '@larksuiteoapi/node-sdk', 'typescript', 'pdf-parse'],
+  banner: { js: "import { createRequire as __lumiCreateRequire } from 'module'; const require = __lumiCreateRequire(import.meta.url);" },
+});
+
 const serverBundleSource = readFileSync('dist-server/server.mjs', 'utf8');
 await build({
   entryPoints: ['server/tools/javascript_sandbox_worker.cjs'],
@@ -94,6 +107,7 @@ copyFileSync('server/runtime/laya_shadow_worker.py', 'dist-server/laya-shadow-wo
 writeFileSync('dist-server/runtime-meta.json', `${JSON.stringify(runtimeMeta, null, 2)}\n`);
 writeFileSync('dist-server/entry.cjs', `// CJS entry point - dynamically imports the ESM server bundle.
 process.env.LUMI_RUNTIME_META_FILE ||= require('path').join(__dirname, 'runtime-meta.json');
+if (process.platform === 'win32') process.env.LUMI_MEDIA_BIN_DIR = require('path').join(__dirname, 'media', 'bin');
 
 // Monkey-patch child_process to hide console windows on Windows (desktop app)
 if (process.platform === 'win32') {

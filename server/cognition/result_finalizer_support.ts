@@ -53,8 +53,8 @@ export function isVerifiedCurrentTurnRecord(
 export function taskActionContract(input: LumiResultFinalizerInput) {
   const text = resultTaskText(input);
   const accepted = input.flow?.acceptedActionContract;
-  const contract = accepted?.taskText === text ? accepted.contract : input.flow?.structuredMediaRequest
-    ? mediaContractForRequest(input.flow.structuredMediaRequest) : buildActionEvidenceContract(text);
+  const contract = input.flow?.structuredMediaRequest
+    ? mediaContractForRequest(input.flow.structuredMediaRequest) : buildActionEvidenceContract(text, undefined, accepted);
   if (!input.flow?.preparationRootText) return contract;
   const root = input.flow.preparationRootText;
   return { ...contract, components: [

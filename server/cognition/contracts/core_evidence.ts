@@ -34,6 +34,8 @@ export function hasCoreActionEvidence(
   if (!contract.applies) return true;
   if (contract.kind === 'media_generation') return evaluateMediaGenerationEvidence(contract, records, currentTurn).complete;
   if (contract.components?.length) return contract.components.every(item => hasCoreActionEvidence(item.contract, records, item.text, taskCapsule, currentTurn, acceptedTaskTarget, analysis));
+  // Final external actions require a dedicated verified capability; generic receipts cannot stand in for one.
+  if (contract.kind === 'external_commit') return false;
   if (contract.kind === 'skill_authoring') return Boolean(verifiedSkillAuthoringReceipt(taskText, records, currentTurn));
   const successful = expandSuccessfulRecords(records);
   const recoverableObservedOpen = contract.kind === 'desktop_operation'

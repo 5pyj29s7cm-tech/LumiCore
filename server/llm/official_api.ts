@@ -323,7 +323,7 @@ export function parseOfficialApiModelCatalog(body: unknown): OfficialApiModelCat
       capability === 'video_generation'
         ? (/(?:^|[\/_-])i2v(?:[\/_-]|$)|image[-_]?to[-_]?video/i.test(model.id)
           ? ['image_to_video']
-          : ['video_generation', ...(model.id === LUMI_OFFICIAL_DEFAULT_MODELS.image_to_video ? ['image_to_video'] : [])])
+          : ['video_generation', ...([LUMI_OFFICIAL_DEFAULT_MODELS.image_to_video, 'aliyun/wan3.0-video-prime'].includes(model.id) ? ['image_to_video'] : [])])
         : OFFICIAL_MODEL_CAPABILITY_ROLES[capability] || []
     ));
     for (const role of roles) {

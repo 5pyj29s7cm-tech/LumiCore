@@ -151,9 +151,9 @@ export async function runWithTools(
           if (supervisor.acceptsEvents) context.onToolStart?.(call);
         },
         requestConfirmation: context.requestConfirmation
-          ? async (name, args, capability) => {
+          ? async (...confirmationArgs) => {
               if (!supervisor.acceptsEvents) return false;
-              const approved = await context.requestConfirmation!(name, args, capability);
+              const approved = await context.requestConfirmation!(...confirmationArgs);
               return supervisor.acceptsEvents && approved;
             }
           : undefined,

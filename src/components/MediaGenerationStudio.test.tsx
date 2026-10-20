@@ -268,7 +268,7 @@ describe('MediaGenerationStudio operations', () => {
 
 });
 
- it('uploads an external first frame from the source field, previews it, and submits its exact path', () => {
+ it.each(['chooser', 'drop'] as const)('uploads an external first frame through %s, previews it, and submits its exact path', kind => {
    const upload = vi.fn();
    const generate = vi.fn();
    const props = studioProps({ mode: 'video', operation: 'image_to_video', onUploadSourceImage: upload, onGenerate: generate });
@@ -277,7 +277,8 @@ describe('MediaGenerationStudio operations', () => {
    const prompt = screen.getByRole('textbox', { name: 'Describe what to generate' });
    expect(source.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
    const file = new File(['external image bytes'], 'my-photo.png', { type: 'image/png' });
-   fireEvent.change(screen.getByLabelText('Upload image: First-frame image'), { target: { files: [file] } });
+   if (kind === 'chooser') fireEvent.change(screen.getByLabelText('Upload image: First-frame image'), { target: { files: [file] } });
+   else fireEvent.drop(source, { dataTransfer: { types: ['Files'], files: [file] } });
    expect(upload).toHaveBeenCalledWith('image_to_video', 'first_frame', [file]);
    const uploaded = { ...sourceArtifact, id: 'uploaded-source', fileName: file.name };
    rerender(<StudioHarness {...props} referenceImage={uploaded.path!} referenceArtifactId={uploaded.id} sourceArtifacts={[uploaded]} />);

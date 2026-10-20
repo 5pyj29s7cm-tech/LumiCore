@@ -11,7 +11,7 @@ export function case_documentsTools(): ToolDefinition[] {
   return [
   defineLegalTool({
     name: 'legal_meeting_minutes_to_case',
-    description: '法律会议模式入案 — 将语音转写、会议沟通记录或咨询笔记整理为律师复核版会议纪要，同时生成实时滚动摘要、行动项/期限、案件入案更新文件，提取事实、证据三性提示、争议焦点和下一步，并归档到统一案件空间。',
+    description: '法律会议模式入案 — 完整保存原始语音转写、会议沟通记录或咨询笔记，复用已生成的会议报告并单独归档为律师复核稿；不重新推断事实、行动项或期限。未提供报告时只保留原文，不声称总结完成。',
     properties: {
       ...CASE_ARCHIVE_FIELDS,
       cause: stringField('caseType 的别名'),
@@ -21,6 +21,7 @@ export function case_documentsTools(): ToolDefinition[] {
       objective: stringField('办理目标、咨询目标或会议目标'),
       claims: stringField('objective 的别名；也可填写诉求或抗辩目标'),
       transcript: stringField('会议、语音、咨询或庭审转写全文'),
+      report: stringField('已有模型生成的完整会议报告；与原始转写分开保存，不作为原始事实材料'),
       meetingText: stringField('transcript 的别名'),
       notes: stringField('transcript 的别名；可填写沟通笔记'),
       outputDir: stringField('可选输出目录；默认写入 data/legal_delivery/{orgId}'),
@@ -149,7 +150,7 @@ export function case_documentsTools(): ToolDefinition[] {
       trialNotes: stringField('庭审记录、律师笔记或沟通记录'),
       opponentMaterials: stringField('对方起诉状、证据、代理意见等材料'),
     },
-    handler: extractDisputeFocusHandler,
+    handler: withLegalReceipt(extractDisputeFocusHandler, { status: 'generated', expectCaseMutation: 'when_requested' }),
   }),
   defineLegalTool({
     name: 'legal_generate_argument_or_opinion',

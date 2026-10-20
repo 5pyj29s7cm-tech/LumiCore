@@ -169,15 +169,16 @@ describe('Lumi capability selection', () => {
   });
 
   it('keeps ordinary chat on the conversation lane', async () => {
-    const { selection } = await selectCapability({
+    const { dispatch, execution, selection } = await selectCapability({
       userId: 'capability_selection_chat_user',
       text: 'just talk with me for a minute',
       operationMode: 'chat',
     });
 
-    expect(selection.lane).toBe('conversation');
-    expect(selection.preferredTools).toEqual([]);
-    expect(selection.promptOverlay).toContain('Suggested lane: conversation');
+    expect(execution.allowToolUse).toBe(true);
+    expect(dispatch.flow.completionEvidenceNeeded).toBe(false);
+    expect(selection.promptOverlay).toContain('Lumi Capability Selection (advisory)');
+    expect(selection.promptOverlay).toContain('hints only; they do not authorize a tool or require execution.');
   });
 
   it('selects capability learning before treating Lumi improvement as generic tools', async () => {
@@ -204,7 +205,7 @@ describe('Lumi capability selection', () => {
     });
 
     expect(dispatch.boundary).toBe('conversation');
-    expect(selection.lane).toBe('conversation');
+    expect(selection.promptOverlay).toContain('hints only; they do not authorize a tool or require execution.');
 
     const demo = await selectCapability({
       userId: 'capability_selection_skill_user',

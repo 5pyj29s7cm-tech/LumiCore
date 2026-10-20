@@ -13,20 +13,12 @@ interface UseWakeWordOptions {
   accessKey?: string;
   /** Keyword to detect. Default 'Jarvis' */
   keyword?: string;
-  /** Ref to the startCall function from useVoiceCall */
-  startCallRef: React.MutableRefObject<((voiceId?: string, personalityId?: string, agentId?: string, options?: { transcriptionOnly?: boolean; domain?: 'personal' | 'work'; orgId?: string }) => Promise<void>)>;
+  /** Ref to the current standard voice entry, shared with manual start. */
+  startCallRef: React.MutableRefObject<() => void | Promise<void>>;
   /** Enable/disable wake word */
   enabled?: boolean;
   /** Sensitivity 0-1. Default 0.5 (Picovoice only) */
   sensitivity?: number;
-  /** Voice ID to pass to startCall */
-  voiceId?: string;
-  /** Personality ID to pass to startCall */
-  personalityId?: string;
-  /** Stable Lumi identity to pass to startCall */
-  agentId?: string;
-  /** Domain scope to pass to the voice call when wake word starts it */
-  startCallOptions?: { domain?: 'personal' | 'work'; orgId?: string };
   /** Called when wake word is detected (before startCall) */
   onDetection?: () => void;
   /** Return false to ignore wake audio/detections, e.g. when voiceprint says this is not the owner. */
@@ -77,10 +69,6 @@ export function useWakeWord({
   startCallRef,
   enabled = false,
   sensitivity = 0.5,
-  voiceId,
-  personalityId,
-  agentId,
-  startCallOptions,
   onDetection,
   canAcceptWake,
   canSendWakeAudio,
@@ -276,7 +264,7 @@ export function useWakeWord({
         if (isCallActiveRef.current?.()) {
           onInterruptRef.current?.();
         } else {
-          startCallRef.current?.(voiceId, personalityId, agentId, startCallOptions);
+          startCallRef.current?.();
         }
       };
 
@@ -341,7 +329,7 @@ export function useWakeWord({
         setError(msg);
       }
     }
-  }, [voiceId, personalityId, agentId, startCallOptions, startCallRef, cleanupAudio, removeWakeHandlers, clearRetrySchedule, scheduleRetry]);
+  }, [startCallRef, cleanupAudio, removeWakeHandlers, clearRetrySchedule, scheduleRetry]);
 
   // ── Picovoice on-device detection (fallback) ──
 
@@ -370,7 +358,7 @@ export function useWakeWord({
           onInterruptRef.current?.();
           return;
         }
-        startCallRef.current?.(voiceId, personalityId, agentId, startCallOptions);
+        startCallRef.current?.();
       };
 
       let engine: any;
@@ -449,7 +437,7 @@ export function useWakeWord({
         setError(msg);
       }
     }
-  }, [accessKey, keyword, sensitivity, voiceId, personalityId, agentId, startCallOptions, startCallRef, cleanupAudio]);
+  }, [accessKey, keyword, sensitivity, startCallRef, cleanupAudio]);
 
   const enable = useCallback(async () => {
     if (startInFlightRef.current || isListeningRef.current) return;

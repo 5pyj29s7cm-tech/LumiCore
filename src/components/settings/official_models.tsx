@@ -72,6 +72,7 @@ export function lumiOfficialRoleReason(reason: string | undefined, locale: 'en' 
   if (reason === 'adapter_not_available') {
     return uiMessage(LUMI_OFFICIAL_ADAPTER_UNAVAILABLE_KEY, locale);
   }
+  if (reason === 'catalog_model_unavailable') return uiMessage('settings.lumi-official-catalog-model-unavailable.4de170d6b8', locale);
   if (reason === 'official_api_not_configured') {
     return uiMessage(LUMI_OFFICIAL_CONFIG_NOT_READY_KEY, locale);
   }

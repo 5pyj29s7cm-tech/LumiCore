@@ -715,7 +715,7 @@ async function generateOfficialVideo(args: Record<string, any>, selectedModel: s
     ...(args.last_frame_image ? { last_frame_image: String(args.last_frame_image) } : {}),
     ...(options && !options.fixedDuration ? { extra_body: { parameters: { duration,
       resolution: size.includes('1080') ? '1080P' : size.includes('720') ? '720P' : '480P', prompt_extend: args.prompt_extend === true,
-      ratio: args.first_frame_image ? 'adaptive' : width === height ? '1:1' : width > height ? '16:9' : '9:16', ...(Number.isInteger(args.seed) ? { seed: args.seed } : {}) } } } : {}),
+      ratio: args.first_frame_image ? 'adaptive' : width === height ? '1:1' : width > height ? '16:9' : '9:16', ...(typeof args.audio === 'boolean' ? { audio: args.audio } : {}), ...(Number.isInteger(args.seed) ? { seed: args.seed } : {}) } } } : {}),
   };
   let body: any;
   try {
@@ -943,6 +943,7 @@ export function registerVideoTools(registry: ToolRegistry): void {
         first_frame_image: { type: 'string', description: 'Optional first-frame image: absolute local path, HTTPS URL, or image data URL. Its presence selects the image-to-video role.' },
         last_frame_image: { type: 'string', description: 'Optional last-frame image in the same formats; requires first_frame_image and provider support.' },
         negative_prompt: { type: 'string', description: 'Optional SiliconFlow negative prompt.' },
+        audio: { type: 'boolean', description: 'Request native audio on an admitted official Wan3 model. An actual saved audio track still requires verification; this never synthesizes TTS or certifies lyric fidelity.' },
         prompt_extend: { type: 'boolean', description: 'Prompt expansion. Defaults to false for Lumi Official Wan3.0 and true for Qwen.' },
         seed: { type: 'number', description: 'Random seed when supported by the selected provider.' },
       },

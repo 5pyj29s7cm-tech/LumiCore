@@ -19,6 +19,20 @@ const code = (relativePath: string) => ts.createPrinter({ removeComments: true }
 );
 
 describe('customer-facing assistant output projection', () => {
+  it.each([
+    '本轮没有真实回执证明“工具没打开”，也不存在需要你切换的“工具可用模式”。如果任务没有执行，Lumi 应该继续真实工具链，不能把内部路由问题推给你。',
+    'No receipt shows that tools were disabled. Lumi must resume the real tool route instead of shifting an internal routing failure to the user.',
+    '[The historical reply is omitted because its action claims lack attached evidence. This turn already has a response and is not a pending instruction.]',
+  ])('keeps old program directives out of final text, history and streaming: %s', leaked => {
+    expect(containsInternalExecutionLanguage(leaked)).toBe(true);
+    const projected = sanitizeAgentResponseTextForDisplay(leaked, 'zh');
+    expect(projected).not.toMatch(/Lumi\s*(?:应该|must|should)|historical reply|内部路由|真实回执/u);
+    for (const normalize of [normalizeChatHistoryRecord, normalizeVoiceHistoryRecord]) {
+      expect(JSON.stringify(normalize({ role: 'assistant', message: leaked, cognitiveIntent: 'work_product_guard' }))).not.toContain(leaked);
+    }
+    for (let i = 1; i <= leaked.length; i++) expect(sanitizeAgentStreamingTextForDisplay(leaked.slice(0, i), 'zh')).not.toMatch(/Lumi\s*(?:应该|must|should)|historical reply|内部路由|真实回执/u);
+  });
+
   it('keeps ordinary Markdown intact and replaces runtime diagnostics', () => {
     const markdown = '### Result\n\n- **Ready**\n- [Open](https://example.com)';
     expect(sanitizeAgentResponseTextForDisplay(markdown, 'en')).toBe(markdown);

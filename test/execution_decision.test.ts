@@ -132,11 +132,12 @@ describe('Lumi execution decision', () => {
       toolDeclarations: declarations,
     });
 
-    expect(dispatch.boundary).toBe('conversation');
-    expect(decision.allowToolUse).toBe(false);
-    expect(decision.toolPolicy.allowedTools).toEqual([]);
-    expect(decision.toolPolicy.forbiddenTools).toContain('*');
-    expect(decision.toolRoute).toBeNull();
+    expect(dispatch.boundary).toBe('tool_action');
+    expect(decision.allowToolUse).toBe(true);
+    expect(decision.baseToolPolicy.allowedTools).toEqual(['*']);
+    expect(decision.baseToolPolicy.forbiddenTools).toEqual([]);
+    expect(decision.toolRoute?.toolNames.every(name => declarations.some(item => item.function.name === name))).toBe(true);
+    expect(dispatch.flow.acceptedActionContract).toBeUndefined();
   });
 
   it('retains desktop execution tools when recovery wording is only a fallback condition', async () => {
@@ -579,9 +580,10 @@ describe('Lumi execution decision', () => {
 
     expect(dispatch.flow.routeText).toContain('AutoCAD');
     expect(dispatch.flow.routeText).toContain('Path is outside allowed directories');
-    expect(decision.allowToolUse).toBe(false);
-    expect(decision.toolRoute).toBeNull();
-    expect(decision.toolPolicy.forbiddenTools).toContain('*');
+    expect(decision.allowToolUse).toBe(true);
+    expect(decision.resumesPinnedTask).toBe(false);
+    expect(dispatch.flow.acceptedActionContract).toBeUndefined();
+    expect(decision.toolPolicy.forbiddenTools).not.toContain('*');
     expect(decision.promptOverlay).toContain('Do not restart execution');
     expect(decision.promptOverlay).toContain('Do not restart execution, create a task-center item');
   });
@@ -615,9 +617,10 @@ describe('Lumi execution decision', () => {
     });
 
     expect(dispatch.flow.routeText).toContain('desktop_list_apps | items=2');
-    expect(decision.allowToolUse).toBe(false);
-    expect(decision.toolRoute).toBeNull();
-    expect(decision.toolPolicy.forbiddenTools).toContain('*');
+    expect(decision.allowToolUse).toBe(true);
+    expect(decision.resumesPinnedTask).toBe(false);
+    expect(dispatch.flow.acceptedActionContract).toBeUndefined();
+    expect(decision.toolPolicy.forbiddenTools).not.toContain('*');
     expect(decision.promptOverlay).toContain('actual tool evidence');
   });
 
@@ -1124,30 +1127,30 @@ describe('Lumi execution decision', () => {
     ]));
 
     const whyPush = decide('\u4e3a\u4ec0\u4e48\u8981\u63a8\u9001');
-    expect(whyPush.dispatch.boundary).toBe('conversation');
-    expect(whyPush.decision.allowToolUse).toBe(false);
-    expect(whyPush.decision.toolRoute).toBeNull();
+    expect(whyPush.dispatch.boundary).toBe('tool_action');
+    expect(whyPush.decision.allowToolUse).toBe(true);
+    expect(whyPush.dispatch.flow.acceptedActionContract).toBeUndefined();
 
     const naturalnessQuestion = decide('lumi \u80fd\u4e0d\u80fd\u66f4\u81ea\u7136\u4e00\u70b9');
-    expect(naturalnessQuestion.dispatch.boundary).toBe('conversation');
-    expect(naturalnessQuestion.decision.allowToolUse).toBe(false);
-    expect(naturalnessQuestion.decision.toolRoute).toBeNull();
+    expect(naturalnessQuestion.dispatch.boundary).toBe('tool_action');
+    expect(naturalnessQuestion.decision.allowToolUse).toBe(true);
+    expect(naturalnessQuestion.dispatch.flow.acceptedActionContract).toBeUndefined();
 
     const stockModeQuestion = decide('\u770b\u76d8\u8f85\u52a9\u6a21\u5f0f\u662f\u4ec0\u4e48');
-    expect(stockModeQuestion.dispatch.boundary).toBe('conversation');
-    expect(stockModeQuestion.decision.allowToolUse).toBe(false);
-    expect(stockModeQuestion.decision.toolRoute).toBeNull();
+    expect(stockModeQuestion.dispatch.boundary).toBe('tool_action');
+    expect(stockModeQuestion.decision.allowToolUse).toBe(true);
+    expect(stockModeQuestion.dispatch.flow.acceptedActionContract).toBeUndefined();
 
     const skillInstallQuestion = decide('\u6280\u80fd\u5927\u5385\u7684\u5b89\u88c5\u53ef\u4ee5\u7528\u5417');
-    expect(skillInstallQuestion.dispatch.boundary).toBe('conversation');
-    expect(skillInstallQuestion.decision.allowToolUse).toBe(false);
-    expect(skillInstallQuestion.decision.toolRoute).toBeNull();
+    expect(skillInstallQuestion.dispatch.boundary).toBe('tool_action');
+    expect(skillInstallQuestion.decision.allowToolUse).toBe(true);
+    expect(skillInstallQuestion.dispatch.flow.acceptedActionContract).toBeUndefined();
 
     const knowledgeFileCapabilityQuestion = decide('\u77e5\u8bc6\u5e93\u91cc\u7684\u6587\u4ef6\u53ef\u4ee5\u53d1\u7ed9\u6211\u5417');
-    expect(knowledgeFileCapabilityQuestion.dispatch.boundary).toBe('conversation');
+    expect(knowledgeFileCapabilityQuestion.dispatch.boundary).toBe('tool_action');
     expect(knowledgeFileCapabilityQuestion.dispatch.flow.autoPromoteToAssistant).toBe(false);
-    expect(knowledgeFileCapabilityQuestion.decision.allowToolUse).toBe(false);
-    expect(knowledgeFileCapabilityQuestion.decision.toolRoute).toBeNull();
+    expect(knowledgeFileCapabilityQuestion.decision.allowToolUse).toBe(true);
+    expect(knowledgeFileCapabilityQuestion.dispatch.flow.acceptedActionContract).toBeUndefined();
 
     const knowledgeFileSendCommand = decide('\u628a\u77e5\u8bc6\u5e93\u91cc\u7684\u9886\u822a\u5458\u624b\u518c\u53d1\u7ed9\u6211');
     expect(knowledgeFileSendCommand.dispatch.boundary).toBe('tool_action');
@@ -1155,29 +1158,29 @@ describe('Lumi execution decision', () => {
     expect(knowledgeFileSendCommand.decision.toolRoute?.categories).toContain('messaging');
 
     const installerQuestion = decide('\u7f16\u8bd1\u6210\u5b89\u88c5\u5305\u4e5f\u80fd\u7528\u5417');
-    expect(installerQuestion.dispatch.boundary).toBe('conversation');
-    expect(installerQuestion.decision.allowToolUse).toBe(false);
-    expect(installerQuestion.decision.toolRoute).toBeNull();
+    expect(installerQuestion.dispatch.boundary).toBe('tool_action');
+    expect(installerQuestion.decision.allowToolUse).toBe(true);
+    expect(installerQuestion.dispatch.flow.acceptedActionContract).toBeUndefined();
 
     const mcpWhyQuestion = decide('lumi \u4e3a\u4ec0\u4e48\u8981\u63a5\u5165\u5916\u90e8 MCP');
-    expect(mcpWhyQuestion.dispatch.boundary).toBe('conversation');
-    expect(mcpWhyQuestion.decision.allowToolUse).toBe(false);
-    expect(mcpWhyQuestion.decision.toolRoute).toBeNull();
+    expect(mcpWhyQuestion.dispatch.boundary).toBe('tool_action');
+    expect(mcpWhyQuestion.decision.allowToolUse).toBe(true);
+    expect(mcpWhyQuestion.dispatch.flow.acceptedActionContract).toBeUndefined();
 
     const marketHowQuestion = decide('\u770b\u76d8\u8f85\u52a9\u6a21\u5f0f\u600e\u4e48\u7528');
-    expect(marketHowQuestion.dispatch.boundary).toBe('conversation');
-    expect(marketHowQuestion.decision.allowToolUse).toBe(false);
-    expect(marketHowQuestion.decision.toolRoute).toBeNull();
+    expect(marketHowQuestion.dispatch.boundary).toBe('tool_action');
+    expect(marketHowQuestion.decision.allowToolUse).toBe(true);
+    expect(marketHowQuestion.dispatch.flow.acceptedActionContract).toBeUndefined();
 
     const installerCanQuestion = decide('\u5b89\u88c5\u5305\u80fd\u4e0d\u80fd\u7528');
-    expect(installerCanQuestion.dispatch.boundary).toBe('conversation');
-    expect(installerCanQuestion.decision.allowToolUse).toBe(false);
-    expect(installerCanQuestion.decision.toolRoute).toBeNull();
+    expect(installerCanQuestion.dispatch.boundary).toBe('tool_action');
+    expect(installerCanQuestion.decision.allowToolUse).toBe(true);
+    expect(installerCanQuestion.dispatch.flow.acceptedActionContract).toBeUndefined();
 
     const marketRiskQuestion = decide('\u770b\u76d8\u8f85\u52a9\u4f1a\u4e0d\u4f1a\u6709\u98ce\u9669');
-    expect(marketRiskQuestion.dispatch.boundary).toBe('conversation');
-    expect(marketRiskQuestion.decision.allowToolUse).toBe(false);
-    expect(marketRiskQuestion.decision.toolRoute).toBeNull();
+    expect(marketRiskQuestion.dispatch.boundary).toBe('tool_action');
+    expect(marketRiskQuestion.decision.allowToolUse).toBe(true);
+    expect(marketRiskQuestion.dispatch.flow.acceptedActionContract).toBeUndefined();
 
     const whyFailed = decide('\u4e3a\u4ec0\u4e48\u6ca1\u505a\u5b8c');
     expect(whyFailed.dispatch.boundary).toBe('self_repair');
@@ -1222,11 +1225,12 @@ describe('Lumi execution decision', () => {
     ]));
 
     const skillInstallQuestion = decide('\u6280\u80fd\u5927\u5385\u7684\u5b89\u88c5\u53ef\u4ee5\u7528\u5417', 'chat');
-    expect(skillInstallQuestion.trace.boundary).toBe('conversation');
-    expect(skillInstallQuestion.trace.allowed).toBe(false);
+    expect(skillInstallQuestion.trace.boundary).toBe('tool_action');
+    expect(skillInstallQuestion.trace.allowed).toBe(true);
     expect(skillInstallQuestion.trace.matched.informationOnlyQuestion).toBe(true);
-    expect(skillInstallQuestion.trace.blockedBy).toContain('information-only-question');
-    expect(skillInstallQuestion.trace.toolRoute).toBeNull();
+    expect(skillInstallQuestion.trace.blockedBy).toEqual([]);
+    expect(skillInstallQuestion.trace.toolIntent.blockedBy).toContain('information-only-question');
+    expect(skillInstallQuestion.dispatch.flow.acceptedActionContract).toBeUndefined();
 
     const checkMcp = decide('\u5e2e\u6211\u68c0\u67e5 MCP \u72b6\u6001');
     expect(checkMcp.trace.boundary).toBe('self_repair');
@@ -1251,9 +1255,11 @@ describe('Lumi execution decision', () => {
     expect(mcpBrokenQuestion.trace.matched.diagnosticOrRepair).toBe(true);
 
     const mcpConceptQuestion = decide('lumi \u4e3a\u4ec0\u4e48\u8981\u63a5\u5165\u5916\u90e8 MCP', 'chat');
-    expect(mcpConceptQuestion.trace.boundary).toBe('conversation');
-    expect(mcpConceptQuestion.trace.allowed).toBe(false);
+    expect(mcpConceptQuestion.trace.boundary).toBe('tool_action');
+    expect(mcpConceptQuestion.trace.allowed).toBe(true);
     expect(mcpConceptQuestion.trace.matched.informationOnlyQuestion).toBe(true);
-    expect(mcpConceptQuestion.trace.blockedBy).toContain('information-only-question');
+    expect(mcpConceptQuestion.trace.blockedBy).toEqual([]);
+    expect(mcpConceptQuestion.trace.toolIntent.blockedBy).toContain('information-only-question');
+    expect(mcpConceptQuestion.dispatch.flow.acceptedActionContract).toBeUndefined();
   });
 });

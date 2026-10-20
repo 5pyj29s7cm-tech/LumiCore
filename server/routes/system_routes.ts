@@ -192,6 +192,7 @@ export function getRuntimeVersionInfo() {
     sourceFingerprint: runtimeBuildMetadata.sourceFingerprint,
     sourceDirty: runtimeBuildMetadata.sourceDirty,
     pid: process.pid,
+    sharedBackendProtocol: 1,
     startedAt: serverStartedAt,
     uptimeSeconds: Math.round(process.uptime()),
     nodeVersion: process.version,

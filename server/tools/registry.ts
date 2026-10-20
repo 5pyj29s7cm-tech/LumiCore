@@ -1,3 +1,4 @@
+import { LEGAL_BATCH_TOOL_TIMEOUT_MS, LEGAL_BID_TOOL_TIMEOUT_MS, LEGAL_CONTRACT_TOOL_TIMEOUT_MS, LEGAL_REASONING_TOOL_TIMEOUT_MS } from '../legal/budgets';
 import { prepareToolExecutionFence } from './tool_execution_fence';
 export { executionIdempotencyKey, externalCommitInputDigest, resetExternalCommitRuntimeCacheForTests } from './tool_execution_fence';
 import { cloneDatabaseValue } from '../db/snapshot_changes';
@@ -250,6 +251,10 @@ export function getToolExecutionTimeoutMs(name: string, args?: Record<string, an
   if (/^cad_prepare_autocad_operations$/i.test(name)) return 5 * 60_000;
   if (/^(web_login_|url_fetch_logged_in)/i.test(name)) return 5 * 60_000;
   if (name === 'legal_refresh_authoritative_sources') return 3 * 60_000;
+  if (name === 'legal_generate_bid' || name === 'legal_generate_litigation_packet') return LEGAL_BID_TOOL_TIMEOUT_MS;
+  if (name === 'legal_draft_contract') return LEGAL_CONTRACT_TOOL_TIMEOUT_MS;
+  if (['legal_case_reasoning_matrix', 'legal_case_strategy', 'legal_generate_argument_or_opinion'].includes(name)) return LEGAL_REASONING_TOOL_TIMEOUT_MS;
+  if (name.startsWith('legal_')) return LEGAL_BATCH_TOOL_TIMEOUT_MS;
   if (name === 'self_improvement_stage_patch' || name === 'self_improvement_activate') return 60 * 60_000;
   if (/^(wechat_|desktop_ai_|external_ai_)/i.test(name)) return 3 * 60_000;
   if (/^(work_takeover_|capability_gap_autofix|generate_skill|install_skill)/i.test(name)) return 10 * 60_000;
@@ -972,7 +977,7 @@ export class ToolRegistry {
       if (context?.userConfirmed === true) {
         userConfirmed = true;
       } else if (context?.requestConfirmation) {
-        const allowed = await context.requestConfirmation(name, executionArgs, capability);
+        const allowed = await context.requestConfirmation(name, executionArgs, capability, { acceptedActionContract: context.acceptedActionContract });
         if (!allowed) {
           finishMetric('waiting_confirmation');
           return `Tool "${name}" requires user confirmation and was not approved.`;

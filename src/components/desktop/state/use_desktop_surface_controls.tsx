@@ -9,6 +9,7 @@ import { uiMessage } from "../../../i18n/uiMessages";
 import { desktopWorkflowCopy } from "../../../i18n/locales/desktopWorkflows";
 import type { useDesktopNotificationsAndShortcuts } from './use_desktop_notifications_and_shortcuts';
 import type { SurfaceReturnTarget } from './shared';
+import desktopConfig from '../../../../src-tauri/tauri.conf.json';
 
 export function useDesktopSurfaceControls(previousBindings: ReturnType<typeof useDesktopNotificationsAndShortcuts>) {
   const { canCustomizeLumiAppearance, lang, setSelectedPet, savePetPrefsToServer, equippedAccessories, t, setIsNotificationPanelOpen, windowCommand, setPersonalizationSection, openKnowledgeBase, openCommandCenter, openMemoryAvatar, inferSurfaceReturnTarget, dismissUtilitySurfaces, surfaceReturnTargetRef, setIsSearchOpen, setViewMode, setActiveTab, setNexusReturnTarget, knowledgeOpen, closeKnowledgeBase, closeMemoryAvatar, nexusReturnTarget, activeTab, setIsDesktopWidgetMode, isTauri, isWallpaperModeRef, chatOpen, wallpaperPresentationRef, applyWallpaperMode, endMeetingAndReport, meetingHistoryReadOnly, isDesktopWidgetMode, openWindows, operationMode, orgConnection, setOperationMode, switchDomain, workDomain, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle, setSettingsSection, socket, callError, clientRuntime, viewMode, focusedWindow, settingsSection, isSearchOpen, memoryLabOpen, sanctuaryOpen, commandCenterView, isNotificationPanelOpen, meetingNotesOpen, isWallpaperMode, organizationWorkspaceView, clientPermissions, availableOrganizationWorkspaceViews, reportedKnowledgeRuntimeState, minimizedWindows, wallpaperPresentation, wallpaperWorkspace, callState, isMuted, meetingPaused, meetingNotes, meetingReport, meetingStartedAt, meetingReportGenerating, agentStatus, mcpActivities } = previousBindings;
@@ -203,6 +204,7 @@ export function useDesktopSurfaceControls(previousBindings: ReturnType<typeof us
       });
 
       socket.emit('client:state', {
+        product: { name: desktopConfig.productName, identifier: desktopConfig.identifier },
         platform: String(clientPermissions.native_platform || (isTauri ? 'desktop' : 'web')),
         mode: operationMode,
         activeTab,

@@ -4,10 +4,13 @@ import {
   DesktopExecutionTracker,
   withDesktopExecutionReceipt,
 } from '../server/desktop/execution_runtime';
+import { brandCanonicalToolExecutionRecord } from '../server/tools/canonical_execution_record';
 import type { ToolExecutionRecord } from '../server/tools/types';
 
-function verifiedRecord(name: string, result: string): ToolExecutionRecord {
-  return {
+// Pure tracker algorithm fixtures have no execution owner. They cannot prove a
+// task ran or produce a usable aggregate; the separate binding suite uses the real engine.
+function verifiedRecord(name: string, result: string, overrides: Partial<ToolExecutionRecord> = {}): ToolExecutionRecord {
+  return brandCanonicalToolExecutionRecord({
     id: `record-${name}`,
     name,
     arguments: {},
@@ -18,7 +21,8 @@ function verifiedRecord(name: string, result: string): ToolExecutionRecord {
       reason: 'test evidence',
       evidence: [],
     },
-  } as ToolExecutionRecord;
+    ...overrides,
+  } as ToolExecutionRecord, { argumentsDigest: '', targetDigest: '' });
 }
 
 describe('desktop execution runtime', () => {
@@ -30,11 +34,10 @@ describe('desktop execution runtime', () => {
     }));
     const client = { lane: 'client', operation: 'mutate', sideEffects: [{ type: 'desktop_control' }] } as any;
     expect(tracker.authorize('client_action', client).allowed).toBe(true);
-    tracker.record({
-      ...verifiedRecord('client_action', JSON.stringify({ ok: true, verification: { status: 'verified' } })),
+    tracker.record(verifiedRecord('client_action', JSON.stringify({ ok: true, verification: { status: 'verified' } }), {
       arguments: { action: 'set_wallpaper_mode', enabled: true },
       capability: client,
-    });
+    }));
     expect(tracker.toToolExecutionRecord()).toBeNull();
     expect(tracker.authorize('computer_use').allowed).toBe(false);
     tracker.record(verifiedRecord('desktop_active_window', JSON.stringify({ title: '优酷', process_name: 'Youku.exe', pid: 4567 })));
@@ -157,52 +160,13 @@ describe('desktop execution runtime', () => {
     });
   });
 
-  it('replaces an earlier aggregate plan receipt with the latest tracker snapshot', () => {
-    const plan = buildDesktopExecutionPlan({
-      text: 'open WPS',
-      lane: 'desktop_control',
-      taskId: 'wps-recovered-plan',
-    });
-    const blockedTracker = new DesktopExecutionTracker(plan);
-    blockedTracker.record(verifiedRecord('desktop_active_window', JSON.stringify({
-      title: 'New tab - Google Chrome', process_name: 'chrome.exe', pid: 11,
-    })));
-    const blockedRecords = withDesktopExecutionReceipt([], blockedTracker);
-
-    expect(blockedRecords).toHaveLength(1);
-    expect(blockedRecords[0]).toMatchObject({
-      id: `desktop-plan-${plan.planId}`,
-      name: 'desktop_execution_plan_receipt',
-      terminalVerification: { status: 'failed' },
-    });
-
-    const recoveredTracker = new DesktopExecutionTracker(plan);
-    recoveredTracker.record(verifiedRecord('desktop_active_window', JSON.stringify({
-      title: 'LumiCore', process_name: 'lumi-core.exe', pid: 10,
-    })));
-    recoveredTracker.record(verifiedRecord('desktop_open', JSON.stringify({
-      ok: true,
-      status: 'verified',
-      target: 'WPS',
-      targetMatched: true,
-      actualTarget: { title: 'WPS Writer', processName: 'wps.exe' },
-    })));
-    recoveredTracker.record(verifiedRecord('desktop_active_window', JSON.stringify({
-      title: 'Document1 - WPS Writer', process_name: 'wps.exe', pid: 20,
-    })));
-
-    const recoveredRecords = withDesktopExecutionReceipt(blockedRecords, recoveredTracker);
-    expect(recoveredRecords).toHaveLength(1);
-    expect(recoveredRecords[0]).toMatchObject({
-      id: blockedRecords[0].id,
-      name: 'desktop_execution_plan_receipt',
-      terminalVerification: { status: 'verified' },
-    });
-    expect(recoveredRecords[0].error).toBeUndefined();
-    expect(JSON.parse(recoveredRecords[0].result || '{}')).toMatchObject({
-      completionVerified: true,
-      finalState: 'verified_success',
-    });
+  it('does not promote unbound diagnostic tracker snapshots into execution receipts', () => {
+    const tracker = new DesktopExecutionTracker(buildDesktopExecutionPlan({ text: 'open WPS', lane: 'desktop_control', taskId: 'unbound-diagnostic-plan' }));
+    tracker.record(verifiedRecord('desktop_active_window', JSON.stringify({ title: 'WPS Writer', process_name: 'wps.exe', pid: 20 })));
+    tracker.record(verifiedRecord('desktop_open', JSON.stringify({ ok: true, status: 'verified', targetMatched: true, verificationBasis: 'post_open_foreground', actualTarget: { title: 'WPS Writer', processName: 'wps.exe', pid: 20 } })));
+    expect(tracker.receipt()).toMatchObject({ completionVerified: true, finalState: 'verified_success' });
+    expect(withDesktopExecutionReceipt([], tracker)).toEqual([]);
+    expect(tracker.toToolExecutionRecord()).toBeNull();
   });
 
   it('treats heuristic plan membership as advisory while retaining identity and freshness gates', () => {
@@ -232,8 +196,7 @@ describe('desktop execution runtime', () => {
       allowed: true,
       reason: 'desktop_plan_membership_advisory',
     });
-    tracker.record({
-      ...verifiedRecord('future_desktop_adapter', JSON.stringify({ status: 'verified' })),
+    tracker.record(verifiedRecord('future_desktop_adapter', JSON.stringify({ status: 'verified' }), {
       capability: {
         capabilityId: 'desktop.future_adapter',
         ...futureAdapter,
@@ -246,7 +209,7 @@ describe('desktop execution runtime', () => {
           limitations: [],
         },
       },
-    });
+    }));
     const afterActuation = tracker.authorize('future_desktop_adapter', futureAdapter);
     expect(afterActuation.allowed).toBe(false);
     expect(afterActuation.reason.toLocaleLowerCase()).toContain('fresh, unused');

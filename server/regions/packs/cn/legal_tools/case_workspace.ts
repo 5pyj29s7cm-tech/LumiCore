@@ -1,10 +1,15 @@
 import path from "path";
-import { legalWrite } from "../../../../legal/execution";
+import { legalWrite, assertLegalExecutionActive } from "../../../../legal/execution";
 import fs from "fs";
 import * as LegalCases from "../../../../org/legal_cases";
-import { legalTemporalOptions, textArg, roleLabel, listArg, inferDisputeFocuses, buildSearchQueries, legalWorkspaceId, resolveWritableOutputDir, ensureLegalDeliveryRoot } from "./context";
+import { legalTemporalOptions, buildCaseContext, runLegalLLMWithin, LegalStructuredResponseError, textArg, roleLabel, listArg, inferDisputeFocuses, buildSearchQueries, legalWorkspaceId, resolveWritableOutputDir, ensureLegalDeliveryRoot } from "./context";
 import { buildEvidenceReviewRows, LEGAL_CASE_SEARCH_ORDER, normalizeLegalCaseStage, workspaceMaterialInputs, makeWorkspaceWorkflowCase, workspaceMaterialIndexRows, formatLegalWorkflowRows, formatLegalWorkflowActionQueue, formatEvidenceReviewRows, formatEvidenceGapList } from "./case_workflow";
 import { ownCaseNumbersFromArgs, evaluateCurrentLawGate, legalReasoningGateStatus, formatCitationList } from "./citations";
+
+import { buildReasoningSources, buildMaterialSources, reasoningGenerationPrompt, resolveReasoningEntries, reasoningReviewPrompt, applyReasoningReview, type Source } from "../legal_reasoning_generation";
+import { inspectLegalReasoningLinks } from "../legal_reasoning_links";
+import { LEGAL_REASONING_MODEL_TIMEOUT_MS, LEGAL_REASONING_WORKFLOW_BUDGET_MS, LEGAL_STRUCTURED_MAX_TOKENS } from "../../../../legal/budgets";
+import { isLegalSourceMaterial } from "../../../../../shared/legal_workflow_receipts";
 
 function buildLegalReasoningMatrixMarkdown(args: Record<string, any>, orgId?: string): string {
   const caseName = textArg(args, 'caseName') || '未命名案件';
@@ -90,6 +95,109 @@ ${formatCitationList(lawGate.missingCaseChecks).join('\n')}
 ## 六、检索关键词
 ${queries.map((query, index) => `${index + 1}. ${query}`).join('\n')}
 `;
+}
+
+export async function resolveLegalReasoningDraft(args: Record<string, any>, context?: any, currentSources: Source[] = []) {
+  assertLegalExecutionActive(context);
+  const orgId = legalWorkspaceId(args, context);
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  let sourceCase = textArg(args, 'caseId') ? LegalCases.getCase(orgId, textArg(args, 'caseId'), userId) : null;
+  let links = args.reasoningLinks;
+  let generationFailure = '';
+  let reasoningReviewed = false;
+  let generationErrors: string[] = [];
+  if (sourceCase && currentSources.length) {
+    const originals = sourceCase.materials.filter(isLegalSourceMaterial);
+    const knownQuotes = new Set(buildMaterialSources(originals).map(source => source.quote));
+    const pending = currentSources.filter(source => !knownQuotes.has(source.quote)
+      && !originals.some(material => source.quote === `[材料 ${material.id}：${material.title}]`));
+    const pendingFields = [...new Set(pending.map(source => source.materialId))];
+    if (pendingFields.length && args.persistCase === false) generationFailure = '本次输入尚未归档；persistCase=false，未忽略新材料或消耗模型调用，请先归档原件再继续。';
+    else if (pendingFields.length) {
+      if (!LegalCases.getCase(orgId, sourceCase.id, userId, 'write')) generationFailure = '本次输入尚未归档：当前案件不可写，未生成旧材料分析。';
+      else for (const field of pendingFields) {
+        const added = pending.filter(source => source.materialId === field);
+        const content = [...new Set(added.map(source => source.quote))].join('\n');
+        const material = legalWrite(() => LegalCases.addMaterial(orgId, userId, sourceCase!.id, {
+          type: 'note', title: added[0].title + '（本次新增原句，待核实）', content, source: 'manual',
+        }));
+        if (!material) { generationFailure = '本次输入归档未完成，未生成旧材料分析。'; break; }
+      }
+      sourceCase = LegalCases.getCase(orgId, sourceCase.id, userId) || sourceCase;
+    }
+  }
+  if (!generationFailure && !Array.isArray(links) && sourceCase && context?.llmGetters) {
+    const sources = buildReasoningSources(sourceCase, textArg(args, 'legalAuthorities'), orgId, { ...legalTemporalOptions(args), actorUserId: userId });
+    const summary = buildCaseContext({ ...args, facts: '', evidence: '', complaint: '', opponentMaterials: '', materials: '', transcript: '', trialNotes: '', legalAuthorities: '' }) + '\n用户所列争点：' + JSON.stringify(listArg(args, 'issues'));
+    const prompt = reasoningGenerationPrompt(sources, summary);
+    const decode = (raw: string) => JSON.parse(raw.replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, ''));
+    try {
+      const deadline = Date.now() + LEGAL_REASONING_WORKFLOW_BUDGET_MS;
+      let request = prompt;
+      if (!sources.sources.length || !sources.rules.length) generationFailure = '缺少已归档原始材料或已核验的具体法条，分析未完成。';
+      // Generation, correction and applicability review share the same deadline.
+      for (let attempt = 0; !generationFailure && attempt < 2; attempt++) {
+        const remaining = Math.min(LEGAL_REASONING_MODEL_TIMEOUT_MS, deadline - Date.now());
+        if (remaining <= 0) { generationFailure = '分析时间预算已用尽，未完成来源关联校正。'; break; }
+        const raw = await runLegalLLMWithin(request, context, LEGAL_STRUCTURED_MAX_TOKENS, remaining, true);
+        if (!raw) { generationFailure = '模型未在时间预算内返回分析正文。'; break; }
+        try {
+          const resolved = resolveReasoningEntries(decode(raw), sources);
+          links = resolved.links;
+          generationErrors = resolved.errors;
+        } catch { generationFailure = '模型返回的分析格式不完整，未取得可核验的结构化结果。'; }
+        const inspected = inspectLegalReasoningLinks(links, sourceCase, orgId, { ...legalTemporalOptions(args), actorUserId: userId });
+        if (!generationErrors.length && inspected.passed) break;
+        generationErrors = [...generationErrors, ...inspected.errors];
+        request = `${prompt}\n上次编号或格式校验未通过，请修正这些问题：${JSON.stringify(generationErrors)}\n上次草稿：${raw}`;
+      }
+      for (let reviewAttempt = 0; !generationFailure && !generationErrors.length && Array.isArray(links) && links.length && reviewAttempt < 2; reviewAttempt++) {
+        // Generation and review share one deadline. Real four-issue reviews can
+        // require over 50 seconds; do not discard them at an arbitrary sublimit.
+        const remaining = Math.min(LEGAL_REASONING_MODEL_TIMEOUT_MS, deadline - Date.now());
+        if (remaining <= 0) generationFailure = '适用复核时间预算已用尽，分析未完成。';
+        else {
+          const raw = await runLegalLLMWithin(reasoningReviewPrompt(links, summary, sources), context, LEGAL_STRUCTURED_MAX_TOKENS, remaining, true);
+          if (!raw) generationFailure = '法律适用复核超时，已保留待复核底稿。';
+          else {
+            const reviewed = applyReasoningReview(decode(raw), links, sources);
+            links = reviewed.links;
+            generationErrors = reviewed.errors;
+            reasoningReviewed = !reviewed.errors.length;
+            if (reasoningReviewed) break;
+            // Fill explicitly identified omissions once within the same budget.
+            // A missing prerequisite stays conditional; it must not be invented.
+            if (reviewAttempt === 0 && reviewed.errors.length && reviewed.errors.every(error => /^核心争议尚未分析：|^第\d+项适用分析缺少依据：/.test(error))) {
+              const repairBudget = Math.min(LEGAL_REASONING_MODEL_TIMEOUT_MS, deadline - Date.now());
+              if (repairBudget > 0) {
+                const repair = await runLegalLLMWithin(`${prompt}\n复核已指出以下覆盖不足或规则不适用，补充对应分析，删除与本案请求无关的规则条目，并返回完整entries。不要求用完所有法条。资料缺漏只作条件分析，不能补造事实；核算条件和付款关联有疑问时，明确说明如何核对，不得当成已证实。\n${JSON.stringify(reviewed.errors)}\n已复核底稿：${JSON.stringify(links.map((link: any) => ({ issue: link.issue, application: link.application, conclusion: link.conclusion, limitations: link.limitations })))}`,
+                  context, LEGAL_STRUCTURED_MAX_TOKENS, repairBudget, true);
+                if (repair) {
+                  const resolved = resolveReasoningEntries(decode(repair), sources);
+                  const check = inspectLegalReasoningLinks(resolved.links, sourceCase, orgId, { ...legalTemporalOptions(args), actorUserId: userId });
+                  if (!resolved.errors.length && check.passed) { links = resolved.links; generationErrors = []; }
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      assertLegalExecutionActive(context);
+      generationFailure = error instanceof LegalStructuredResponseError
+        ? error.reason === 'output_limit' ? '模型输出额度已耗尽，未取得完整分析正文。' : '模型已结束但未返回分析正文。'
+        : /504|请求超时|gateway.*timeout/i.test(error instanceof Error ? error.message : '')
+          ? '官方模型线路返回超时，分析未完成；原始材料和已生成草稿已保留。'
+          : '模型调用失败，分析未完成。';
+    }
+  } else if (!generationFailure && !Array.isArray(links)) {
+    generationFailure = !sourceCase ? '需要先将原始材料归档到明确案件，再进行来源关联分析。' : '模型服务未连接，当前仅保留分析模板。';
+  }
+  const traceability = inspectLegalReasoningLinks(links, sourceCase, orgId, { ...legalTemporalOptions(args), actorUserId: userId });
+  traceability.errors.push(...generationErrors);
+  if (generationFailure) traceability.errors.push(generationFailure);
+  traceability.passed = traceability.errors.length === 0;
+  return { sourceCase, traceability, reasoningReviewed, generationFailure };
 }
 
 export async function reasoningMatrixHandler(args: Record<string, any>, context?: any): Promise<string> {

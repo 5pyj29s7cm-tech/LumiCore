@@ -256,19 +256,21 @@ export interface OfficialModelConfigurationRoleReceipt {
   role: LumiModelRole;
   provider: string;
   model: string;
-  status: 'applied' | 'skipped';
-  reason?: 'adapter_not_available' | 'official_api_not_configured';
+  status: 'applied' | 'skipped' | 'failed';
+  reason?: 'adapter_not_available' | 'official_api_not_configured' | 'catalog_model_unavailable';
   selectionReason?: 'recommended_default' | 'preserved_live_selection' | 'catalog_namespace_migration' | 'catalog_fallback';
 }
 
 export interface OfficialModelConfigurationApplyResult {
   ok: true;
+  status: 'complete' | 'partial';
   provider: typeof LUMI_OFFICIAL_PROVIDER_ID;
   /** The live catalog was read before all selected roles were persisted. */
   verification: 'catalog_verified_and_configuration_persisted';
   catalog: { modelCount: number; roleCount: number };
   applied: OfficialModelConfigurationRoleReceipt[];
   skipped: OfficialModelConfigurationRoleReceipt[];
+  failed: OfficialModelConfigurationRoleReceipt[];
   roles: Record<LumiModelRole, OfficialModelConfigurationRoleReceipt>;
   configuration: ReturnType<typeof getLumiModelConfiguration>;
 }
@@ -536,10 +538,11 @@ async function applyOfficialModelConfiguration(
   };
   const applied: OfficialModelConfigurationRoleReceipt[] = [];
   const skipped: OfficialModelConfigurationRoleReceipt[] = [];
+  const failed: OfficialModelConfigurationRoleReceipt[] = [];
 
-  // Resolve every supported role before the first write. This prevents a
-  // missing late role (for example I2V) from creating a transient half-applied
-  // configuration that then depends on best-effort rollback.
+  // Resolve available roles before the first write. An absent capability
+  // preserves that role and is reported separately; it cannot disable valid
+  // chat, image or voice routes from the same authenticated catalog.
   const planned = new Map<LumiModelRole, ReturnType<typeof selectOfficialRoleModel>>();
   for (const role of LUMI_MODEL_ROLES) {
     if (!LUMI_OFFICIAL_ROLE_CAPABILITIES[role]) continue;
@@ -551,10 +554,15 @@ async function applyOfficialModelConfiguration(
       if (availableModels.length > 0) {
         throw new Error(`Lumi Official API selected model is unavailable for ${role}. Explicitly choose a replacement model; no role configuration was changed.`);
       }
-      throw new Error(`Lumi Official API catalog has no compatible model for ${role}. No role configuration was changed.`);
+      const existing = current[role];
+      failed.push({ role, provider: String(existing?.provider || existing?.effectiveProvider || ''),
+        model: String(existing?.model || existing?.effectiveModel || ''), status: 'failed', reason: 'catalog_model_unavailable' });
+      continue;
     }
     planned.set(role, selection);
   }
+
+  if (planned.size === 0) throw new Error('Lumi Official API catalog has no compatible model for any supported role. No role configuration was changed.');
 
   const beforeRevisions = modelPreferenceRevisions(uid);
   for (const role of LUMI_MODEL_ROLES) {
@@ -570,8 +578,9 @@ async function applyOfficialModelConfiguration(
       continue;
     }
 
-    const selection = planned.get(role)!;
-    const model = selection!.model;
+    const selection = planned.get(role);
+    if (!selection) continue;
+    const model = selection.model;
     try {
       const update: ModelConfigurationUpdate = {
         role,
@@ -610,6 +619,7 @@ async function applyOfficialModelConfiguration(
 
   return {
     ok: true,
+    status: failed.length > 0 ? 'partial' : 'complete',
     provider: LUMI_OFFICIAL_PROVIDER_ID,
     verification: 'catalog_verified_and_configuration_persisted',
     catalog: {
@@ -618,7 +628,8 @@ async function applyOfficialModelConfiguration(
     },
     applied,
     skipped,
-    roles: Object.fromEntries([...applied, ...skipped].map(receipt => [receipt.role, receipt])) as Record<LumiModelRole, OfficialModelConfigurationRoleReceipt>,
+    failed,
+    roles: Object.fromEntries([...applied, ...skipped, ...failed].map(receipt => [receipt.role, receipt])) as Record<LumiModelRole, OfficialModelConfigurationRoleReceipt>,
     configuration: getLumiModelConfiguration(uid),
   };
 }

@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import { claimVoiceCapture, releaseVoiceCapture } from "@/lib/voiceCaptureLease";
 import { applyPreferredVoiceOutputDevice, VOICE_DEVICE_PREFERENCE_CHANGED } from "@/lib/voiceDevicePreferences";
 import type { useVoiceSocketEvents } from './useVoiceSocketEvents';
@@ -167,9 +167,6 @@ export function useVoiceCallControls(previousBindings: ReturnType<typeof useVoic
     return () => window.removeEventListener(VOICE_DEVICE_PREFERENCE_CHANGED, applyDevicePreference);
   }, [proactiveContext, recoverMicrophoneCapture, ttsContext]);
 
-  const startCallRef = useRef(startCall);
-  startCallRef.current = startCall;
-
   const interrupt = useCallback(() => {
     if (!isCallActive.current) return;
     if (!isTtsPlaying.current && audioQueue.current.length === 0
@@ -282,6 +279,6 @@ export function useVoiceCallControls(previousBindings: ReturnType<typeof useVoic
     elapsedSeconds: isCallActive.current && callStartTime.current > 0
       ? Math.floor((Date.now() - callStartTime.current) / 1000)
       : 0,
-    inputLevelRef: rawAudioLevelRef, startCall, startCallRef, switchVoice, interrupt, toggleMute, switchPersonality, clearError: () => setError(null)
+    inputLevelRef: rawAudioLevelRef, startCall, switchVoice, interrupt, toggleMute, switchPersonality, clearError: () => setError(null)
   };
 }

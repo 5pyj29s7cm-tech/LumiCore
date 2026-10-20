@@ -1,5 +1,5 @@
 import { getIndustryWorkflowContracts } from './workflow_contracts';
-export const BUSINESS_LINES = ['ecommerce', 'finance'] as const;
+export const BUSINESS_LINES = ['ecommerce', 'finance', 'legal'] as const;
 export type BusinessLine = typeof BUSINESS_LINES[number];
 export function businessContract(entryId: unknown) {
   return BUSINESS_LINES.flatMap(getIndustryWorkflowContracts).find(item => item.entryId === String(entryId || '')) || null;

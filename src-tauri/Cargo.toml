@@ -1,6 +1,6 @@
 [package]
 name = "lumi-core"
-version = "3.1.0"
+version = "3.1.1"
 description = "LumiCore local-first personal AI"
 authors = ["LumiCore"]
 edition = "2021"

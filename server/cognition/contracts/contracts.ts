@@ -20,6 +20,7 @@ export type LumiActionContractKind =
   | 'work_task'
   | 'external_ai_history'
   | 'external_ai_request'
+  | 'external_commit'
   | 'external_cli_status'
   | 'extension_registry'
   | 'legal_document'

@@ -3,7 +3,7 @@ import { runResolvedLumiTurn } from "../../../cognition/turn_model";
 import { CN_VOICE_FAST_PATH_MESSAGES } from "../../../regions/messages/voice_fast_path_messages";
 import { getMessages, getConversationActionStatus, completeConversationActionFromUserObservation } from "../../../conversation/manager";
 import { formatConversationActionTaskStatus } from "../../../cognition/action_continuation";
-import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably } from "../../../tools/pending_confirmation";
+import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably, isExplicitConfirmationReply } from "../../../tools/pending_confirmation";
 import { toolRegistry } from "../../../tools/registry";
 import { withDesktopExecutionReceipt } from "../../../desktop/execution_runtime";
 import { coalesceToolExecutionRecords, recordsToTaskReceipts, toolRecordSucceeded } from "../../../cognition/task_execution_ledger";
@@ -118,7 +118,10 @@ export async function executeVoiceConfirmedAndDeterministicTurn(context: NonNull
       { return { terminal: true as const, context: undefined }; }
     }
 
-    if (context.actionFollowupIntent === 'status') {
+    if (context.actionFollowupIntent === 'status'
+      && (context.executionPipeline.normalizedIntent.kind === 'status_query'
+          && context.executionPipeline.normalizedIntent.target !== 'previous_action'
+        || isExplicitConfirmationReply(context.actionIntentText))) {
       context.responseText = getConversationActionStatus(
         context.conversationTurn.conversation.id,
         context.session.userId,

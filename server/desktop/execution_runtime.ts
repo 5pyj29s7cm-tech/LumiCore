@@ -1,6 +1,8 @@
 import { parseStoredObject as parseObject } from '../tools/receipt_payload';
 import crypto from 'node:crypto';
-import type { CapabilityManifestEntry, ToolExecutionRecord } from '../tools/types';
+import { isCanonicalToolExecutionRecord } from '../tools/canonical_execution_record';
+import { toolExecutionIdentity } from '../tools/execution_identity';
+import type { CapabilityManifestEntry, ToolExecutionIdentity, ToolExecutionRecord } from '../tools/types';
 import {
   recordDesktopAuthorizationBlock,
   recordDesktopExecutionReceipt,
@@ -168,6 +170,7 @@ function isObservationStep(step: DesktopActionStep | undefined): boolean {
 
 export class DesktopExecutionTracker {
   private readonly stepReceipts = new Map<string, DesktopStepReceipt>();
+  private receiptOwner: ToolExecutionIdentity | null = null;
   private lastObservationAt = 0;
   private lastFingerprint: WindowFingerprint | null = null;
   private applicationMatched = false;
@@ -240,8 +243,15 @@ export class DesktopExecutionTracker {
   }
 
   record(record: ToolExecutionRecord): void {
+    if (!isCanonicalToolExecutionRecord(record)) return;
     const step = stepForTool(this.plan, record.name, record.capability);
     if (!step) return;
+    if (record.taskId && record.requestId) {
+      if (this.plan.taskId && this.plan.taskId !== record.taskId
+        || this.receiptOwner && (record.taskId !== this.receiptOwner.taskId || record.requestId !== this.receiptOwner.requestId)) return;
+      this.receiptOwner ||= toolExecutionIdentity(record);
+      this.plan.taskId = record.taskId;
+    } else if (this.receiptOwner) return;
     const verified = !record.error && record.terminalVerification?.status === 'verified';
     const evidence = [`tool:${record.name}`, `result_sha256:${digest(record.result || record.error || '')}`];
 
@@ -417,8 +427,11 @@ export class DesktopExecutionTracker {
     });
   }
 
-  toToolExecutionRecord(): ToolExecutionRecord | null {
-    if (this.stepReceipts.size === 0) return null;
+  toToolExecutionRecord(records: ToolExecutionRecord[] = []): ToolExecutionRecord | null {
+    const canonical = records.filter(record => isCanonicalToolExecutionRecord(record) && record.taskId && record.requestId);
+    const owner = this.receiptOwner;
+    if (!owner || canonical.length === 0 || canonical.some(record => record.taskId !== owner.taskId || record.requestId !== owner.requestId)) return null;
+    if (this.stepReceipts.size === 0 || canonical.some(record => record.envelope?.status === 'waiting_confirmation')) return null;
     const receipt = this.receipt();
     if (!this.receiptMetricRecorded) {
       recordDesktopExecutionReceipt(receipt);
@@ -427,7 +440,7 @@ export class DesktopExecutionTracker {
     const verified = receipt.completionVerified;
     return {
       id: `desktop-plan-${this.plan.planId}`,
-      taskId: this.plan.taskId,
+      ...this.receiptOwner,
       name: 'desktop_execution_plan_receipt',
       arguments: { planId: this.plan.planId, applicationId: this.plan.application.id },
       result: JSON.stringify(receipt),
@@ -454,13 +467,8 @@ export function withDesktopExecutionReceipt(
   records: ToolExecutionRecord[],
   tracker: DesktopExecutionTracker | undefined,
 ): ToolExecutionRecord[] {
-  const receipt = tracker?.toToolExecutionRecord();
-  if (!receipt) return records;
-  const existingIndex = records.findIndex(record => record.id === receipt.id);
-  if (existingIndex >= 0) {
-    const updated = [...records];
-    updated[existingIndex] = receipt;
-    return updated;
-  }
-  return [...records, receipt];
+  if (!tracker) return records;
+  const current = records.filter(record => record.id !== `desktop-plan-${tracker.plan.planId}`);
+  const receipt = tracker.toToolExecutionRecord(current);
+  return receipt ? [...current, receipt] : current;
 }

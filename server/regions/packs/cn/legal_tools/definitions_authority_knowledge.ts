@@ -47,6 +47,8 @@ export function authority_knowledgeTools(): ToolDefinition[] {
     description: '导入裁判文书 — 上传或粘贴裁判文书全文（PDF/DOCX/TXT），自动提取案号、法院、当事人、法条引用等元数据，分块并向量化索引到组织知识库。导入后可通过类案检索查询。',
     properties: {
       filePath: stringField('裁判文书文件路径（PDF/DOCX/TXT）'),
+      password: stringField('PDF 打开密码，仅用于当次读取，不回显、不入库'),
+      passwords: { type: 'object', additionalProperties: { type: 'string' }, description: '按原文件完整路径提供 PDF 打开密码，仅用于当次读取' },
       content: stringField('直接粘贴的裁判文书全文（与filePath二选一）'),
       orgId: stringField('组织ID'),
       userId: stringField('操作用户ID'),

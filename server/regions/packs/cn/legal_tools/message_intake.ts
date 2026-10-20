@@ -81,12 +81,14 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
   );
   const sender = textArg(args, 'sender') || textArg(args, 'from') || textArg(args, 'userName') || '未标注';
   const receivedAt = textArg(args, 'receivedAt') || textArg(args, 'timestamp') || new Date().toISOString();
-  const messageText = [
+  const boundMaterials = textArg(args, 'materials');
+  const attachments = boundMaterials ? undefined : args.attachments;
+  const messageText = boundMaterials || [
     textArg(args, 'message') || textArg(args, 'text') || textArg(args, 'content') || textArg(args, 'noticeText'),
-    ...attachmentContentBlocks(args.attachments),
+    ...attachmentContentBlocks(attachments),
   ].filter(Boolean).join('\n\n').trim();
   const attachmentNames = Array.from(new Set([
-    ...listAttachmentNames(args.attachments),
+    ...listAttachmentNames(attachments),
     ...listArg(args, 'fileNames'),
     ...listArg(args, 'attachmentNames'),
   ]));
@@ -115,7 +117,7 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
   }
 
   const persistCase = args.persistCase !== false;
-  const caseName = explicitCaseName || hints.caseNumber || `远程法律消息 ${new Date().toISOString().slice(0, 10)}`;
+  const caseName = explicitCaseName || hints.caseNumber || '待确认案件';
   if (!caseFile && persistCase) {
     caseFile = legalWrite(() => LegalCases.createCase(orgId, userId, {
       title: caseName,
@@ -123,11 +125,12 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
       court: hints.court || textArg(args, 'court'),
       cause: hints.cause || textArg(args, 'caseType') || textArg(args, 'cause'),
       party: textArg(args, 'parties') || textArg(args, 'party'),
+      factDate: textArg(args, 'factDate') || undefined,
       hearingDate: hints.hearingDate || '',
       stage: normalizeLegalCaseStage(textArg(args, 'stage') || (hints.hearingDate ? 'trial' : 'consultation')),
       notes: messageText.slice(0, 3000),
     }));
-  } else if (caseFile) {
+  } else if (persistCase && caseFile) {
     const patch: Partial<LegalCases.OrgLegalCaseFile> = {};
     if (hints.caseNumber && !caseFile.caseNumber) patch.caseNumber = hints.caseNumber;
     if (hints.court && !caseFile.court) patch.court = hints.court;
@@ -161,7 +164,7 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
   ].join('\n');
 
   const attachmentMaterialIds: string[] = [];
-  if (caseFile) {
+  if (persistCase && caseFile) {
     legalWrite(() => LegalCases.addMaterial(orgId, userId, caseFile.id, {
       type: 'consultation',
       title: `${legalRemoteMessagePlatformLabel(platform)}法律消息原文`,
@@ -169,8 +172,8 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
       fileName: attachmentNames.length === 1 ? attachmentNames[0] : undefined,
       source: legalRemoteMessageMaterialSource(platform),
     }));
-    if (Array.isArray(args.attachments)) {
-      for (const item of args.attachments) {
+    if (Array.isArray(attachments)) {
+      for (const item of attachments) {
         if (!item || typeof item !== 'object') continue;
         const attachment = item as Record<string, any>;
         const fileName = String(attachment.fileName || attachment.name || attachment.title || '').trim();
@@ -207,7 +210,7 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
         message: messageText,
         noticeText: messageText,
         title: '远程消息链接材料',
-        persistCase: !!caseFile,
+        persistCase: persistCase && !!caseFile,
         confirmedForKb: false,
         includeExtractedText: true,
         extractedTextLimit: Number(args.extractedTextLimit) || 6000,
@@ -218,7 +221,7 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
         domain: 'work',
         source: `${platform}-legal-message-intake`,
       });
-      if (caseFile) {
+      if (persistCase && caseFile) {
         const linkedHints = LegalCases.extractLegalCaseHints(report);
         const linkedPatch: Partial<LegalCases.OrgLegalCaseFile> = {};
         if (linkedHints.caseNumber && !caseFile.caseNumber) linkedPatch.caseNumber = linkedHints.caseNumber;
@@ -235,7 +238,7 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
       if (/授权网页登录协作|登录|验证码|人脸|短信验证|访问受限|平台限制/.test(report)) {
         linkLine = '链接已登记；目标页面需要授权浏览器登录、验证码、人脸或短信验证，已转为人工协作下一步。';
       } else if (/已下载材料|已直接读取|保存留痕|留痕报告/.test(report)) {
-        linkLine = '链接已读取/下载并保存留痕，处理报告已归档到案件空间。';
+        linkLine = persistCase && caseFile ? '链接已读取/下载并保存留痕，处理报告已归档到案件空间。' : '链接已读取/下载并保存留痕，尚未入案。';
       } else {
         linkLine = '链接已调用处理工具，结果已记录；请查看案件材料中的链接处理报告。';
       }
@@ -245,7 +248,7 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
     }
   }
 
-  const gate = evaluateCurrentLawGate(rawMaterialContent, orgId, [], textArg(args, 'factDate'), { ...legalTemporalOptions(args), actorUserId: context?.userId });
+  const gate = evaluateCurrentLawGate(rawMaterialContent, orgId, [], caseFile?.factDate || textArg(args, 'factDate'), { ...legalTemporalOptions(args), actorUserId: context?.userId });
   const workflow = caseFile
     ? LegalCases.evaluateCaseWorkflow(caseFile, {
         currentLawGate: gate.statuteChecks.length === 0 ? 'none' : gate.passed ? 'passed' : 'blocked',
@@ -261,7 +264,7 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
       : '未归档到案件空间；选择目标案件后再继续。';
 
   return [
-    '# 远程法律消息已入案',
+    persistCase && caseFile ? '# 远程法律消息已入案' : '# 远程法律消息未入案',
     '',
     `- 平台：${legalRemoteMessagePlatformLabel(platform)}`,
     `- 发送人：${sender}`,
@@ -277,7 +280,7 @@ export async function legalMessageIntakeToCaseHandler(args: Record<string, any>,
     `- 下一动作：${next}`,
     '',
     '## 边界',
-    '- 这一步完成的是远程消息入案、来源留痕和下一步判断，不等同于正式法律意见或对外提交。',
+    persistCase && caseFile ? '- 这一步完成的是远程消息入案、来源留痕和下一步判断，不等同于正式法律意见或对外提交。' : '- 本轮只查看和整理消息，尚未归档到案件空间。',
     '- 如消息中包含法院平台、法蝉、Alpha、企查查等需登录来源，Lumi 只使用授权账号和可见浏览器协作，不绕过验证码、权限、付费墙或平台风控。',
   ].join('\n');
 }

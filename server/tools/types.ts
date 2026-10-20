@@ -326,7 +326,8 @@ export interface ToolContext extends ToolExecutionIdentity {
   /** Explicit personal-device relay used only for approved cross-workspace handoff, such as sending an organization file to the member's own WeChat. */
   personalDesktopRelay?: (toolName: string, args: Record<string, any>) => Promise<string>;
   /** Called when a tool requires confirmation. Returns true to proceed, false to abort. */
-  requestConfirmation?: (toolName: string, args: Record<string, any>, capability?: CapabilityManifestEntry) => Promise<boolean>;
+  requestConfirmation?: (toolName: string, args: Record<string, any>, capability?: CapabilityManifestEntry,
+    confirmationContext?: Pick<ToolContext, 'acceptedActionContract'>) => Promise<boolean>;
   /** Original user/task intent used to classify semantic risk for low-level actions. */
   actionIntent?: string;
   /**
@@ -404,6 +405,8 @@ export interface ToolContext extends ToolExecutionIdentity {
   isCancelled?: () => boolean;
   /** Progress callback for long-running tools (computer_use) — reports each step */
   onProgress?: (step: string) => void;
+  /** Server-owned audit binding for an actual registered selection; creates no execution grant. */
+  prepareSelectedToolCall?: () => Promise<{ taskId: string; turnRowId?: string } & Pick<ToolContext, 'desktopRelay' | 'personalDesktopRelay'>>;
   /** Lifecycle callback fired immediately before an LLM-selected tool begins. */
   onToolStart?: (call: { id?: string; idempotencyKey?: string; name: string; arguments: Record<string, any> }) => void;
   /** Observation only: the canonical receipt is available before execution returns. */

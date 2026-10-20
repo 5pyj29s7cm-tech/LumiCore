@@ -3,7 +3,9 @@ import * as LegalCases from "../../../../org/legal_cases";
 import { legalWrite, legalExecutionSignal } from "../../../../legal/execution";
 import fs from "fs";
 import { createLegalArticle, indexLegalArticle } from "../../../../legal/kb";
-import { parseDocument } from "../../../../legal/parser";
+import { parseLegalDocument, legalReadError } from "./documents";
+import { encodeToolResult } from "../../../../tools/result_envelope";
+import { readResponseBytes } from "../../../../tools/media_artifact";
 import { LEGAL_MATERIAL_EXTENSIONS, textArg, extractFirstUrl, legalWorkspaceId, NOTICE_LINK_MAX_BYTES, ensureLegalIntakeDir, safeFileSegment } from "./context";
 import { archiveLegalReportToCase } from "./case_workflow";
 
@@ -64,6 +66,18 @@ function stripHtmlToText(html: string): string {
     .trim();
 }
 
+function explicitNoticePdfLinks(html: string, base: URL): string[] {
+  const links = new Set<string>();
+  const withoutScripts = html.replace(/<script[\s\S]*?<\/script>/gi, '');
+  for (const match of withoutScripts.matchAll(/<(?:a|iframe|embed)\b[^>]*?\b(?:href|src)\s*=\s*["']([^"']+)["'][^>]*>/gi)) {
+    try {
+      const url = new URL(match[1].replace(/&amp;/g, '&'), base);
+      if (url.origin === base.origin && !url.username && !url.password && /\.pdf(?:[?#]|$)/i.test(url.href)) links.add(url.href);
+    } catch { /* Invalid link is not a downloadable source. */ }
+  }
+  return [...links];
+}
+
 function extractNoticeHints(input: string): { caseNumber?: string; court?: string; hearingDate?: string } {
   const sharedHints = LegalCases.extractLegalCaseHints(input);
   const court = Array.from(input.matchAll(/[\u4e00-\u9fa5]{2,40}(?:人民法院|法院)/g))
@@ -81,17 +95,8 @@ function extractNoticeHints(input: string): { caseNumber?: string; court?: strin
 function noticeNeedsBrowser(status: number, contentType: string, textSample: string): boolean {
   if ([401, 403, 407, 429].includes(status)) return true;
   if (!/html|text|json|xml/i.test(contentType)) return false;
-  return /登录|登陆|验证码|短信验证|身份认证|人脸|扫码|未授权|访问受限|captcha|login|sign in|access denied/i.test(textSample.slice(0, 6000));
+  return /<input[^>]+type\s*=\s*["']password["']/i.test(textSample) || /(?:请先|需要|必须|尚未|未|重新)[^。\n]{0,12}(?:登录|登陆|身份验证)|请输入.{0,10}验证码|(?:captcha|authentication|login|sign in)\s+(?:required|failed)|access denied|访问受限|未授权/i.test(stripHtmlToText(textSample).slice(0, 6000));
 }
-
-function loginPresetForNoticeUrl(url: URL): string {
-  const host = url.hostname.toLowerCase();
-  if (host.includes('wenshu.court.gov.cn')) return 'china-judgments-online';
-  if (host.includes('zxfw.court.gov.cn') || host.includes('court.gov.cn') || host.includes('court')) return 'court-online-service';
-  return '';
-}
-
-// ── legal_process_notice_link ──────────────────────────────────────────
 
 export async function processNoticeLinkHandler(args: Record<string, any>, context?: any): Promise<string> {
   const isDocumentLink = args.documentLink === true || /document|doc|legal/i.test(textArg(args, 'mode') || textArg(args, 'sourceType'));
@@ -132,28 +137,28 @@ export async function processNoticeLinkHandler(args: Record<string, any>, contex
   }
 
   const hints = extractNoticeHints(rawInput);
-  const presetId = loginPresetForNoticeUrl(target);
   const browserSteps = [
-    presetId ? `1. web_login_profile_save_from_preset {"presetId":"${presetId}"}` : '1. 如该站点需要登录，先用 web_login_profile_save 保存授权网页登录配置。',
-    `2. web_login_run {${presetId ? `"profileId":"${presetId}",` : ''}"url":"${target.href}","headless":false}`,
+    '1. 如该站点需要登录，请使用已有授权账号。',
+    `2. 在浏览器中打开材料链接：${target.href}`,
     '3. 律师/工作人员在真实浏览器中完成登录、验证码、人脸、短信验证或下载确认。',
-    '4. 下载后的 PDF/DOCX/网页摘录，再用 legal_import_materials_to_kb 导入组织知识库。',
+    '4. 下载后的 PDF/DOCX/网页摘录，再用 材料入库 导入组织知识库。',
   ].join('\n');
 
-  const archiveNoticeReport = (report: string, localPath?: string) => {
+  const archiveNoticeReport = (report: string, localPath?: string, originalText?: string, archiveContent?: string) => {
     const archiveLine = archiveLegalReportToCase(args, {
       orgId,
       userId,
       caseName: caseName || materialTitle,
       title: caseName ? `${caseName} ${materialTitle}` : materialTitle,
-      content: report,
-      type: 'note',
+      content: originalText || archiveContent || report,
+      type: originalText ? 'evidence' : 'note',
+      source: originalText ? 'import' : 'tool',
       localPath,
     });
     return `${report}\n\n## 案件空间归档\n${archiveLine}`;
   };
 
-  const authFallback = (reason: string) => archiveNoticeReport(`# ${resultTitle}
+  const authFallback = (reason: string) => encodeToolResult(archiveNoticeReport(`# ${resultTitle}
 
 ## 一、处理结论
 - 链接：${target.href}
@@ -168,42 +173,50 @@ export async function processNoticeLinkHandler(args: Record<string, any>, contex
 
 ## 三、建议动作
 ${browserSteps}
-`);
+`), { ok: false, status: 'browser_handoff' });
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
+  const abort = () => controller.abort(context?.executionSignal?.reason);
+  if (context?.executionSignal?.aborted) abort();
+  context?.executionSignal?.addEventListener('abort', abort, { once: true });
   let response: Response;
+  let bytes: Buffer;
   try {
-    response = await fetch(target.href, {
-      signal: controller.signal,
-      redirect: 'follow',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 LumiLegalIntake/1.0',
-        'Accept': 'application/pdf,text/html,application/xhtml+xml,application/xml,text/plain,application/json,*/*',
-        'Accept-Language': 'zh-CN,zh;q=0.9',
-      },
-    });
+    for (let redirects = 0; ; redirects++) {
+      response = await fetch(target.href, {
+        signal: controller.signal, redirect: 'manual',
+        headers: { 'User-Agent': 'Mozilla/5.0 LumiLegalIntake/1.0', 'Accept': 'application/pdf,text/html,text/plain,*/*', 'Accept-Language': 'zh-CN,zh;q=0.9' },
+      });
+      if (response.status < 300 || response.status >= 400) break;
+      const next = new URL(response.headers.get('location') || '', target);
+      if (redirects >= 3 || !response.headers.get('location') || !['http:', 'https:'].includes(next.protocol) || isPrivateOrLocalHost(next.hostname) || next.username || next.password) {
+        return authFallback('链接跳转未取得可下载的公开文书，请通过授权网页核对。');
+      }
+      target = next;
+    }
+    bytes = await readResponseBytes(response, NOTICE_LINK_MAX_BYTES, controller.signal);
   } catch (err: any) {
+    return authFallback('未取得完整链接内容；请核对来源，或通过授权网页下载后导入。');
+  } finally {
     clearTimeout(timeout);
-    return authFallback(`无法直接读取链接：${err?.message || '网络请求失败'}`);
+    context?.executionSignal?.removeEventListener('abort', abort);
   }
-  clearTimeout(timeout);
 
   const contentType = response.headers.get('content-type') || '';
   const contentDisposition = response.headers.get('content-disposition') || '';
-  const contentLength = Number(response.headers.get('content-length') || 0);
   const preliminaryExt = extensionFromContentDisposition(contentDisposition) || extensionFromUrlOrType(target, contentType);
-  const textLike = /text|html|json|xml/i.test(contentType) || ['.html', '.json', '.xml', '.txt', '.md', '.csv'].includes(preliminaryExt);
+  const textLike = !sniffDocumentExtension(bytes) && (/text|html|json|xml/i.test(contentType) || ['.html', '.json', '.xml', '.txt', '.md', '.csv'].includes(preliminaryExt));
 
-  if (contentLength > NOTICE_LINK_MAX_BYTES) {
-    return authFallback(`链接内容过大（${Math.round(contentLength / 1024 / 1024)}MB），需在授权浏览器中人工下载后导入`);
-  }
 
   if (textLike) {
-    const body = await response.text();
+    const body = bytes.toString('utf-8');
     if (!response.ok || noticeNeedsBrowser(response.status, contentType, body)) {
       return authFallback(`页面需要登录/验证或返回异常状态（HTTP ${response.status}）`);
     }
+
+    const pdfLinks = context?.noticeSourcePage ? [] : explicitNoticePdfLinks(body, target);
+    if (pdfLinks.length === 1) return processNoticeLinkHandler({ ...args, url: pdfLinks[0], message: rawInput, documentLink: true }, { ...context, noticeSourcePage: target.href });
 
     const ext = extensionFromContentDisposition(contentDisposition) || extensionFromUrlOrType(target, contentType);
     const intakeDir = ensureLegalIntakeDir(orgId);
@@ -217,6 +230,7 @@ ${browserSteps}
       `# ${materialTitle}`,
       '',
       `- 来源链接：${target.href}`,
+    ...(context?.noticeSourcePage ? [`- 来源页面：${context.noticeSourcePage}`] : []),
       `- 抓取时间：${new Date().toISOString()}`,
       `- HTTP 状态：${response.status}`,
       `- Content-Type：${contentType || '未提供'}`,
@@ -227,12 +241,12 @@ ${browserSteps}
       '',
       '## 提取文本',
       '',
-      extractedText.slice(0, 30000) || '未提取到可读文本。',
+      extractedText || '未提取到可读文本。',
     ].join('\n');
     const reportPath = path.join(intakeDir, `${base}_source-note.md`);
     legalWrite(() => fs.writeFileSync(reportPath, report, 'utf-8'));
 
-    let kbLine = '- 知识库：未导入。若律师已确认来源和使用权限，可再次设置 confirmedForKb=true，或使用 legal_import_materials_to_kb 导入。';
+    let kbLine = '- 知识库：未导入。请先由律师确认来源和使用权限，再将材料导入知识库。';
     if (confirmedForKb) {
       const article = legalWrite(() => createLegalArticle(orgId, userId, {
         title: caseName ? `${caseName} ${materialTitle}` : materialTitle,
@@ -269,21 +283,17 @@ ${kbLine}
 - 开庭/通知日期：${hints.hearingDate || '未识别'}
 
 ## 三、边界
-- 当前保存的是网页/文本留痕，不等同于法院系统下载的正式 PDF。
+- 当前只保存了网页/文本留痕，正式 PDF 尚未取得，不能记为文书下载完成。
 - 如法院页面提供正式 PDF 下载，请用授权浏览器打开并人工下载，再导入知识库或案件材料。${excerptSection}`;
-    return archiveNoticeReport(output, reportPath);
+    return encodeToolResult(archiveNoticeReport(output, reportPath, undefined, report), { ok: false, status: 'partial' });
   }
 
   if (!response.ok || noticeNeedsBrowser(response.status, contentType, '')) {
     return authFallback(`下载返回异常状态（HTTP ${response.status}）`);
   }
 
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (bytes.length > NOTICE_LINK_MAX_BYTES) {
-    return authFallback(`下载内容过大（${Math.round(bytes.length / 1024 / 1024)}MB），需在授权浏览器中人工下载后导入`);
-  }
 
-  let ext = extensionFromContentDisposition(contentDisposition) || extensionFromUrlOrType(target, contentType);
+  let ext = sniffDocumentExtension(bytes) || extensionFromContentDisposition(contentDisposition) || extensionFromUrlOrType(target, contentType);
   if (ext === '.bin') ext = sniffDocumentExtension(bytes) || ext;
   const intakeDir = ensureLegalIntakeDir(orgId);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -294,7 +304,9 @@ ${kbLine}
   let parsedText = '';
   let parseStatus = '未解析文本';
   if (LEGAL_MATERIAL_EXTENSIONS.has(ext)) {
-    const parsed = await parseDocument(filePath).catch(() => null);
+    let parsed;
+    try { parsed = await parseLegalDocument(filePath, args); }
+    catch (error) { parseStatus = legalReadError(error); }
     if (parsed?.text) {
       parsedText = parsed.text;
       parseStatus = `已解析为 ${parsed.format}`;
@@ -318,14 +330,14 @@ ${kbLine}
     '',
     '## 文本摘录',
     '',
-    parsedText ? parsedText.slice(0, 30000) : '二进制材料已保存；如需文本，请使用 read_pdf / extract_document_text 或人工确认后导入。',
+    parsedText ? parsedText : '二进制材料已保存；如需文本，请使用 read_pdf / extract_document_text 或人工确认后导入。',
   ].join('\n');
   const reportPath = path.join(intakeDir, `${base}_source-note.md`);
   legalWrite(() => fs.writeFileSync(reportPath, report, 'utf-8'));
 
-  let kbLine = '- 知识库：未导入。若律师已确认来源和使用权限，可再次设置 confirmedForKb=true，或使用 legal_import_materials_to_kb 导入保存文件。';
-  if (confirmedForKb) {
-    const content = parsedText || report;
+  let kbLine = '- 知识库：未导入。若律师已确认来源和使用权限，可再次设置 confirmedForKb=true，或使用 材料入库 导入保存文件。';
+  if (confirmedForKb && parsedText) {
+    const content = parsedText;
     const article = legalWrite(() => createLegalArticle(orgId, userId, {
       title: caseName ? `${caseName} ${materialTitle}` : materialTitle,
       content,
@@ -366,5 +378,8 @@ ${kbLine}
 ## 三、人工确认
 - 请律师核对链接来源、下载文件是否为法院或平台正式文书，以及是否需要补充签收/送达时间记录。
 - 若需提交、签收、撤回、缴费或确认送达，必须由律师或当事人在授权页面人工完成。${excerptSection}`;
-  return archiveNoticeReport(output, reportPath);
+  const archived = archiveNoticeReport(output, filePath, parsedText);
+  return !parsedText && (confirmedForKb || includeExtractedText)
+    ? encodeToolResult(`${archived}\n\n- 原文件已保存，文本读取/入库未完成；可补充密码后用 材料入库 重试上述保存路径和原案件ID。`, { ok: false, status: 'partial' })
+    : archived;
 }

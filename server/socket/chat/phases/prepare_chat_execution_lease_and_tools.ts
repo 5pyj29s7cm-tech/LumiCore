@@ -50,7 +50,7 @@ export async function prepareChatExecutionLeaseAndTools(context: NonNullable<Awa
         await context.releaseChatSession();
         { return { terminal: true as const, context: undefined }; }
       }
-      const durableTaskId = context.actionTaskExecution.state?.taskId;
+      let durableTaskId = context.actionTaskExecution.state?.taskId;
       context.requestTaskId = durableTaskId;
       context.receiptObserver = createConversationReceiptObserver({
         userId: context.uid, conversationId: context.conversation.id, taskId: durableTaskId,
@@ -108,7 +108,7 @@ export async function prepareChatExecutionLeaseAndTools(context: NonNullable<Awa
         context.emitAgent('agent:task_relation', { relation: context.resolvedTaskRelation, phase: 'prepared' });
       }
       // ── Desktop relay: route tools to the user's registered desktop client, not only this chat socket ──
-      const desktopRelay = createDesktopRelay({
+      const createTurnDesktopRelay = () => createDesktopRelay({
         io: context.io,
         userId: context.uid,
         domain: context.resolvedDomain,
@@ -118,17 +118,41 @@ export async function prepareChatExecutionLeaseAndTools(context: NonNullable<Awa
         requestId: context.requestId,
         requestSocket: context.socket,
         emitToolLifecycle: context.emitToolLifecycle,
-        onLateResult: context.receiptObserver.onDesktopLateResult,
+        onLateResult: event => context.receiptObserver.onDesktopLateResult(event),
         formatResultForLifecycle: context.formatToolResultForUi,
         // The foreground execution belongs to the durable task, not to this
         // transport connection. The relay still has its own bounded timeout.
         cancelOnRequestSocketDisconnect: false,
         signal: context.abortController.signal,
       });
+      let desktopRelay = createTurnDesktopRelay();
       context.releaseDesktopControlLease = () => desktopRelay.releaseControlLease('chat_turn_complete');
+      const prepareSelectedToolCall: NonNullable<ToolContext['prepareSelectedToolCall']> = async () => {
+        context.turnAuthorization.assertCurrent();
+        context.abortController.signal.throwIfAborted();
+        const owner = context.actionTaskExecution.prepareSelectedToolCall;
+        if (!owner) throw new Error('The selected tool has no accepted audit owner.');
+        const neededBinding = !context.actionTaskExecution.state?.taskId;
+        const binding = await owner(context.abortController.signal);
+        if (neededBinding) {
+          durableTaskId = binding.taskId; context.requestTaskId = binding.taskId;
+          context.receiptObserver = createConversationReceiptObserver({ userId: context.uid,
+            conversationId: context.conversation.id, taskId: binding.taskId, requestId: context.requestId,
+            turnRowId: binding.turnRowId, domain: context.resolvedDomain, orgId: context.resolvedOrgId,
+          }, context.turnAuthorization.isCurrent);
+          desktopRelay = createTurnDesktopRelay();
+          toolContext.desktopRelay = desktopRelay;
+          context.foregroundRequestIdentity = Object.freeze({ ...context.foregroundRequestIdentity, expectedTaskId: binding.taskId });
+          context.resolvedTaskRelation = bindPreparedTaskMessageRelation(context.resolvedTaskRelation, context.actionTaskExecution);
+          context.emitAgent('agent:task_relation', { relation: context.resolvedTaskRelation, phase: 'prepared' });
+        }
+        context.turnAuthorization.assertCurrent();
+        return { ...binding, desktopRelay };
+      };
       // The admitted request owns one capability context across execution, confirmation and recovery.
       const toolContext: ToolContext = {
         ...context.toolSecurityContext,
+        prepareSelectedToolCall,
         userId: context.uid,
         taskId: durableTaskId,
         conversationId: context.conversation.id,
@@ -235,10 +259,10 @@ export async function prepareChatExecutionLeaseAndTools(context: NonNullable<Awa
         });
       }
   return { terminal: false as const, context: extendTurnBindings(context, {
-    durableTaskId,
+    get durableTaskId() { return durableTaskId; },
     taskAwareRecords,
     toolContext,
     priorTaskRecords,
-    desktopRelay,
+    get desktopRelay() { return desktopRelay; },
   }) };
 }

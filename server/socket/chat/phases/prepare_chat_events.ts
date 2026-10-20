@@ -201,7 +201,7 @@ export async function prepareChatEvents(context: NonNullable<Awaited<ReturnType<
     const persistAuthorizedTerminalReceipt = (
       event: 'agent:response' | 'agent:error', payload: Record<string, any>, unknownPayload: Record<string, any>,
     ) => persistAuthorizedReceipt({ scope: executionScope, requestId: context.requestId, event, payload, unknownPayload,
-      authorization: context.turnAuthorization, conversationIsCurrent: context.conversationAuthorization.isCurrent, channel: 'chat', flush: flushDBOrThrow });
+      authorization: { isCurrent: () => !context.isChatCancelled() }, conversationIsCurrent: context.conversationAuthorization.isCurrent, channel: 'chat', flush: flushDBOrThrow });
     const commitDeterministicTerminal = async (input: {
       event?: 'agent:response' | 'agent:error';
       payload: Record<string, any>;

@@ -1,8 +1,11 @@
-import { withLegalExecution, assertLegalExecutionActive, legalExecutionWrites } from '../../../../legal/execution';
+import { resolveLegalCaseArguments, legalTemporalOptions } from "./context";
+import * as EDB from '../../../../org/db';
+import { authorizeOrganizationResource } from '../../../../org/resource_acl';
+import { withLegalExecution, assertLegalExecutionActive, legalExecutionWrites, legalWrite } from '../../../../legal/execution';
 import * as LegalCases from "../../../../org/legal_cases";
 import path from "path";
 import fs from "fs";
-import { encodeToolResult } from "../../../../tools/result_envelope";
+import { decodeToolResult, encodeToolResult } from "../../../../tools/result_envelope";
 import { createHash } from "crypto";
 import { type CapabilityOperation, type CapabilityRisk, type CapabilitySideEffect, type ToolDefinition } from "../../../../tools/types";
 import { capabilityContract, capabilityEvidence } from "../../../../tools/capability_contracts";
@@ -15,6 +18,7 @@ interface LegalReceiptProfile {
   expectCaseMutation?: 'always' | 'when_requested' | 'when_case_id';
   requireArtifacts?: boolean | ((args: Record<string, any>) => boolean);
   requireArticleMutation?: boolean;
+  allowExistingArticles?: boolean;
   classify?: (content: string, args: Record<string, any>) => { ok: boolean; status: string };
 }
 
@@ -48,19 +52,28 @@ function shouldExpectCaseMutation(args: Record<string, any>, mode?: LegalReceipt
 export function withLegalReceipt(handler: LegalToolHandler, profile: LegalReceiptProfile): LegalToolHandler {
   return async (args, context) => {
     const orgId = legalWorkspaceId(args, context);
-    const userId = textArg(args, 'userId') || context?.userId || 'system';
-    const content = await handler(args, context);
+    const userId = context?.userId || textArg(args, 'userId') || 'system';
+    const decoded = decodeToolResult(await handler(args, context));
+    const content = decoded.content;
+    // A handler can explicitly downgrade completion; model text can never upgrade it.
+    const declared = decoded.receipt as Record<string, any> | undefined;
     const writes = legalExecutionWrites(orgId, userId);
     const changedCaseIds = [...writes.cases.keys()];
-    const articleIds = [...writes.articles];
-    const materialSources = changedCaseIds.flatMap(caseId => (LegalCases.getCase(orgId, caseId, userId)?.materials || [])
-      .filter(material => writes.cases.get(caseId)?.has(material.id))
-      .map(material => ({ caseId, materialId: material.id, sourceDigest: createHash('sha256').update(JSON.stringify([
-        material.source, material.title, material.content, material.fileName || '', material.localPath || '',
-      ])).digest('hex') })));
+    const materialSources = changedCaseIds.flatMap(caseId =>
+      (LegalCases.getCase(orgId, caseId, userId, 'write')?.materials || [])
+        .filter(material => writes.cases.get(caseId)?.has(material.id))
+        .map(material => ({ caseId, materialId: material.id, sourceDigest: createHash('sha256').update(JSON.stringify([
+          material.source, material.title, material.content, material.fileName || '', material.localPath || '',
+        ])).digest('hex') })),
+    );
+    const reused = profile.allowExistingArticles && Array.isArray(declared?.existingArticleIds)
+      ? declared.existingArticleIds.filter((id: unknown) => typeof id === 'string' && EDB.getKbArticle(orgId, id)?.authorId === userId) : [];
+    const articleIds = [...new Set([...writes.articles, ...reused])] as string[];
     const artifacts = existingLegalOutputPaths(content);
-    const classified = profile.classify?.(content, args)
-      || (legalInputBlocked(content) ? { ok: false, status: 'blocked' } : { ok: true, status: profile.status });
+    const classified = declared?.ok === false
+      ? { ok: false, status: declared.status === 'partial' ? 'partial' : 'blocked' }
+      : profile.classify?.(content, args)
+        || (legalInputBlocked(content) ? { ok: false, status: 'blocked' } : { ok: true, status: profile.status });
     const expectedCaseMutation = shouldExpectCaseMutation(args, profile.expectCaseMutation);
     if (classified.ok && expectedCaseMutation && changedCaseIds.length === 0) {
       throw new Error('Legal work product was not persisted to the requested case workspace.');
@@ -82,6 +95,10 @@ export function withLegalReceipt(handler: LegalToolHandler, profile: LegalReceip
       materialSources,
       articleIds,
       artifacts,
+      ...(typeof declared?.reasoningLinked === 'boolean' ? { reasoningLinked: declared.reasoningLinked } : {}),
+      ...(typeof declared?.reasoningReviewed === 'boolean' ? { reasoningReviewed: declared.reasoningReviewed } : {}),
+      ...(['template', 'mixed', 'model'].includes(declared?.draftMode) ? { draftMode: declared!.draftMode } : {}),
+      ...(Array.isArray(declared?.draftFailures) ? { draftFailures: declared.draftFailures } : {}),
       content,
     });
   };
@@ -134,12 +151,42 @@ type LegalToolInput = Omit<ToolDefinition, 'parameters' | 'permission' | 'securi
 export function defineLegalTool({ properties, required, handler, ...definition }: LegalToolInput): ToolDefinition {
   return {
     ...definition, permission: 'user', securityLevel: 'safe',
-    parameters: { type: 'object', properties: structuredClone(properties),
+    parameters: { type: 'object', properties: { ...structuredClone(LEGAL_TEMPORAL_FIELDS), ...structuredClone(properties) },
       ...(required === undefined ? {} : { required: [...required] }) },
     handler: (args, context) => withLegalExecution(context, async () => {
       assertLegalExecutionActive();
-      const result = await handler(args, context);
+      const resolved = resolveLegalCaseArguments(definition.name, args, context);
+      if (resolved.factDateConflict) return encodeToolResult('案件关键事实日期与已保存日期冲突，请先在案件工作台核实并修改后再生成。', { ok: false, status: 'blocked' });
+      const orgId = legalWorkspaceId(resolved, context);
+      const userId = context?.userId || textArg(resolved, 'userId') || 'system';
+      const caseId = textArg(resolved, 'caseId');
+      if (caseId && !LegalCases.getCase(orgId, caseId, userId)) {
+        throw new Error('The selected legal case is unavailable; select an authorized case before continuing.');
+      }
+      const result = await handler(resolved, { ...context, ...legalTemporalOptions(resolved) });
       assertLegalExecutionActive();
+      const decoded = decodeToolResult(result);
+      const receipt = decoded.receipt as Record<string, any> | undefined;
+      const historyCaseIds = new Set<string>(Array.isArray(receipt?.changedCaseIds) ? receipt.changedCaseIds : []);
+      const requestedCaseId = textArg(resolved, 'caseId');
+      if (requestedCaseId && args.persistCase !== false) historyCaseIds.add(requestedCaseId);
+      for (const id of historyCaseIds) {
+        const item = LegalCases.getCase(orgId, id, userId, 'write');
+        if (!item || (context?.domain === 'work' && !authorizeOrganizationResource({
+          orgId, actorUserId: userId, resourceType: 'legal_case', resourceId: id, permission: 'write', ownerUserId: item.createdBy,
+        }).allowed)) continue;
+        const ownMaterialIds = legalExecutionWrites(orgId, userId).cases.get(id);
+        const materialIds = item.materials.filter(m => ownMaterialIds?.has(m.id)).map(m => m.id);
+        const textInMaterial = item.materials.some(m => materialIds.includes(m.id) && m.content === decoded.content);
+        legalWrite(() => LegalCases.recordWorkflowRun(orgId, userId, id, {
+          tool: definition.name, ok: receipt?.ok === true, status: String(receipt?.status || 'unverified'),
+          materialIds,
+          artifacts: Array.isArray(receipt?.artifacts) ? receipt.artifacts : [],
+          ...(textInMaterial ? {} : { displayText: decoded.content }),
+          reasoningLinked: definition.name === 'legal_finalize_delivery_package' ? receipt?.ok === true : receipt?.reasoningLinked === true,
+          ...(['template', 'mixed', 'model'].includes(receipt?.draftMode) ? { draftMode: receipt!.draftMode } : {}),
+        }));
+      }
       return result;
     }),
   };

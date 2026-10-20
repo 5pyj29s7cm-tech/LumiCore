@@ -41,6 +41,70 @@ function expectNaturalCustomerReply(text: string): void {
 }
 
 describe('execution guard recovery', () => {
+  it.each(['继续回答。', 'Continue answering.'])('never asks the user to choose a conversation category after a filtered answer: %s', task => {
+    const result = sanitizeExecutionResponseForDelivery({ text: '状态：受阻。\n证据：No successful current-turn tool execution.', blocked: true, reason: 'No successful current-turn tool execution.' }, { task, intent: 'conversation', toolRecords: [] });
+    expect(result.text).toBeTruthy();
+    expect(result.text).not.toMatch(/普通对话|ordinary conversation|specific target|具体目标执行/u);
+    expectNaturalCustomerReply(String(result.text));
+  });
+
+  it.each(['aborted', 'pendingConfirmation'] as const)('does not restore a continued answer across %s', async boundary => {
+    let attempts = 0;
+    const result = await recoverBlockedExecutionOnce({
+      task: '继续回答。', intent: 'conversation', responseText: '这段内容是边界发生前的旧回答。', allowToolUse: true, toolRecords: [], [boundary]: true,
+      finalization: { text: '请求已停止或正在等待确认。', blocked: true, reason: 'No successful current-turn tool execution.' },
+      attempt: async () => { attempts++; throw new Error('Boundary forbids recovery'); },
+      finalize: () => { throw new Error('No second finalization across boundary'); },
+    });
+    expect(attempts).toBe(0);
+    expect(result.decision.reason).toBe(boundary === 'aborted' ? 'request_cancelled' : 'waiting_for_user_confirmation');
+    expect(result.responseText).not.toBe('这段内容是边界发生前的旧回答。');
+    expect(result.finalization.blocked).toBe(true);
+  });
+
+  it.each(['reason', 'receipt'] as const)('keeps existing confirmation evidence blocked before restoring an answer: %s', async source => {
+    let attempts = 0;
+    const result = await recoverBlockedExecutionOnce({
+      task: '继续回答。', intent: 'conversation', responseText: '我可以继续解释文件的保存位置。', allowToolUse: true,
+      toolRecords: source === 'receipt' ? [record({ name: 'file_write', error: 'requires explicit user confirmation' })] : [],
+      finalization: { text: '请确认是否继续这项操作。', blocked: true, reason: source === 'reason' ? 'requires explicit user confirmation' : 'No successful current-turn tool execution.' },
+      attempt: async () => { attempts++; throw new Error('Confirmation forbids recovery'); },
+      finalize: () => { throw new Error('Confirmation forbids finalization retry'); },
+    });
+    expect(attempts).toBe(0);
+    expect(result.decision.reason).toBe('waiting_for_user_confirmation');
+    expect(result.finalization.blocked).toBe(true);
+    expect(result.responseText).not.toBe('我可以继续解释文件的保存位置。');
+  });
+
+  it.each(['claimed tool execution without matching tool records', 'unsupported current-turn real-world claim: runtime_configuration'])('does not restore a verifier-rejected factual claim: %s', async reason => {
+    let attempts = 0;
+    const rejected = '我查过了，当前记忆库共有40条。';
+    const result = await recoverBlockedExecutionOnce({
+      task: '什么是记忆读取？请只解释概念。', intent: 'conversation', responseText: rejected, allowToolUse: false, toolRecords: [],
+      finalization: { text: '这项查询未得到核实。', blocked: true, reason },
+      attempt: async () => { attempts++; throw new Error('No automatic action replay'); },
+      finalize: () => { throw new Error('No automatic finalization retry'); },
+    });
+    expect(attempts).toBe(0);
+    expect(result.responseText).not.toBe(rejected);
+  });
+
+  it.each([false, true])('keeps a required fresh confirmation authoritative over a conversation hint (tools=%s)', async allowToolUse => {
+    let attempts = 0;
+    const rejected = '这段是切换目标之前的回答。';
+    const result = await recoverBlockedExecutionOnce<ExecutionGuardRecoveryFinalization>({
+      task: '继续回答。', intent: 'conversation', requiresFreshConfirmation: true, responseText: rejected, allowToolUse, toolRecords: [],
+      finalization: { text: '需要重新确认操作目标。', blocked: false },
+      attempt: async () => { attempts++; throw new Error('No exact confirmation obtained'); },
+      finalize: text => ({ text, blocked: true, reason: 'missing_fresh_confirmation' }),
+    });
+    expect(attempts).toBe(allowToolUse ? 1 : 0);
+    expect(result.decision.intent).toBe('action_execution');
+    expect(result.finalization.blocked).toBe(true);
+    expect(result.responseText).not.toBe(rejected);
+  });
+
   it('recovers an unsupported playback claim instead of silently ending before tools run', () => {
     expect(decideExecutionGuardRecovery({ task: '播放音乐', blocked: true, allowToolUse: true,
       reason: 'desktop_operation: unsupported current-turn real-world claim: playback.', toolRecords: [] }))

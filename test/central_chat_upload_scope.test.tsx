@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { CentralLumiChat } from '../src/components/org/CentralLumiChat';
 import { toast } from 'sonner';
-const fixture = vi.hoisted(() => ({ uid: 'owner-a', orgId: 'org-a', langCode: 'en', net: vi.fn(), emit: vi.fn(), native: vi.fn(), drops: new Set<Function>(), listeners: new Map<string, Set<Function>>() }));
+const fixture = vi.hoisted(() => ({ uid: 'owner-a', orgId: 'org-a', langCode: 'en', net: vi.fn(), emit: vi.fn(), listeners: new Map<string, Set<Function>>() }));
 vi.mock('../src/contexts/AppContext', () => ({ useApp: () => ({ user: { uid: fixture.uid, role: 'user' }, workDomain: 'work', orgConnection: { orgId: fixture.orgId, orgRole: 'member' } }) }));
 vi.mock('../src/hooks/useSocket', () => ({ useSocket: () => socket }));
 vi.mock('../src/lib/useT', () => ({ useT: () => ({ langCode: fixture.langCode, orgChat: 'Organization chat' }) }));
@@ -12,13 +12,6 @@ vi.mock('../src/i18n/uiMessages', () => ({ uiMessage: (key: string) => key.split
 vi.mock('../src/components/ChatMessageMarkdown', () => ({ ChatMessageMarkdown: ({ children }: any) => <>{children}</> }));
 vi.mock('../src/components/ChatArtifactCards', () => ({ ChatArtifactCards: () => null }));
 vi.mock('../src/components/ChatFilePreview', () => ({ ChatFilePreview: () => null }));
-vi.mock('../src/lib/chatAttachmentUploads', async original => ({ ...await original<any>(),
-  listenForNativeChatFileDrop: (...args: any[]) => nativeListener(...args),
-}));
-import { extractSourceExpression } from './source_expression';
-const nativeListener = (...args: any[]) => extractSourceExpression('src/lib/chatAttachmentUploads.ts', 'listenForNativeChatFileDrop', {
-  window, Date, require: () => ({ getCurrentWindow: () => ({ onDragDropEvent: fixture.native }) }),
-})(...args);
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 const socket = { id: 'synthetic-client', emit: fixture.emit, on: (name: string, callback: Function) => { if (!fixture.listeners.has(name)) fixture.listeners.set(name, new Set()); fixture.listeners.get(name)!.add(callback); }, off: (name: string, callback: Function) => fixture.listeners.get(name)?.delete(callback) };
 const event = (name: string, data: unknown) => { for (const handler of fixture.listeners.get(name) || []) handler(data); };
@@ -30,15 +23,13 @@ const requests: Array<ReturnType<typeof deferred> & { url: string; init: Request
 const notification = vi.fn();
 const root = () => <CentralLumiChat />;
 const attachButton = () => screen.getByRole('button', { name: 'Attach files' }) as HTMLButtonElement;
-const ready = async (id = conversation()) => { await screen.findByText(`history-${id}`); await waitFor(() => expect(fixture.drops.size).toBe(1)); };
+const ready = async (id = conversation()) => { await screen.findByText(`history-${id}`); };
 function importFile(kind: string, name = 'selected.txt') {
-  if (kind === 'paths') { for (const callback of fixture.drops) callback({ payload: { type: 'drop', paths: [`D:/synthetic/${name}`] } }); }
+  if (kind === 'drop') fireEvent.drop(screen.getByRole('textbox'), { dataTransfer: { types: ['Files'], files: [new File(['synthetic'], name)] } });
   else fireEvent.change(document.querySelector('input[type=file]')!, { target: { files: [new File(['synthetic'], name)] } });
 }
 beforeEach(() => {
   fixture.uid = 'owner-a'; fixture.orgId = 'org-a'; fixture.langCode = 'en'; requests.length = 0; localStorage.clear();
-  fixture.drops.clear(); fixture.native.mockImplementation(async (callback: Function) => { fixture.drops.add(callback); return () => { fixture.drops.delete(callback); }; });
-  Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
   Element.prototype.scrollIntoView = vi.fn(); window.addEventListener('lumi:knowledge-updated', notification);
   fixture.net.mockImplementation(async (url: string, init: RequestInit = {}) => {
     if (init.method === 'POST') { const request = { ...deferred(), url, init }; requests.push(request); return request.promise; }
@@ -47,9 +38,9 @@ beforeEach(() => {
     return reply({ provider: 'synthetic', model: 'offline' });
   }); vi.stubGlobal('fetch', fixture.net);
 });
-afterEach(() => { cleanup(); delete (window as any).__TAURI_INTERNALS__; window.removeEventListener('lumi:knowledge-updated', notification); vi.unstubAllGlobals(); vi.clearAllMocks(); fixture.net.mockReset(); fixture.native.mockReset(); fixture.listeners.clear(); });
+afterEach(() => { cleanup(); window.removeEventListener('lumi:knowledge-updated', notification); vi.unstubAllGlobals(); vi.clearAllMocks(); fixture.net.mockReset(); fixture.listeners.clear(); });
 
-it.each(['files', 'paths'])('isolates late %s results across account and organization changes', async kind => {
+it.each(['files', 'drop'])('isolates late %s results across account and organization changes', async kind => {
   const view = render(root()); await ready();
   for (const scope of ['uid', 'orgId'] as const) {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Old account draft' } });
@@ -64,15 +55,16 @@ it.each(['files', 'paths'])('isolates late %s results across account and organiz
     await act(async () => { current.resolve(uploaded(`new-${scope}.txt`)); });
     expect(await screen.findByText(`new-${scope}.txt`)).toBeTruthy(); expect(attachButton().disabled).toBe(false);
     const body = current.init.body;
-    if (kind === 'files') { expect((body as FormData).get('orgId')).toBe(fixture.orgId); expect((body as FormData).get('domain')).toBe('work'); }
-    else { expect(current.url).toContain(`orgId=${fixture.orgId}`); expect(current.init.headers).toMatchObject({ 'X-Lumi-Desktop-Import': 'file-drop' }); }
+    expect(body).toBeInstanceOf(FormData);
+    expect((body as FormData).get('orgId')).toBe(fixture.orgId); expect((body as FormData).get('domain')).toBe('work');
+    expect(current.url).toBe('/api/files/upload');
   }
 });
 
-it.each(['files', 'paths'])('serializes %s with the other upload entry and blocks sending until receipt', async kind => {
+it.each(['files', 'drop'])('serializes %s with the other upload entry and blocks sending until receipt', async kind => {
   render(root()); await ready();
   fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Use this document' } });
-  act(() => { importFile(kind); importFile(kind === 'files' ? 'paths' : 'files', 'duplicate.txt'); fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' }); });
+  act(() => { importFile(kind); importFile(kind === 'files' ? 'drop' : 'files', 'duplicate.txt'); fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' }); });
   expect(requests).toHaveLength(1); expect(fixture.emit).not.toHaveBeenCalled();
   await act(async () => { requests[0].resolve(uploaded('selected.txt')); });
   fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
@@ -80,7 +72,7 @@ it.each(['files', 'paths'])('serializes %s with the other upload entry and block
   expect(fixture.emit.mock.calls[0][1]).toMatchObject({ orgId: fixture.orgId, attachments: [{ fileId: 'selected.txt', content: 'synthetic document' }] });
 });
 
-it.each(['files', 'paths'])('cancels %s on conversation rollover and closure without carrying pending files', async kind => {
+it.each(['files', 'drop'])('cancels %s on conversation rollover and closure without carrying pending files', async kind => {
   render(root()); await ready();
   act(() => importFile(kind)); const old = requests.at(-1)!;
   act(() => event('chat:conversation_updated', { agentId: 'lumi', conversationId: 'next-conversation', previousConversationId: conversation(), rolledOver: true }));
@@ -94,7 +86,7 @@ it.each(['files', 'paths'])('cancels %s on conversation rollover and closure wit
   await act(async () => { closing.resolve(uploaded('closing.txt')); }); expect(screen.queryByText('closing.txt')).toBeNull();
 });
 
-it.each(['files', 'paths'])('keeps %s valid across language changes, handles failure and cancels on unmount', async kind => {
+it.each(['files', 'drop'])('keeps %s valid across language changes, handles failure and cancels on unmount', async kind => {
   const view = render(<StrictMode>{root()}</StrictMode>); await ready();
   act(() => importFile(kind)); const first = requests.at(-1)!;
   fixture.langCode = 'zh'; view.rerender(<StrictMode>{root()}</StrictMode>);
@@ -110,7 +102,7 @@ it.each(['files', 'paths'])('keeps %s valid across language changes, handles fai
 it('does not let a late initial conversation lookup rebind or cancel a newer upload', async () => {
   const initial = deferred(), transport = fixture.net.getMockImplementation()!;
   fixture.net.mockImplementation((url: string, init?: RequestInit) => url.includes('/active?') ? initial.promise : transport(url, init));
-  render(root()); await waitFor(() => expect(fixture.drops.size).toBe(1));
+  render(root()); await waitFor(() => expect(fixture.net).toHaveBeenCalled());
   act(() => event('chat:conversation_updated', { agentId: 'lumi', conversationId: 'accepted-conversation' }));
   await ready('accepted-conversation'); act(() => importFile('files', 'current.txt')); const current = requests.at(-1)!;
   await act(async () => { initial.resolve(reply({ activeConversation: { id: 'stale-conversation' } })); });

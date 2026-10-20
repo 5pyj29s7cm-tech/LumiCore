@@ -11,6 +11,10 @@ import path from 'path';
 import crypto from 'crypto';
 import { getKey } from '../config/keys';
 import { getDataDirectory } from '../config/data_path';
+import { requireLocalEndpoint } from '../config/privacy';
+import { mcpManager } from '../mcp/client';
+import { CN_QICHACHA_QUERY_COPY } from '../regions/packs/cn/qichacha_copy';
+import { CN_ASSET_TRACE_SOURCE_COPY } from '../regions/packs/cn/legal_asset_trace_sources';
 
 // ── Cache ───────────────────────────────────────────────────────────────
 
@@ -61,14 +65,14 @@ function readSecret(name: keyof import('../config/keys').KeyStore): string {
 }
 
 function qichachaConfig() {
-  const appKey = readSecret('QICHACHA_APP_KEY') || readSecret('QICHACHA_API_KEY');
+  const apiKey = readSecret('QICHACHA_API_KEY');
+  const appKey = readSecret('QICHACHA_APP_KEY');
   const secretKey = readSecret('QICHACHA_SECRET_KEY');
   const baseUrl = (readSecret('QICHACHA_BASE_URL') || 'https://api.qichacha.com').replace(/\/+$/, '');
   return {
-    appKey,
-    secretKey,
-    baseUrl,
-    configured: Boolean(appKey && secretKey),
+    apiKey, appKey, secretKey, baseUrl,
+    configured: Boolean(apiKey || (appKey && secretKey)),
+    mcpConfigured: Boolean(apiKey),
   };
 }
 
@@ -79,6 +83,16 @@ function tianyanchaConfig() {
     apiKey,
     baseUrl,
     configured: Boolean(apiKey),
+  };
+}
+
+function tenderDataConfig() {
+  const apiKey = readSecret('TENDER_DATA_API_KEY');
+  const baseUrl = readSecret('TENDER_DATA_BASE_URL').replace(/\/+$/, '');
+  return {
+    apiKey,
+    baseUrl,
+    configured: Boolean(apiKey && baseUrl),
   };
 }
 
@@ -110,6 +124,7 @@ function faruiConfig() {
 }
 
 export function listLegalSourceCapabilities(): LegalSourceCapability[] {
+  const tenderData = tenderDataConfig();
   const qcc = qichachaConfig();
   const tyc = tianyanchaConfig();
   const pkulaw = pkulawConfig();
@@ -123,11 +138,11 @@ export function listLegalSourceCapabilities(): LegalSourceCapability[] {
       canAutoQuery: qcc.configured,
       requiresAuthorization: true,
       boundary: qcc.configured
-        ? '已配置官方 API 凭证时，可按授权额度查询企业信息；不得超出合同、套餐和用途限制。'
+        ? (qcc.mcpConfigured ? CN_QICHACHA_QUERY_COPY.mcpBoundary : '已配置官方 API 凭证时，可按授权额度查询企业信息；不得超出合同、套餐和用途限制。')
         : '尚未配置官方 API 凭证，只能使用授权网页登录协作。不能承诺自动抓取或批量同步。',
       nextAction: qcc.configured
         ? '可直接调用 legal_trace_assets / legal_equity_penetration 进行 API 查询，并保存来源时间。'
-        : '配置 QICHACHA_APP_KEY 与 QICHACHA_SECRET_KEY，或使用 web_login_run 打开 qichacha 登录页。',
+        : CN_QICHACHA_QUERY_COPY.unconfiguredNextAction,
     },
     {
       id: 'tianyancha',
@@ -142,6 +157,20 @@ export function listLegalSourceCapabilities(): LegalSourceCapability[] {
       nextAction: tyc.configured
         ? '可通过 legal_company_database_lookup / legal_trace_assets 查询企业信息，并将律师确认结果入库。'
         : '配置 TIANYANCHA_API_KEY；如供应商提供专属网关，可同时配置 TIANYANCHA_BASE_URL。',
+    },
+    {
+      id: 'tender-data',
+      label: CN_ASSET_TRACE_SOURCE_COPY.tenderData.label,
+      accessMode: 'api',
+      configured: tenderData.configured,
+      canAutoQuery: tenderData.configured,
+      requiresAuthorization: true,
+      boundary: tenderData.configured
+        ? CN_ASSET_TRACE_SOURCE_COPY.tenderData.configuredBoundary
+        : CN_ASSET_TRACE_SOURCE_COPY.tenderData.unconfiguredBoundary,
+      nextAction: tenderData.configured
+        ? CN_ASSET_TRACE_SOURCE_COPY.tenderData.configuredNextAction
+        : CN_ASSET_TRACE_SOURCE_COPY.tenderData.unconfiguredNextAction,
     },
     {
       id: 'pkulaw',
@@ -545,12 +574,15 @@ export interface CompanyInfo {
   shareholders: { name: string; ratio: number; type: string }[];
   branches: string[];
   riskInfo: {
-    enforcementCount: number;
-    dishonestyCount: number;
-    restrictionsCount: number;
+    enforcementCount: number | null;
+    dishonestyCount: number | null;
+    restrictionsCount: number | null;
   };
   url: string;
-  sourceMode?: 'api' | 'authorized_browser' | 'manual';
+  sourceMode?: 'api' | 'mcp' | 'authorized_browser' | 'manual';
+  sourceText?: string;
+  sourceTool?: string;
+  sourceEndpoint?: string;
   sourceName?: string;
   queriedAt?: string;
 }
@@ -577,19 +609,25 @@ function pickQichachaResult(data: any): any {
   return result || data;
 }
 
+function riskCount(raw: any, keys: string[]): number | null {
+  const value = firstString(raw, keys), count = Number(value);
+  return value && Number.isSafeInteger(count) && count >= 0 ? count : null;
+}
+
 function mapQichachaCompany(raw: any, keyword: string): CompanyInfo | null {
   if (!raw || typeof raw !== 'object') return null;
-  const name = raw.Name || raw.name || raw.CompanyName || raw.companyName || raw.KeyNo || keyword;
+  const name = firstString(raw, ['企业名称', 'Name', 'name', 'CompanyName', 'companyName']); // i18n-allow: official provider JSON property names, not display copy.
+  if (!name) return null;
   const keyNo = raw.KeyNo || raw.keyNo || raw.No || raw.id || encodeURIComponent(keyword);
   return {
     name,
-    legalPerson: raw.OperName || raw.legalPersonName || raw.LegalPerson || raw.operName || '',
-    registeredCapital: raw.RegistCapi || raw.registeredCapital || raw.RegisteredCapital || '',
-    status: raw.Status || raw.regStatus || raw.StatusCode || raw.status || '',
-    establishDate: raw.StartDate || raw.establishDate || raw.EstablishDate || '',
-    unifiedCode: raw.CreditCode || raw.unifiedCode || raw.CreditNo || raw.No || '',
-    address: raw.Address || raw.address || '',
-    businessScope: raw.Scope || raw.businessScope || raw.BusinessScope || '',
+    legalPerson: raw['法定代表人'] || raw.OperName || raw.legalPersonName || raw.LegalPerson || raw.operName || '', // i18n-allow: official provider JSON property names, not display copy.
+    registeredCapital: raw['注册资本'] || raw.RegistCapi || raw.registeredCapital || raw.RegisteredCapital || '', // i18n-allow: official provider JSON property names, not display copy.
+    status: raw['登记状态'] || raw.Status || raw.regStatus || raw.StatusCode || raw.status || '', // i18n-allow: official provider JSON property names, not display copy.
+    establishDate: raw['成立日期'] || raw.StartDate || raw.establishDate || raw.EstablishDate || '', // i18n-allow: official provider JSON property names, not display copy.
+    unifiedCode: raw['统一社会信用代码'] || raw.CreditCode || raw.unifiedCode || raw.CreditNo || raw.No || '', // i18n-allow: official provider JSON property names, not display copy.
+    address: raw['注册地址'] || raw.Address || raw.address || '', // i18n-allow: official provider JSON property names, not display copy.
+    businessScope: raw['经营范围'] || raw.Scope || raw.businessScope || raw.BusinessScope || '', // i18n-allow: official provider JSON property names, not display copy.
     shareholders: (raw.Shareholders || raw.shareholders || raw.Partners || []).map((s: any) => ({
       name: s.Name || s.name || s.StockName || '',
       ratio: Number.parseFloat(String(s.Ratio || s.ratio || s.StockPercent || 0)) || 0,
@@ -597,9 +635,9 @@ function mapQichachaCompany(raw: any, keyword: string): CompanyInfo | null {
     })),
     branches: raw.Branches || raw.branches || [],
     riskInfo: {
-      enforcementCount: Number(raw.EnforcementCount || raw.enforcementCount || raw.ZhiXingCount || 0),
-      dishonestyCount: Number(raw.DishonestyCount || raw.dishonestyCount || raw.ShiXinCount || 0),
-      restrictionsCount: Number(raw.RestrictionsCount || raw.restrictionsCount || raw.XianGaoCount || 0),
+      enforcementCount: riskCount(raw, ['EnforcementCount', 'enforcementCount', 'ZhiXingCount']),
+      dishonestyCount: riskCount(raw, ['DishonestyCount', 'dishonestyCount', 'ShiXinCount']),
+      restrictionsCount: riskCount(raw, ['RestrictionsCount', 'restrictionsCount', 'XianGaoCount']),
     },
     url: `https://www.qcc.com/firm/${keyNo}.html`,
     sourceMode: 'api',
@@ -608,13 +646,72 @@ function mapQichachaCompany(raw: any, keyword: string): CompanyInfo | null {
   };
 }
 
-async function searchQichachaCompany(keyword: string): Promise<CompanyInfo | null> {
-  const ck = cacheKey('qcc', keyword);
+export const QICHACHA_QUERY_TOOLS = {
+  registration: ['company', 'get_company_registration_info'], shareholders: ['company', 'get_shareholder_info'],
+  controller: ['company', 'get_actual_controller'], risk: ['risk', 'get_company_risk_scan'],
+  enforcement: ['risk', 'get_judgment_debtor_info'], dishonesty: ['risk', 'get_dishonest_info'],
+  restrictions: ['risk', 'get_high_consumption_restriction'],
+} as const;
+export type QichachaQueryType = keyof typeof QICHACHA_QUERY_TOOLS;
+export type ExternalSourceReceipt = { sourceName: string; sourceEndpoint: string; sourceTool: string; queriedAt: string; text: string };
+
+function qichachaFailure(code: keyof typeof CN_QICHACHA_QUERY_COPY.failureMessages): Error {
+  return new Error(CN_QICHACHA_QUERY_COPY.failurePrefix + ' [QCC_' + code.toUpperCase() + ']: ' + CN_QICHACHA_QUERY_COPY.failureMessages[code]);
+}
+
+async function callQichachaMcp(lane: 'company' | 'risk' | 'case' | 'regulation', tool: string, args: Record<string, unknown>, localOnly = false): Promise<ExternalSourceReceipt | null> {
+  const apiKey = qichachaConfig().apiKey;
+  if (!apiKey) return null;
+  const sourceEndpoint = 'https://agent.qcc.com/mcp/' + lane + '/stream';
+  requireLocalEndpoint(sourceEndpoint, 'Qichacha MCP', localOnly);
+  let text: string;
+  try {
+    text = await mcpManager.callToolForServer('qcc-' + lane, tool, args, { timeoutMs: 15000,
+      configuration: { enabled: true, source: 'external', transport: 'http', url: sourceEndpoint,
+        headers: { Authorization: /^Bearer\s/i.test(apiKey) ? apiKey : 'Bearer ' + apiKey } } });
+  } catch (error) {
+    // Classify transport failures without reflecting raw messages, URLs or credentials.
+    const failure = error as { status?: unknown; statusCode?: unknown; name?: unknown; message?: unknown };
+    const status = Number(failure?.status ?? failure?.statusCode);
+    const detail = String(failure?.message || '');
+    throw qichachaFailure(status === 401 || status === 403 || /\b(?:401|403|unauthorized|forbidden)\b/i.test(detail)
+      ? 'authorization' : /timeout|timed out|abort/i.test(String(failure?.name || '') + ' ' + detail) ? 'timeout' : 'connection');
+  }
+  let data: any;
+  try { data = JSON.parse(text); } catch { throw qichachaFailure('response'); }
+  const code = data?.code ?? data?.Code ?? data?.Status;
+  if (!data || data.error || data.Error || data.isError === true || (code !== undefined && !['0', '200'].includes(String(code)))) {
+    throw qichachaFailure(['401', '403'].includes(String(code)) ? 'authorization' : 'provider');
+  }
+  const payload = data.Result ?? data.result ?? data.Data ?? data.data ?? data;
+  const meaningful = Array.isArray(payload) ? payload.some(item => item && typeof item === 'object' && Object.keys(item).length)
+    : payload && typeof payload === 'object' && Object.keys(payload).some(key => !['code', 'status', 'message', 'msg'].includes(key.toLowerCase()));
+  if (!meaningful) throw qichachaFailure('empty');
+  return { sourceName: CN_QICHACHA_QUERY_COPY.mcpSourceName, sourceEndpoint, sourceTool: tool, queriedAt: new Date().toISOString(), text };
+}
+
+export async function queryQichachaMcp(searchKey: string, kind: QichachaQueryType = 'registration', localOnly = false): Promise<ExternalSourceReceipt | null> {
+  const target = Object.hasOwn(QICHACHA_QUERY_TOOLS, kind) ? QICHACHA_QUERY_TOOLS[kind] : undefined;
+  return target ? callQichachaMcp(target[0], target[1], { searchKey }, localOnly) : null;
+}
+
+async function searchQichachaCompany(keyword: string, localOnly = false): Promise<CompanyInfo | null> {
+  const settings = qichachaConfig();
+  if (settings.mcpConfigured) {
+    const receipt = await queryQichachaMcp(keyword, 'registration', localOnly);
+    if (!receipt) return null;
+    const info = mapQichachaCompany(pickQichachaResult(JSON.parse(receipt.text)), keyword);
+    if (!info) throw qichachaFailure('response');
+    return { ...info, sourceMode: 'mcp', sourceName: receipt.sourceName, sourceTool: receipt.sourceTool,
+      sourceEndpoint: receipt.sourceEndpoint, queriedAt: receipt.queriedAt, sourceText: receipt.text, url: 'https://www.qcc.com/' };
+  }
+  if (!settings.appKey || !settings.secretKey) return null;
+  const ck = cacheKey('qcc-risk-v2', keyword);
   const cached = readCache(ck, 6 * 60 * 60 * 1000);
   if (cached) return cached;
 
   const config = qichachaConfig();
-  if (config.configured) {
+  if (config.appKey && config.secretKey) {
     try {
       const endpoint = `${config.baseUrl}/ECIV4/GetBasicDetailsByName?key=${encodeURIComponent(keyword)}`;
       const res = await fetch(endpoint, {
@@ -674,9 +771,9 @@ function mapTianyanchaCompany(raw: any, keyword: string): CompanyInfo | null {
     })),
     branches: raw.branches || raw.branchList || [],
     riskInfo: {
-      enforcementCount: Number(raw.zhixingCount || raw.enforcementCount || raw.executeCount || 0),
-      dishonestyCount: Number(raw.shixinCount || raw.dishonestyCount || 0),
-      restrictionsCount: Number(raw.xiangaoCount || raw.restrictionsCount || 0),
+      enforcementCount: riskCount(raw, ['zhixingCount', 'enforcementCount', 'executeCount']),
+      dishonestyCount: riskCount(raw, ['shixinCount', 'dishonestyCount']),
+      restrictionsCount: riskCount(raw, ['xiangaoCount', 'restrictionsCount']),
     },
     url: raw.url || `https://www.tianyancha.com/company/${id}`,
     sourceMode: 'api',
@@ -688,7 +785,7 @@ function mapTianyanchaCompany(raw: any, keyword: string): CompanyInfo | null {
 async function searchTianyanchaCompany(keyword: string): Promise<CompanyInfo | null> {
   const config = tianyanchaConfig();
   if (!config.configured) return null;
-  const ck = cacheKey('tianyancha', keyword);
+  const ck = cacheKey('tianyancha-risk-v2', keyword);
   const cached = readCache(ck, 6 * 60 * 60 * 1000);
   if (cached) return cached;
 
@@ -709,17 +806,25 @@ async function searchTianyanchaCompany(keyword: string): Promise<CompanyInfo | n
   return info;
 }
 
-export async function searchCompanySources(keyword: string, sourceIds?: string[]): Promise<CompanyInfo[]> {
+export async function searchCompanySources(keyword: string, sourceIds?: string[], options: { localOnly?: boolean; sourceErrors?: string[] } = {}): Promise<CompanyInfo[]> {
+  requireLocalEndpoint('https://agent.qcc.com', 'External company query', options.localOnly);
   const results: CompanyInfo[] = [];
+  const sourceErrors = options.sourceErrors || [];
   if (isSelectedSource(sourceIds, 'qichacha', ['qcc', '企查查'])) {
-    const qcc = await searchQichachaCompany(keyword);
-    if (qcc) results.push(qcc);
+    try {
+      const qcc = await searchQichachaCompany(keyword, options.localOnly);
+      if (qcc) results.push(qcc);
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('[QCC_')) throw error;
+      sourceErrors.push(error.message);
+    }
   }
   if (isSelectedSource(sourceIds, 'tianyancha', ['tyc', '天眼查'])) {
     const tyc = await searchTianyanchaCompany(keyword);
     if (tyc) results.push(tyc);
   }
 
+  if (!results.length && sourceErrors.length && !options.sourceErrors) throw new Error(sourceErrors.join('\n'));
   const seen = new Set<string>();
   return results.filter(item => {
     const key = `${item.sourceName}:${item.unifiedCode || item.name}`;
@@ -729,9 +834,89 @@ export async function searchCompanySources(keyword: string, sourceIds?: string[]
   });
 }
 
-export async function searchCompany(keyword: string): Promise<CompanyInfo | null> {
-  const results = await searchCompanySources(keyword);
+export async function searchCompany(keyword: string, options: { localOnly?: boolean; sourceErrors?: string[] } = {}): Promise<CompanyInfo | null> {
+  const results = await searchCompanySources(keyword, undefined, options);
   return results[0] || null;
+}
+
+export interface TenderProjectInfo {
+  sourceId: string;
+  sourceName: string;
+  title: string;
+  projectNumber: string;
+  purchaser: string;
+  bidder: string;
+  amount: string;
+  publishDate: string;
+  status: string;
+  region: string;
+  url: string;
+  queriedAt: string;
+  raw?: any;
+}
+
+function mapTenderProject(raw: any): TenderProjectInfo | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const title = firstString(raw, [
+    'title', 'Title', 'projectName', 'ProjectName', 'noticeTitle', 'bulletinTitle', 'name',
+  ]);
+  if (!title) return null;
+  return {
+    sourceId: 'tender-data',
+    sourceName: CN_ASSET_TRACE_SOURCE_COPY.tenderData.apiSourceName,
+    title,
+    projectNumber: firstString(raw, ['projectNumber', 'projectNo', 'code', 'noticeCode', 'bidNo']),
+    purchaser: firstString(raw, ['purchaser', 'buyer', 'buyerName', 'tenderee', 'tenderer', 'ownerName']),
+    bidder: firstString(raw, ['bidder', 'supplier', 'supplierName', 'winner', 'winnerName', 'bidWinner']),
+    amount: firstString(raw, ['amount', 'bidAmount', 'winningAmount', 'dealAmount', 'budgetAmount']),
+    publishDate: formatMaybeDate(firstString(raw, ['publishDate', 'publishedAt', 'noticeDate', 'date'])),
+    status: firstString(raw, ['status', 'projectStatus', 'noticeType', 'type']),
+    region: firstString(raw, ['region', 'area', 'province', 'location']),
+    url: firstString(raw, ['url', 'detailUrl', 'sourceUrl', 'link']),
+    queriedAt: new Date().toISOString(),
+    raw,
+  };
+}
+
+export async function searchTenderSources(params: {
+  keyword: string;
+  sourceIds?: string[];
+  limit?: number;
+}): Promise<TenderProjectInfo[]> {
+  const keyword = params.keyword.trim();
+  if (!keyword) return [];
+  if (!isSelectedSource(params.sourceIds, 'tender-data', ['tender', 'bid', '招投标数据网关'])) return []; // i18n-allow: reviewed provider aliases for source selection.
+
+  const config = tenderDataConfig();
+  if (!config.configured) return [];
+  const limit = Math.max(1, Math.min(Number(params.limit) || 10, 50));
+  const ck = cacheKey('tender-data', crypto.createHash('sha256').update(JSON.stringify({ keyword, limit, baseUrl: config.baseUrl })).digest('hex'));
+  const cached = readCache(ck, 30 * 60 * 1000);
+  if (cached) return cached;
+
+  const endpoint = appendQuery(config.baseUrl, {
+    q: keyword,
+    query: keyword,
+    keyword,
+    limit,
+  });
+  const authValue = /^bearer\s+/i.test(config.apiKey) ? config.apiKey : `Bearer ${config.apiKey}`;
+  const data = await fetchJsonWithTimeout(endpoint, {
+    headers: {
+      Accept: 'application/json',
+      Authorization: authValue,
+      'X-API-Key': config.apiKey,
+      Token: config.apiKey,
+    },
+  }, 10000);
+  if (!data) return [];
+
+  const rows = normalizeApiRows(data)
+    .map(mapTenderProject)
+    .filter((row): row is TenderProjectInfo => Boolean(row))
+    .slice(0, limit);
+  writeCache(ck, rows);
+  return rows;
 }
 
 // ── 全国法院被执行人信息 (zhixing.court.gov.cn) ───────────────────────
@@ -747,39 +932,8 @@ export interface EnforcementRecord {
   url: string;
 }
 
-export async function searchEnforcementRecords(subjectName: string): Promise<EnforcementRecord[]> {
-  const ck = cacheKey('zhixing', subjectName);
-  const cached = readCache(ck, 6 * 60 * 60 * 1000);
-  if (cached) return cached;
-
-  const results: EnforcementRecord[] = [];
-  const html = await fetchWithUA(
-    `https://zhixing.court.gov.cn/search/?searchType=1&name=${encodeURIComponent(subjectName)}`,
-    12000,
+export async function searchEnforcementRecords(_subjectName: string): Promise<EnforcementRecord[]> {
+  throw new Error(
+    'Enforcement records require an authorized webpage query and imported source evidence; no enforcement source has been obtained. An empty result cannot be inferred.',
   );
-
-  if (html) {
-    try {
-      const dataRe = /(?:var|const|let)\s+\w+\s*=\s*(\[[\s\S]*?\]);/;
-      const match = html.match(dataRe);
-      if (match) {
-        const list = JSON.parse(match[1]);
-        for (const item of list) {
-          results.push({
-            caseNumber: item.caseCode || item.caseNumber || '',
-            court: item.courtName || '',
-            filingDate: item.filingDate || item.executionDate || '',
-            subjectName: item.name || item.partyName || subjectName,
-            subjectType: item.type || item.partyType || '',
-            executionTarget: item.executionTarget || item.enforceAmount || '',
-            status: item.status || '',
-            url: `https://zhixing.court.gov.cn/detail?id=${item.id || ''}`,
-          });
-        }
-      }
-    } catch { /* parse failed */ }
-  }
-
-  writeCache(ck, results);
-  return results;
 }

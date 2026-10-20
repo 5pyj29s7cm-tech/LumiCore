@@ -1,8 +1,49 @@
 import type { ToolExecutionRecord } from '../tools/types';
 import fs from 'node:fs';
-import { artifactReadbackText, resolveArtifactDelivery } from '../tools/artifact_evidence';
+import { isExplicitArtifactCreationText, independentActionClauses } from './normalized_action_intent';
+import { requestedSingleArtifact } from './artifact_write_scope';
+import { buildTaskTargetAnchorProjection, canonicalPathIdentity } from '../conversation/task_target_anchor';
+import { withoutLocationLiterals } from './location_literals';
+import { artifactReadbackText, artifactPathFromRecord, isArtifactProducerRecord, sameArtifactPath, resolveArtifactDelivery } from '../tools/artifact_evidence';
 import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
 import { CN_EXECUTION_EVIDENCE_MESSAGES as CN } from "../regions/messages/execution_evidence_messages";
+
+
+/** Evidence only: keep independently named outputs and their original content apart. */
+export function requestedArtifactInstructions(input: string): Array<{ text: string; path: string }> {
+  const parts: string[] = [];
+  let start = 0, quote = '';
+  // i18n-allow: quote delimiters in user-supplied document content.
+  const pairs: Record<string, string> = { '“': '”', '‘': '’', '"': '"', "'": "'", '`': '`' };
+  for (let index = 0; index < input.length; index++) {
+    const char = input[index];
+    if (quote) { if (char === quote) quote = ''; continue; }
+    if (pairs[char] && !(char === "'" && /[a-z]/iu.test(input[index - 1] || '') && /[a-z]/iu.test(input[index + 1] || ''))) { quote = pairs[char]; continue; }
+    if (/[，,；;。\n]/u.test(char) || char === '.' && /\s|^$/u.test(input[index + 1] || '')) {
+      parts.push(input.slice(start, index + 1)); start = index + 1;
+    }
+  }
+  parts.push(input.slice(start));
+  const instructions: Array<{ text: string; path: string }> = [];
+  for (const part of parts) {
+    // Quoted document data is never another output instruction. A quoted
+    // concrete path remains a valid operand for its unquoted create verb.
+    // i18n-allow: quoted document payload recognition.
+    const probe = part.replace(/“[^”]*”|‘[^’]*’|"[^"]*"|'[^']*'|`[^`]*`/gu, literal => {
+      const value = literal.slice(1, -1).trim();
+      return buildTaskTargetAnchorProjection({ taskText: value }).target.path === value ? literal : ' ';
+    });
+    const affirmative = independentActionClauses(withoutLocationLiterals(probe).replace(/\bfor\s+example\b/giu, '例如'), true).length > 0; // i18n-allow: reuse the existing hypothetical-clause boundary.
+    const artifact = affirmative && isExplicitArtifactCreationText(probe) ? requestedSingleArtifact(probe) : null;
+    if (artifact) instructions.push({ text: part.trim(), path: artifact.path });
+    else if (affirmative && instructions.length) {
+      const referenced = buildTaskTargetAnchorProjection({ taskText: probe }).target.path;
+      if (!referenced || sameArtifactPath(referenced, instructions[instructions.length - 1].path)) instructions[instructions.length - 1].text += part;
+    }
+  }
+  const paths = new Set(instructions.map(item => canonicalPathIdentity(item.path)));
+  return paths.size > 1 || instructions.length === 1 ? instructions : [];
+}
 
 export interface ArtifactContentRequirement {
   kind: 'text' | 'section' | 'blank_section';
@@ -90,8 +131,11 @@ export function projectArtifactProgress(task: string, records: ToolExecutionReco
   readbackRequired: boolean; openRequired: boolean; openVerified: (path: string) => boolean;
   acceptsOutput: (path: string) => boolean;
 }) {
-  const delivery = resolveArtifactDelivery(records);
-  if (!delivery || !options.acceptsOutput(delivery.outputPath)) return null;
+  const instructions = requestedArtifactInstructions(task);
+  const target = instructions.length === 1 ? instructions[0].path : '';
+  const delivery = resolveArtifactDelivery(records, record => !record.error
+    && (!isArtifactProducerRecord(record) || (target ? sameArtifactPath(target, artifactPathFromRecord(record)) : options.acceptsOutput(artifactPathFromRecord(record)))));
+  if (!delivery) return null;
   const requirements = /\.(?:docx|pdf|txt|md|html?)$/iu.test(delivery.outputPath) ? artifactContentRequirements(task) : [];
   let content = delivery.readback ? artifactReadbackText(delivery.readback) : undefined;
   // The existing bounded plain-text writer can verify exact text directly

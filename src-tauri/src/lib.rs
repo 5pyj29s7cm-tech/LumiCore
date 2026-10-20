@@ -54,6 +54,7 @@ use crate::native_window_modes::toggle_desktop_widget_mode;
 use crate::native_window_modes::toggle_maximize_window;
 
 use serde::{Deserialize, Serialize};
+use tauri_plugin_dialog::DialogExt;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -100,6 +101,8 @@ struct BackendProcesses {
     node_restarts: u32,
     python_restarts: u32,
     node_config: Option<SpawnConfig>,
+    attached_pid: Option<u32>,
+    startup_error: Option<String>,
 }
 
 /// Track whether a wallpaper presentation is active and where to restore the
@@ -1227,6 +1230,8 @@ pub fn run() {
             node_restarts: 0,
             python_restarts: 0,
             node_config: None,
+            attached_pid: None,
+            startup_error: None,
         }))
         .manage(CommandSupervisor::default())
         .manage(Mutex::new(WallpaperState::default()))
@@ -1352,8 +1357,26 @@ pub fn run() {
                 }
             }
 
-            // In dev mode, the backend is started by beforeDevCommand; skip spawning Node.js
-            if cfg!(debug_assertions) {
+            // Reuse a verified same-root owner before considering a bundled child.
+            let reuse = local_bootstrap::reuse_existing_backend(&app.config().identifier);
+            let spawn_backend = match reuse {
+                Ok(Some(pid)) => {
+                    app.state::<Mutex<BackendProcesses>>().lock().unwrap().attached_pid = Some(pid);
+                    println!("[LumiCore] Attached to existing backend PID {pid}");
+                    false
+                }
+                Ok(None) => true,
+                Err(error) => {
+                    app.state::<Mutex<BackendProcesses>>().lock().unwrap().startup_error = Some(error.clone());
+                    eprintln!("[LumiCore] Existing backend was left running: {error}");
+                    app.dialog().message(error).title("Lumi — Shared backend unavailable")
+                        .kind(tauri_plugin_dialog::MessageDialogKind::Error).show(|_| {});
+                    false
+                }
+            };
+            if !spawn_backend {
+                // Attached/blocked clients own no child, restart loop or shutdown right.
+            } else if cfg!(debug_assertions) {
                 println!("[LumiCore] Dev mode — skipping bundled backend spawn");
             } else {
                 // ... rest of spawn code unchanged
@@ -1419,7 +1442,7 @@ pub fn run() {
             } // end else (release mode spawns backend)
 
             // ── Child process health check (release mode, checks every 5s) ──
-            if !cfg!(debug_assertions) {
+            if !cfg!(debug_assertions) && app.state::<Mutex<BackendProcesses>>().lock().unwrap().node.is_some() {
                 let app_handle = app.handle().clone();
                 std::thread::spawn(move || {
                     let max_restarts: u32 = 30;

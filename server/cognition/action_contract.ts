@@ -1,9 +1,10 @@
+import { requestedArtifactInstructions } from './artifact_progress';
 import { buildMediaGenerationContract } from './contracts/media_contract';
 import { isExplicitArtifactCreationText, isExternalCommitConfirmationOnlyRequest, normalizeActionIntent } from "./normalized_action_intent";
 import { isLegalEntryTurn, isRemoteLegalMessageTurn } from "./legal_entry";
 import type { ActionIntentAnalysis } from "./normalized_action_intent";
 import { hasExplicitNoToolInstruction, isInformationOnlyQuestion } from "./tool_intent";
-import { withoutNegatedLookupClauses, compositeNavigationInstructions } from "./normalized_action_intent";
+import { withoutNegatedLookupClauses, compositeNavigationInstructions, independentActionClauses, genericExternalCommit } from "./normalized_action_intent";
 import { withoutLocationLiterals } from "./location_literals";
 import { isAvatarAuthoringRequest } from "./media_creation_intent";
 import { classifyExternalCliIntent, isExternalCliDelegation } from "./external_cli_intent";
@@ -42,6 +43,13 @@ export { hasCoreActionEvidence } from './contracts/core_evidence';
 export { formatActionContractPrompt } from './contracts/prompt';
 export { summarizeActionContractBlocker } from './contracts/prompt';
 
+function combineActionContracts(primary: LumiActionContract, components: NonNullable<LumiActionContract['components']>): LumiActionContract {
+  const all = <K extends 'preferredTools' | 'verificationTools' | 'requiredEvidence'>(key: K) => Array.from(new Set(components.flatMap(item => item.contract[key])));
+  return { ...primary, components, preferredTools: all('preferredTools'), verificationTools: all('verificationTools'),
+    requiredEvidence: all('requiredEvidence'), coreAction: components.map(item => item.contract.coreAction).join('; '),
+    nextStep: 'Complete every requested operation and verify each one. One successful operation does not complete the whole request.' };
+}
+
 export function buildActionContract(input: string, acceptedIntent?: Readonly<ReturnType<typeof normalizeActionIntent>>, analysis?: ActionIntentAnalysis): LumiActionContract {
   const rawInput = String(input || '');
   const normalizedIntent = acceptedIntent || normalizeActionIntent(rawInput, analysis);
@@ -54,10 +62,7 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
   if (resolvedComponents.length > 1) {
     const primary = resolvedComponents.find(item => item.intent.kind === 'desktop_operation')!.contract;
     const components = resolvedComponents.map(({ text, contract }) => ({ text, contract }));
-    const all = <K extends 'preferredTools' | 'verificationTools' | 'requiredEvidence'>(key: K) => Array.from(new Set(components.flatMap(item => item.contract[key])));
-    return { ...primary, components, preferredTools: all('preferredTools'), verificationTools: all('verificationTools'),
-      requiredEvidence: all('requiredEvidence'), coreAction: components.map(item => item.contract.coreAction).join('; '),
-      nextStep: 'Complete every requested operation and verify each one. One successful operation does not complete the whole request.' };
+    return combineActionContracts(primary, components);
   }
   if (primaryTaskText && primaryTaskText.trim() !== rawInput.trim()) {
     const primaryContract = buildActionContract(primaryTaskText, undefined, analysis);
@@ -535,8 +540,28 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
  */
 export function buildActionEvidenceContract(input: string, analysis?: ActionIntentAnalysis,
   accepted?: { readonly taskText: string; readonly contract: LumiActionContract }): LumiActionContract {
-  if (accepted?.taskText === input) return accepted.contract;
-  const contract = buildActionContract(input, undefined, analysis);
+  const contract = accepted?.taskText === input ? accepted.contract : buildActionContract(input, undefined, analysis);
+  if (!contract.components?.length && contract.kind === 'artifact_work' && !hasExplicitNoToolInstruction(input) && !isInformationOnlyQuestion(input, analysis)) {
+    const artifacts = requestedArtifactInstructions(input);
+    if (artifacts.length > 1) return combineActionContracts(contract, artifacts.map(({ text }) => ({ text, contract: buildActionContract(text, undefined, analysis) })));
+  }
+  // This is completion evidence, never a positive execution grant. Keep an
+  // independent final commit even when the routing contract chose its input read.
+  const clauses = !contract.components?.length && !hasExplicitNoToolInstruction(input) && !isInformationOnlyQuestion(input, analysis)
+    ? independentActionClauses(extractPrimaryTaskText(input) || input, true) : [];
+  if (clauses.length > 1) {
+    const parts = clauses.map(text => ({ text, intent: genericExternalCommit(withoutLocationLiterals(text), true) }));
+    if (parts.some(item => item.intent)) {
+      const components = parts.map(({ text, intent }) => ({ text, contract: intent
+        ? withDefaults({ kind: 'external_commit', label: 'External final action', coreAction: text,
+            preparationIsNotCompletion: ['Reading the input', 'Preparing a document or proposal'],
+            requiredEvidence: ['Dedicated exact confirmed external-action terminal receipt'], preferredTools: [], verificationTools: [],
+            nextStep: 'Keep this action unverified until its dedicated capability confirms the exact final result.',
+            caution: 'A generic successful tool receipt cannot verify a signature, payment, publication or submission.' })
+        : buildActionContract(text, undefined, analysis) })).filter(item => item.contract.applies);
+      if (components.length > 1) return combineActionContracts(components.find(item => item.contract.kind !== 'external_commit')?.contract || contract, components);
+    }
+  }
   if (contract.applies || !isRuntimeCleanupOfferAcceptanceText(compact(input))) {
     return contract;
   }

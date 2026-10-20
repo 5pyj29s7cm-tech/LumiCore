@@ -261,7 +261,7 @@ export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited
     flow: turnFlow,
     capabilitySelection,
     actionIntent: executionPipeline.normalizedIntent,
-    taskId: executionPipeline.taskRelation.taskId || context.requestId,
+    taskId: executionPipeline.taskRelation.taskId,
   });
   const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
   const routedToolPolicy = executionPipeline.authorizationPolicy;

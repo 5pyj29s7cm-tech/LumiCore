@@ -93,7 +93,7 @@ describe('unified execution pipeline', () => {
     const pipeline = buildLumiExecutionPipeline(input);
     expect(pipeline.executionRequested).toBe(true);
     expect(pipeline.modelToolProjection.toolNames).toEqual(['model_configuration_get']);
-    expect(pipeline.capabilityPlan.taskLedgerRequired).toBe(true);
+    expect(pipeline.capabilityPlan.taskLedgerRequired).toBe(false);
     const blocked = buildLumiExecutionPipeline({ ...input, dispatch: { ...input.dispatch, text: '不要调用工具，只说说什么是大语言模型。' } });
     expect(blocked.executionRequested).toBe(false);
   });
@@ -128,7 +128,11 @@ describe('unified execution pipeline', () => {
     const statusText = '刚才报表实际改好了吗？新总额多少？只根据已经保存的结果回答，不要重新操作文件。';
     const status = buildLumiExecutionPipeline({ dispatch: { userId: 'report-edit-after-status', channel, source: channel,
       operationMode: 'assistant', text: statusText, targetIsLumi: true }, registry: createRegistry() });
-    expect(status.executionRequested).toBe(false);
+    expect(status.executionRequested).toBe(true);
+    expect(status.capabilityPlan.taskLedgerRequired).toBe(false);
+    expect(status.authorizationPolicy.forbiddenTools).toContain('modify_xlsx');
+    expect(status.authorizationPolicy.forbiddenTools).toContain('write_file');
+    expect(status.modelToolProjection.toolNames).toContain('read_xlsx');
     }
   });
   it.each(['chat', 'voice'] as const)('retains browser session inspection after a bound %s confirmation', channel => {
@@ -190,13 +194,18 @@ describe('unified execution pipeline', () => {
     expect(blocked.authorizationPolicy.forbiddenTools).toContain('write_file');
     expect(blocked.authorizationPolicy.forbiddenTools).toContain('capture_recent_workflow');
   });
-  it.each(['chat', 'voice'] as const)('does not open %s execution for a memory question with forbidden search', channel => {
+  it.each(['chat', 'voice'] as const)('keeps saved-memory recall available without turning a forbidden history lookup into an action for %s', channel => {
     const text = '你还记得岚桥记忆复核项目的专用标记和资料盒位置吗？如果没有已保存的记忆，请直接说不知道，不要猜测或搜索聊天记录。';
     const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'memory-lookup-only', channel,
       source: 'local_acceptance_harness', operationMode: 'assistant', text, targetIsLumi: true }, registry: createRegistry(),
       personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 } });
-    expect({ allow: pipeline.turnIntent.flow.allowToolUseForTurn, boundary: pipeline.turnIntent.boundary,
-      action: pipeline.executionRequested, trace: pipeline.intentTrace }).toMatchObject({ allow: false, action: false, boundary: 'conversation' });
+    expect(pipeline.turnIntent.flow.allowToolUseForTurn).toBe(true);
+    expect(pipeline.capabilityPlan.taskLedgerRequired).toBe(false);
+    expect(pipeline.trustedActionContinuation).toBe(false);
+    expect(pipeline.resolution.userText).toBe(text);
+    expect(pipeline.turnIntent.flow.acceptedActionContract?.contract.kind).toBe('none');
+    expect(pipeline.modelToolProjection.toolNames).not.toContain('wechat_read_recent_chat');
+    expect(pipeline.modelToolProjection.toolNames).not.toContain('external_ai_history_query');
     expect(pipeline.turnIntent.flow.completionEvidenceNeeded).toBe(false);
     expect(finalizeLumiResponse({ taskText: text, responseText: '我不知道，没有找到对应的已保存记忆。', source: channel, toolRecords: [], flow: pipeline.turnIntent.flow }).blocked).toBe(false);
   });
@@ -439,7 +448,7 @@ describe('unified execution pipeline', () => {
     expect(pipeline.turnIntent.flow.routeText).toContain('AutoCAD');
     expect(pipeline.execution.allowToolUse).toBe(true);
     expect(pipeline.capabilityPlan.schemaVersion).toBe(1);
-    expect(pipeline.capabilityPlan.taskLedgerRequired).toBe(true);
+    expect(pipeline.capabilityPlan.taskLedgerRequired).toBe(false);
     expect(pipeline.capabilityPlan.capabilityIds.length).toBeGreaterThan(0);
     expect(pipeline.executionPlan).toBeUndefined();
     expect(pipeline.modelToolProjection.toolNames).toContain('desktop_open');
@@ -502,9 +511,9 @@ describe('unified execution pipeline', () => {
 
     // The operation mode is an authorization ceiling, not permission to
     // execute an action in a conversational turn.
-    expect(pipeline.execution.allowToolUse).toBe(false);
-    expect(pipeline.turnIntent.flow.allowToolUseForTurn).toBe(false);
-    expect(pipeline.executionRequested).toBe(false);
+    expect(pipeline.execution.allowToolUse).toBe(true);
+    expect(pipeline.turnIntent.flow.allowToolUseForTurn).toBe(true);
+    expect(pipeline.executionPlan).toBeUndefined();
     expect(pipeline.trustedActionContinuation).toBe(false);
     expect(pipeline.capabilityPlan.taskLedgerRequired).toBe(false);
   });
@@ -681,7 +690,12 @@ it.each(['chat', 'voice', 'task'] as const)('keeps new and stale %s plans separa
     expect(result.taskRelation.taskId, JSON.stringify({ text, relation: result.taskRelation })).toBe(state.taskId);
     expect(result.executionPlan).toBeUndefined();
     if (text === '继续') expect(result.trustedActionContinuation).toBe(true);
-    else expect(result.executionRequested).toBe(false);
+    else {
+      expect(result.executionRequested).toBe(true);
+      expect(result.trustedActionContinuation).toBe(false);
+      expect(result.turnIntent.flow.acceptedActionContract?.taskText).toBe(text);
+      expect(result.turnIntent.flow.acceptedActionContract?.contract.kind).toBe('none');
+    }
   }
   const owned = buildLumiExecutionPipeline({ ...input, taskId: 'new-owned-task', dispatch: { ...input.dispatch, text: '新建 D:/new-note.txt，写入新的独立内容。' } });
   expect(owned.taskId).toBe('new-owned-task');

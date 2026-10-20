@@ -106,7 +106,8 @@ export async function parseDocument(filePath: string, options: { password?: stri
       return { text: parseText(filePath), format };
     }
     return { text: parseText(filePath), format: 'text' };
-  } catch {
+  } catch (error) {
+    if (error instanceof PdfPasswordError) throw error;
     return null;
   }
 }

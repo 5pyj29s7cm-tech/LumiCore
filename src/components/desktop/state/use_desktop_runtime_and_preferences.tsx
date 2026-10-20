@@ -15,7 +15,7 @@ import type { useDesktopCaptureAndIdentity } from './use_desktop_capture_and_ide
 import { IDLE_AWAY_SECONDS, RETURN_IDLE_SECONDS } from './shared';
 
 export function useDesktopRuntimeAndPreferences(previousBindings: ReturnType<typeof useDesktopCaptureAndIdentity>) {
-  const { isTauri, wakeEnabled, sensorPrimerSeen, setClientPermissions, setClientRuntime, closeToBackgroundSyncRef, socket, startCallRef, selectedVoiceId, voiceScopeOptions, ownerVoiceGateOpen, callState, interrupt, backgroundFaceRecognitionOptedIn, cameraAccessEnabled, workDomain, voiceprint, user, isMuted, volume, callError, meetingStartedAt, legalMeetingCaseTitle, meetingReport, meetingReportGenerating, meetingNotes, formatMeetingNoteForExport, lang, meetingIdentityRef, setMeetingReport, meetingStorageKeys, setMeetingReportGenerating, orgConnection, aiConfig, lastLegalMeetingArchiveRef, setLegalMeetingCaseTitle, waitForMeetingRefinement, stopMeetingAudio, setMeetingNotesOpen, operationMode, endCall, setMeetingPaused, meetingVoiceActiveRef, meetingStartAttemptRef, setOperationMode, meetingPaused, renewMeetingIdentity, createMeetingRecord, selectMeetingRecord, importMeetingRecords, meetingHistoryReadOnly, meetingRecordId, meetingNotesOpen, setPendingOperationMode, pendingOperationMode, knowledgeRefreshSequenceRef, setKnowledgeRuntimeState, setOrganizationWorkspaceView, surfaceReturnTargetRef, windowCommand, dismissUtilitySurfaces, setActiveTab, openCommandCenter, setVolume } = previousBindings;
+  const { isTauri, wakeEnabled, sensorPrimerSeen, setClientPermissions, setClientRuntime, closeToBackgroundSyncRef, socket, startCallRef, ownerVoiceGateOpen, callState, interrupt, backgroundFaceRecognitionOptedIn, cameraAccessEnabled, workDomain, voiceprint, user, isMuted, volume, callError, meetingStartedAt, legalMeetingCaseTitle, meetingReport, meetingReportGenerating, meetingNotes, formatMeetingNoteForExport, lang, meetingIdentityRef, setMeetingReport, meetingStorageKeys, setMeetingReportGenerating, orgConnection, aiConfig, lastLegalMeetingArchiveRef, setLegalMeetingCaseTitle, waitForMeetingRefinement, stopMeetingAudio, setMeetingNotesOpen, operationMode, endCall, setMeetingPaused, meetingVoiceActiveRef, meetingStartAttemptRef, setOperationMode, meetingPaused, renewMeetingIdentity, createMeetingRecord, selectMeetingRecord, importMeetingRecords, meetingHistoryReadOnly, meetingRecordId, meetingNotesOpen, setPendingOperationMode, pendingOperationMode, knowledgeRefreshSequenceRef, setKnowledgeRuntimeState, setOrganizationWorkspaceView, surfaceReturnTargetRef, windowCommand, dismissUtilitySurfaces, setActiveTab, openCommandCenter, setVolume } = previousBindings;
 
 
   useEffect(() => {
@@ -130,10 +130,6 @@ export function useDesktopRuntimeAndPreferences(previousBindings: ReturnType<typ
     startCallRef,
     enabled: wakeEnabled,
     keyword: 'Lumi',
-    voiceId: selectedVoiceId,
-    personalityId: 'lumi',
-    agentId: 'lumi',
-    startCallOptions: voiceScopeOptions,
     onDetection: () => sounds.playWakeChime(),
     canAcceptWake: ownerVoiceGateOpen,
     isCallActive: () => callState !== 'idle',

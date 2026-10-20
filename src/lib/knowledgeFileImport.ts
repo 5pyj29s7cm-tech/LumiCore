@@ -1,16 +1,12 @@
 import { apiFetch } from '../services/apiClient';
 
-export type KnowledgeFileSource = File[] | string[];
+export type KnowledgeFileSource = File[];
 
 /** File chooser and desktop drops use the same server storage and receipt. */
 export async function importKnowledgeFiles(source: KnowledgeFileSource, scopedUrl: (path: string) => string, signal?: AbortSignal) {
-  const paths = typeof source[0] === 'string';
-  const body = paths ? JSON.stringify({ paths: source }) : new FormData();
-  if (body instanceof FormData) (source as File[]).forEach(file => body.append('files', file));
-  const response = await apiFetch(scopedUrl(paths ? '/api/files/import-paths' : '/api/files/upload'), {
-    method: 'POST', body, signal,
-    ...(paths ? { headers: { 'Content-Type': 'application/json', 'X-Lumi-Desktop-Import': 'file-drop' } } : {}),
-  });
+  const body = new FormData();
+  source.forEach(file => body.append('files', file));
+  const response = await apiFetch(scopedUrl('/api/files/upload'), { method: 'POST', body, signal });
   const data = await response.json();
   signal?.throwIfAborted();
   if (!response.ok || !Array.isArray(data.files) || !data.files.length) {

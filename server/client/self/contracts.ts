@@ -48,6 +48,8 @@ export interface VisibleExecutionHabit {
 }
 
 export interface ClientStateSnapshot {
+  product?: { name?: string; identifier?: string };
+  connected?: boolean;
   platform?: string;
   mode?: ClientMode;
   activeTab?: string;

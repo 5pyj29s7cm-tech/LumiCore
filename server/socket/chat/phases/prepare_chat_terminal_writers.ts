@@ -325,7 +325,7 @@ export async function prepareChatTerminalWriters(context: NonNullable<Awaited<Re
         flow: context.turnFlow,
         capabilitySelection,
         actionIntent: context.executionPipeline.normalizedIntent,
-        taskId: context.executionPipeline.taskRelation.taskId || context.requestId,
+        taskId: context.executionPipeline.taskRelation.taskId,
       });
       const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
       const toolRoute = executionDecision.toolRoute;

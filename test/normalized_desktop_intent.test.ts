@@ -1,5 +1,10 @@
 import { foregroundPipeline } from './foreground_pipeline_fixture';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { readDB } from '../db_layer';
+import { ToolRegistry } from '../server/tools/registry';
+import { registerAllTools } from '../server/tools/definitions';
+import { executeToolCall } from '../server/tools/execution_engine';
+import { listWorkTakeoverTasks } from '../server/work_takeover/tasks';
 import {
   hasMixedStatusExecutionIntent,
   isExplicitArtifactCreationText,
@@ -76,12 +81,65 @@ describe('normalized desktop intent priority', () => {
     expect(pipeline.executionRequested).toBe(true);
   });
 
-  it('keeps an explicit id-based status query read-only even when it says not to execute', () => {
+  it('keeps an explicit id-based status query read-only even when it says not to execute', async () => {
     const text = '\u8bf7\u67e5\u8be2\u6301\u4e45\u4efb\u52a1 wt_task_acceptance \u7684\u72b6\u6001\u548c\u8fdb\u5ea6\uff0c\u53ea\u8bfb\u4efb\u52a1\u8d26\u672c\uff0c\u4e0d\u8981\u6267\u884c\u6216\u63a8\u8fdb\u4efb\u4f55\u6b65\u9aa4\u3002';
 
     const pipeline = foregroundPipeline(text);
     expect(pipeline.normalizedIntent).toEqual(normalizeActionIntent(text));
-    expect(pipeline.executionRequested).toBe(false);
+    // Availability of read schemas is not admission to execute or resume a task.
+    expect(pipeline.executionRequested).toBe(true);
+    expect(pipeline.normalizedIntent.sideEffectClass).toBe('none');
+    expect(pipeline.taskId).toBeUndefined();
+    expect(pipeline.trustedActionContinuation).toBe(false);
+    expect(pipeline.modelToolProjection.toolNames).toContain('client_capability_manifest');
+    for (const mutation of [
+      'work_takeover_task_create', 'work_takeover_task_update', 'work_takeover_task_continue',
+      'work_takeover_task_execute_step', 'work_takeover_task_advance', 'work_takeover_task_autorun',
+      'runtime_work_cancel', 'runtime_work_pause', 'runtime_work_resume',
+    ]) {
+      const allowed = pipeline.authorizationPolicy.allowedTools || [];
+      const forbidden = pipeline.authorizationPolicy.forbiddenTools || [];
+      const authorized = (allowed.includes('*') || allowed.includes(mutation))
+        && !forbidden.includes('*') && !forbidden.includes(mutation);
+      expect({ mutation, authorized }).toEqual({ mutation, authorized: false });
+      expect(pipeline.modelToolProjection.toolNames).not.toContain(mutation);
+    }
+    const userId = 'foreground-convergence-fixture';
+    const registry = new ToolRegistry();
+    registerAllTools(registry);
+    const originalTasks = JSON.stringify(listWorkTakeoverTasks({ userId }));
+    const originalActionTasks = JSON.stringify((readDB().conversationActionTasks || []).filter(row => row.userId === userId));
+    for (const [name, args] of [
+      ['work_takeover_task_create', { category: 'general_work', title: 'Must not be created by a status query' }],
+      ['work_takeover_task_update', { id: 'wt_task_acceptance', status: 'delivered' }],
+      ['work_takeover_task_advance', { id: 'wt_task_acceptance' }],
+    ] as const) {
+      const handler = vi.spyOn(registry.get(name)!, 'handler');
+      try {
+        const result = await executeToolCall({ registry, name, arguments: args,
+          context: { userId, requestId: 'readonly-id-query', domain: 'personal', orgId: '',
+            authenticated: true, authRole: 'admin', localExecution: true,
+            executionBoundary: 'trusted_local', actionIntent: text,
+            toolPolicy: pipeline.authorizationPolicy, acceptedActionContract: pipeline.turnIntent.flow.acceptedActionContract,
+          },
+        });
+        expect(result.error).toMatch(/forbidden/i);
+        expect(handler).not.toHaveBeenCalled();
+      } finally { handler.mockRestore(); }
+    }
+    const reader = vi.spyOn(registry.get('work_takeover_task_list')!, 'handler');
+    try {
+      const read = await executeToolCall({ registry, name: 'work_takeover_task_list', arguments: {},
+        context: { userId, requestId: 'readonly-id-query', domain: 'personal', orgId: '',
+          authenticated: true, authRole: 'admin', localExecution: true,
+          executionBoundary: 'trusted_local', actionIntent: text, toolPolicy: pipeline.authorizationPolicy },
+      });
+      expect(read.error).toBeUndefined();
+      expect(reader).toHaveBeenCalledOnce();
+      expect(JSON.parse(read.result)).toEqual({ tasks: JSON.parse(originalTasks), count: JSON.parse(originalTasks).length });
+    } finally { reader.mockRestore(); }
+    expect(JSON.stringify(listWorkTakeoverTasks({ userId }))).toBe(originalTasks);
+    expect(JSON.stringify((readDB().conversationActionTasks || []).filter(row => row.userId === userId))).toBe(originalActionTasks);
   });
 
   it('treats whether a persistent task is complete as a read-only status question', () => {

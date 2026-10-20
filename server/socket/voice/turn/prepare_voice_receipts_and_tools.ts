@@ -7,7 +7,7 @@ import { formatPendingConfirmationRequest, type recordPendingConfirmationDurably
 import { emitVoiceWorkProgress } from "../work_progress";
 import { toolRegistry } from "../../../tools/registry";
 import { VOICE_DESKTOP_LEASE_WAIT_MS } from "../../voice_runtime_policy";
-import type { ToolExecutionRecord } from "../../../tools/types";
+import type { ToolExecutionRecord, ToolContext } from "../../../tools/types";
 import { scheduleConversationSummary } from "../../../conversation/summary_scheduler";
 import { createConversationReceiptObserver } from "../../../conversation/execution_receipt_archive";
 import { createDesktopRelay } from "../../desktop_relay";
@@ -137,11 +137,11 @@ export async function prepareVoiceReceiptsAndTools(context: NonNullable<Awaited<
     context.emitAgent("agent:tool", normalized);
   };
 
-  const receiptObserver = createConversationReceiptObserver({
+  let receiptObserver = createConversationReceiptObserver({
     userId: context.session.userId, conversationId: context.conversationTurn.conversation.id,
     taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId, turnRowId: context.actionTaskExecution.turnRowId, ...context.voiceScope,
   }, context.turnAuthorization.isCurrent);
-  const desktopRelay = createDesktopRelay({
+  const createTurnDesktopRelay = () => createDesktopRelay({
     io: context.io,
     userId: context.session.userId,
     domain: context.voiceScope.domain,
@@ -151,13 +151,38 @@ export async function prepareVoiceReceiptsAndTools(context: NonNullable<Awaited<
     requestId: context.requestId,
     requestSocket: context.socket,
     emitToolLifecycle,
-    onLateResult: receiptObserver.onDesktopLateResult,
+    onLateResult: event => receiptObserver.onDesktopLateResult(event),
     formatResultForLifecycle: formatToolResultForUi,
     cancelOnRequestSocketDisconnect: true,
     signal: context.pipelineAbort.signal,
     leaseTimeoutMs: VOICE_DESKTOP_LEASE_WAIT_MS,
   });
 
+  let desktopRelay = createTurnDesktopRelay();
+  const prepareSelectedToolCall: NonNullable<ToolContext['prepareSelectedToolCall']> = async () => {
+    context.turnAuthorization.assertCurrent();
+    context.pipelineAbort.signal.throwIfAborted();
+    const owner = context.actionTaskExecution.prepareSelectedToolCall;
+    if (!owner) throw new Error('The selected tool has no accepted audit owner.');
+    const neededBinding = !context.actionTaskExecution.state?.taskId;
+    const binding = await owner(context.pipelineAbort.signal);
+    if (neededBinding) {
+      context.foregroundRequestIdentity = Object.freeze({ ...context.foregroundRequestIdentity, expectedTaskId: binding.taskId });
+      context.session.activeForegroundRequestIdentity = context.foregroundRequestIdentity;
+      context.executionReceipts.bindTask(binding.taskId);
+      context.session.activeTaskConversationId = context.conversationTurn.conversation.id;
+      context.session.activeTaskRequestId = context.requestId;
+      context.session.activeTaskId = binding.taskId;
+      receiptObserver = createConversationReceiptObserver({ userId: context.session.userId,
+        conversationId: context.conversationTurn.conversation.id, taskId: binding.taskId, requestId: context.requestId,
+        turnRowId: binding.turnRowId, ...context.voiceScope,
+      }, context.turnAuthorization.isCurrent);
+      desktopRelay = createTurnDesktopRelay();
+      toolContext.desktopRelay = desktopRelay;
+    }
+    context.turnAuthorization.assertCurrent();
+    return { ...binding, desktopRelay };
+  };
   const runtimeOwnedDeterministicRecoveryCall = buildDurableTaskDeterministicToolRecoveryCall(
     context.actionTaskExecution.state,
     context.requestId,
@@ -186,6 +211,7 @@ export async function prepareVoiceReceiptsAndTools(context: NonNullable<Awaited<
 
   const toolContext = {
     ...context.toolSecurityContext,
+    prepareSelectedToolCall,
     currentTurnExecutionRequested: context.executionPipeline.executionRequested,
     resolutionId: context.executionPipeline.resolution.id,
     trustedActionContinuation: context.executionPipeline.trustedActionContinuation,
@@ -322,7 +348,7 @@ export async function prepareVoiceReceiptsAndTools(context: NonNullable<Awaited<
     persistSidecarConversation,
     persistVoiceAssistantMessage,
     scheduleVoiceSummary,
-    desktopRelay,
+    get desktopRelay() { return desktopRelay; },
     emitToolLifecycle,
     toolContext,
     formatToolResultForUi,

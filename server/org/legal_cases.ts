@@ -1,11 +1,14 @@
 import fs from 'fs';
 import path from 'path';
-import { randomUUID } from 'crypto';
-import { getDataPath } from '../config/data_path';
+import { createHash, randomUUID } from 'crypto';
+import { isLegalSourceMaterial, legalCaseSourceFingerprint, type LegalWorkflowRun } from '../../shared/legal_workflow_receipts';
+import type { LegalReasoningLink } from '../../shared/legal_workflow_receipts';
+import { getDataPath, resolveMigratedDataFile } from '../config/data_path';
+import { sameArtifactPath } from '../tools/artifact_evidence';
 import * as EDB from './db';
 import { recordLegalCaseWrite } from '../legal/execution';
-import { inspectLegalReasoningStructure } from '../regions/packs/cn/legal_reasoning_structure';
-import { CN_LEGAL_REASONING_DRAFT_MESSAGES } from "../regions/messages/skill_messages";
+import { searchKnowledgeText, type KnowledgeSearchResult } from './kb';
+import { CN_LEGAL_CASE_DEFAULTS } from '../regions/messages/skill_messages';
 import {
   assertOrganizationResourceAccess,
   authorizeOrganizationResource,
@@ -13,6 +16,20 @@ import {
   removeOrganizationResourcePolicy,
   type OrganizationResourcePermission,
 } from './resource_acl';
+import {
+  evaluateLegalCaseWorkflow,
+  type LegalCaseWorkflowEvaluation,
+  type LegalCaseWorkflowOptions,
+  type LegalCaseWorkflowStep,
+  type LegalCaseWorkflowStepState,
+} from '../../shared/legal_case_workflow';
+
+export type {
+  LegalCaseWorkflowEvaluation,
+  LegalCaseWorkflowOptions,
+  LegalCaseWorkflowStep,
+  LegalCaseWorkflowStepState,
+} from '../../shared/legal_case_workflow';
 
 export type LegalCaseStage = 'consultation' | 'filing' | 'trial' | 'judgment' | 'enforcement' | 'closed';
 export type LegalCaseMaterialType = 'consultation' | 'evidence' | 'pleading' | 'judgment' | 'contract' | 'note';
@@ -27,6 +44,8 @@ export interface OrgLegalCaseMaterial {
   source: 'manual' | 'meeting' | 'feishu' | 'wecom' | 'wechat' | 'tool' | 'import';
   createdBy: string;
   createdAt: string;
+  reasoningLinks?: LegalReasoningLink[];
+  reasoningBasis?: string;
 }
 
 export interface OrgLegalCaseFile {
@@ -39,44 +58,23 @@ export interface OrgLegalCaseFile {
   court: string;
   judge: string;
   stage: LegalCaseStage;
+  factDate?: string;
   hearingDate: string;
   judgmentDate: string;
   appealDeadline: string;
   enforcementDeadline: string;
   notes: string;
+  clientPartyName?: string;
+  clientRole?: string;
+  objective?: string;
+  workflowRuns?: LegalWorkflowRun[];
   materials: OrgLegalCaseMaterial[];
+  removedMaterialIds?: string[];
+  assetTraceWorkflow?: Record<string, unknown>;
   createdBy: string;
   updatedBy: string;
   createdAt: string;
   updatedAt: string;
-}
-
-export type LegalCaseWorkflowStepState = 'done' | 'ready' | 'missing' | 'blocked' | 'manual';
-
-export interface LegalCaseWorkflowStep {
-  key: string;
-  label: string;
-  state: LegalCaseWorkflowStepState;
-  summary: string;
-  nextStep: string;
-  tool: string;
-  blocking?: boolean;
-}
-
-export interface LegalCaseWorkflowEvaluation {
-  steps: LegalCaseWorkflowStep[];
-  doneCount: number;
-  blockedCount: number;
-  missingCount: number;
-  completionRatio: number;
-  nextStep: LegalCaseWorkflowStep | null;
-  readyForDraft: boolean;
-  readyForFormalDelivery: boolean;
-}
-
-export interface LegalCaseWorkflowOptions {
-  currentLawGate?: 'passed' | 'blocked' | 'none';
-  currentLawBlockingSummary?: string;
 }
 
 const STORE_PATH = getDataPath(path.join('org', 'legal_cases.json'));
@@ -93,7 +91,7 @@ function readStore(): StoreShape {
   try {
     if (!fs.existsSync(STORE_PATH)) return { cases: [] };
     const parsed = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
-    return { cases: Array.isArray(parsed?.cases) ? parsed.cases : [] };
+    return { ...parsed, cases: Array.isArray(parsed?.cases) ? parsed.cases : [] };
   } catch {
     return { cases: [] };
   }
@@ -108,177 +106,160 @@ function normalizeText(value: unknown): string {
   return String(value || '').trim();
 }
 
-function caseWorkflowMaterialText(caseFile: Partial<OrgLegalCaseFile>): string {
-  return [
-    caseFile.title,
-    caseFile.caseNumber,
-    caseFile.party,
-    caseFile.cause,
-    caseFile.court,
-    caseFile.judge,
-    caseFile.notes,
-    ...(caseFile.materials || []).map(material => [
-      material.type,
-      material.title,
-      material.source,
-      material.content,
-      material.fileName,
-      material.localPath,
-    ].join('\n')),
-  ].join('\n').toLowerCase();
+function normalizeSnapshotId(value: unknown): string {
+  const normalized = normalizeText(value).slice(0, 200);
+  if (!normalized || !/^[a-zA-Z0-9_.:@-]+$/.test(normalized)) {
+    throw new Error('A valid client case id is required.');
+  }
+  return normalized;
 }
 
-function caseWorkflowHas(text: string, patterns: RegExp[]): boolean {
-  return patterns.some(pattern => pattern.test(text));
-}
-
-function makeWorkflowStep(
-  key: string,
-  label: string,
-  state: LegalCaseWorkflowStepState,
-  summary: string,
-  nextStep: string,
-  tool: string,
-): LegalCaseWorkflowStep {
+function normalizeSnapshotMaterial(
+  value: Partial<OrgLegalCaseMaterial>,
+  userId: string,
+): OrgLegalCaseMaterial {
+  const type = ['consultation', 'evidence', 'pleading', 'judgment', 'contract', 'note'].includes(String(value.type || ''))
+    ? value.type as LegalCaseMaterialType
+    : 'note';
+  const source = ['manual', 'meeting', 'feishu', 'wecom', 'wechat', 'tool', 'import'].includes(String(value.source || ''))
+    ? value.source as OrgLegalCaseMaterial['source']
+    : 'manual';
   return {
-    key,
-    label,
-    state,
-    summary,
-    nextStep,
-    tool,
-    blocking: state === 'blocked',
+    ...value,
+    id: normalizeText(value.id) || randomUUID(),
+    type,
+    title: normalizeText(value.title) || CN_LEGAL_CASE_DEFAULTS.materialTitle,
+    content: normalizeText(value.content),
+    fileName: normalizeText(value.fileName) || undefined,
+    localPath: normalizeText(value.localPath) || undefined,
+    source,
+    createdBy: normalizeText(value.createdBy) || userId,
+    createdAt: normalizeText(value.createdAt) || now(),
   };
+}
+
+function mergeSnapshotMaterials(
+  current: OrgLegalCaseMaterial[],
+  incoming: Partial<OrgLegalCaseMaterial>[],
+  userId: string,
+): OrgLegalCaseMaterial[] {
+  const existingById = new Map((current || []).map(material => [material.id, material]));
+  const seen = new Set<string>();
+  const merged = incoming.map(value => {
+    const normalized = normalizeSnapshotMaterial(value, userId);
+    const existing = existingById.get(normalized.id);
+    seen.add(normalized.id);
+    if (!existing) return normalized;
+    if (existing.source === 'tool') {
+      // Server tools own their generated material and artifact paths. A stale
+      // browser snapshot must never replace that richer persisted receipt.
+      return { ...normalized, ...existing };
+    }
+    return {
+      ...existing,
+      ...normalized,
+      fileName: normalized.fileName || existing.fileName,
+      localPath: normalized.localPath || existing.localPath,
+      createdBy: existing.createdBy || normalized.createdBy,
+      createdAt: existing.createdAt || normalized.createdAt,
+    };
+  });
+  for (const material of current || []) {
+    if (!seen.has(material.id)) merged.push(material);
+  }
+  return merged;
+}
+
+/**
+ * Mirrors a client-owned case into the server case ledger without creating a
+ * second identity. Chat, voice and direct legal tools can then resolve the
+ * exact case selected in the client instead of searching the source tree.
+ */
+export function upsertCaseSnapshot(
+  orgId: string,
+  userId: string,
+  input: Partial<OrgLegalCaseFile> & { id: string },
+): OrgLegalCaseFile {
+  const store = readStore();
+  const caseId = normalizeSnapshotId(input.id);
+  const index = store.cases.findIndex(item => item.orgId === orgId && item.id === caseId);
+  const current = index >= 0 ? store.cases[index] : null;
+  if (current && getOrganizationResourcePolicy(orgId, 'legal_case', caseId).policy) {
+    assertOrganizationResourceAccess({
+      orgId,
+      actorUserId: userId,
+      resourceType: 'legal_case',
+      resourceId: caseId,
+      permission: 'write',
+      ownerUserId: current.createdBy,
+    });
+  }
+  const ts = now();
+  const stage = ['consultation', 'filing', 'trial', 'judgment', 'enforcement', 'closed'].includes(String(input.stage || ''))
+    ? input.stage as LegalCaseStage
+    : current?.stage || 'consultation';
+  // Snapshots preserve historical tombstones; existing server materials must
+  // be unlinked through the revision-checked removal owner.
+  const removedMaterialIds = [...new Set([...(current?.removedMaterialIds || []), ...(Array.isArray(input.removedMaterialIds) ? input.removedMaterialIds.filter(id => typeof id === 'string' && id.length > 0 && id.length <= 200 && !current?.materials.some(material => material.id === id)) : [])])];
+  const removed = new Set(removedMaterialIds);
+  const materials = (Array.isArray(input.materials)
+    ? mergeSnapshotMaterials(current?.materials || [], input.materials, userId)
+    : current?.materials || []).filter(material => !removed.has(material.id));
+  const caseFile: OrgLegalCaseFile = {
+    ...current,
+    ...input,
+    id: caseId,
+    orgId,
+    title: normalizeText(input.title) || current?.title || CN_LEGAL_CASE_DEFAULTS.title,
+    caseNumber: Object.hasOwn(input, 'caseNumber') ? normalizeText(input.caseNumber) : current?.caseNumber || '',
+    party: Object.hasOwn(input, 'party') ? normalizeText(input.party) : current?.party || '',
+    cause: Object.hasOwn(input, 'cause') ? normalizeText(input.cause) : current?.cause || '',
+    court: Object.hasOwn(input, 'court') ? normalizeText(input.court) : current?.court || '',
+    judge: Object.hasOwn(input, 'judge') ? normalizeText(input.judge) : current?.judge || '',
+    stage,
+    factDate: normalizeText(input.factDate) || current?.factDate,
+    hearingDate: Object.hasOwn(input, 'hearingDate') ? normalizeText(input.hearingDate) : current?.hearingDate || '',
+    judgmentDate: Object.hasOwn(input, 'judgmentDate') ? normalizeText(input.judgmentDate) : current?.judgmentDate || '',
+    appealDeadline: Object.hasOwn(input, 'appealDeadline') ? normalizeText(input.appealDeadline) : current?.appealDeadline || '',
+    enforcementDeadline: Object.hasOwn(input, 'enforcementDeadline') ? normalizeText(input.enforcementDeadline) : current?.enforcementDeadline || '',
+    notes: Object.hasOwn(input, 'notes') ? normalizeText(input.notes) : current?.notes || '',
+    clientPartyName: Object.hasOwn(input, 'clientPartyName') ? normalizeText(input.clientPartyName) : current?.clientPartyName,
+    clientRole: normalizeText(input.clientRole) || current?.clientRole,
+    objective: normalizeText(input.objective) || current?.objective,
+    workflowRuns: current?.workflowRuns?.filter(run => !run.materialIds.some(id => removed.has(id))),
+    materials,
+    removedMaterialIds,
+    assetTraceWorkflow: input.assetTraceWorkflow && typeof input.assetTraceWorkflow === 'object'
+      ? input.assetTraceWorkflow
+      : current?.assetTraceWorkflow,
+    createdBy: current?.createdBy || userId,
+    updatedBy: userId,
+    createdAt: normalizeText(input.createdAt) || current?.createdAt || ts,
+    updatedAt: ts,
+  };
+  // A sync acknowledgement causes the client to refresh its snapshot. Avoid
+  // turning that refresh into an endless write -> new timestamp -> sync loop.
+  if (current && JSON.stringify({ ...caseFile, updatedAt: current.updatedAt }) === JSON.stringify(current)) return current;
+  if (index >= 0) store.cases[index] = caseFile;
+  else store.cases.unshift(caseFile);
+  writeStore(store);
+  recordLegalCaseWrite(orgId, userId, caseFile.id, caseFile.materials.filter(material => !current?.materials.some(prior => prior.id === material.id)).map(material => material.id));
+  EDB.logAudit({
+    orgId,
+    userId,
+    action: current ? 'legal_case.client_snapshot.update' : 'legal_case.client_snapshot.create',
+    resourceType: 'legal_case',
+    resourceId: caseId,
+    details: { title: caseFile.title, caseNumber: caseFile.caseNumber, materialCount: materials.length },
+  });
+  return caseFile;
 }
 
 export function evaluateCaseWorkflow(
   caseFile: Partial<OrgLegalCaseFile>,
   options: LegalCaseWorkflowOptions = {},
 ): LegalCaseWorkflowEvaluation {
-  const materials = caseFile.materials || [];
-  const text = caseWorkflowMaterialText(caseFile);
-  const hasMaterials = materials.length > 0;
-  const hasParty = Boolean(normalizeText(caseFile.party)) || caseWorkflowHas(text, [/当事人|原告|被告|委托人|申请人|respondent|claimant/i]);
-  const hasIdentityDocs = caseWorkflowHas(text, [/身份证|营业执照|统一社会信用代码|主体资格|法定代表人|授权委托|律所函|律师证/i]);
-  const hasFacts = Boolean(normalizeText(caseFile.notes).length >= 20)
-    || caseWorkflowHas(text, [/事实摘要|案件事实|时间线|履行|付款|交付|解除|侵权|损失|庭审|会谈|会议纪要/i]);
-  const hasEvidence = materials.some(material => material.type === 'evidence')
-    || caseWorkflowHas(text, [/证据目录|证明目的|三性|真实性|合法性|关联性|质证|原件|页码|证据材料/i]);
-  const hasReasoning = inspectLegalReasoningStructure(text).passed;
-  const lawBlocked = options.currentLawGate === 'blocked'
-    || caseWorkflowHas(text, [/现行有效法律预检：未通过|现行有效法律硬门槛未通过|正式交付包未生成|current-law gate blocked|不得标记为正式成果|已废止|失效风险：[1-9]/i]);
-  const lawPassed = !lawBlocked && (
-    options.currentLawGate === 'passed'
-    || caseWorkflowHas(text, [/现行有效法律预检：通过|现行有效法律硬门槛：通过|引用核验报告|引用校验|citation-verification-report/i])
-  );
-  const hasSources = caseWorkflowHas(text, [/来源登记表|source-register|外部检索行动单|外部检索|人民法院案例库|裁判文书网|法蝉|alpha|legal_external_research_plan|legal_search_external_authorities/i]);
-  const hasWorkProduct = materials.some(material => material.type === 'pleading' || material.type === 'contract')
-    || caseWorkflowHas(text, [/起诉状|要素式诉状|答辩状|质证意见|代理词|法律意见书|合同审查|合同起草|投标书|标书|诉讼策略|legal_generate_litigation_packet|legal_generate_argument_or_opinion/i]);
-  const hasFilingHandoff = caseWorkflowHas(text, [/半自动立案交接单|立案网交接单|法院在线服务|人民法院在线服务|legal_prepare_filing_handoff/i]);
-  const hasFormalDelivery = !lawBlocked && caseWorkflowHas(text, [/正式交付包已生成|已归档正式交付包|正式法律交付包|01_formal-document|现行有效法律硬门槛：通过/i]);
-
-  const steps: LegalCaseWorkflowStep[] = [
-    makeWorkflowStep(
-      'intake',
-      '材料入案',
-      hasMaterials || hasFacts || hasParty ? 'done' : 'missing',
-      hasMaterials ? `已归档 ${materials.length} 份材料` : hasFacts ? '已有事实摘要，材料仍需归档' : '尚未形成案件材料池',
-      '导入会谈、起诉状、证据、短信链接或本地案件文件夹。',
-      'legal_import_materials_to_kb / legal_meeting_minutes_to_case',
-    ),
-    makeWorkflowStep(
-      'identity',
-      '身份与主体',
-      hasParty && hasIdentityDocs ? 'done' : hasParty ? 'ready' : 'missing',
-      hasParty && hasIdentityDocs ? '当事人和主体资格材料已有线索' : hasParty ? '有当事人信息，主体资格仍待核验' : '缺当事人身份/主体信息',
-      '补齐身份证、营业执照、统一社会信用代码、授权委托手续和送达地址。',
-      'legal_case_workspace / legal_import_materials_to_kb',
-    ),
-    makeWorkflowStep(
-      'facts',
-      '事实时间线',
-      hasFacts ? 'done' : hasMaterials ? 'ready' : 'missing',
-      hasFacts ? '已有事实摘要或时间线线索' : hasMaterials ? '可从材料中整理事实时间线' : '缺案件事实基础',
-      '按主体、行为、金额、通知、履行结果和期限拆解事实。',
-      'legal_meeting_minutes_to_case / legal_case_workspace',
-    ),
-    makeWorkflowStep(
-      'evidence',
-      '证据三性',
-      hasEvidence ? 'done' : hasMaterials || hasFacts ? 'ready' : 'missing',
-      hasEvidence ? '已有证据目录/三性审查线索' : hasMaterials ? '材料已入案，待整理证据目录' : '缺证据材料',
-      '逐项绑定待证事实、证明目的、原件状态、页码和真实性/合法性/关联性。',
-      'legal_generate_litigation_packet',
-    ),
-    makeWorkflowStep(
-      'reasoning',
-      '三段论分析',
-      hasReasoning ? 'ready' : hasFacts || hasEvidence ? 'ready' : 'missing',
-      hasReasoning ? CN_LEGAL_REASONING_DRAFT_MESSAGES.ready : CN_LEGAL_REASONING_DRAFT_MESSAGES.missing,
-      '先形成法律依据、事实证据、适用结论的三段论底稿。',
-      'legal_case_reasoning_matrix',
-    ),
-    makeWorkflowStep(
-      'current-law',
-      '现行有效法律',
-      lawBlocked ? 'blocked' : lawPassed ? 'done' : hasReasoning || hasWorkProduct ? 'ready' : 'missing',
-      lawBlocked ? (options.currentLawBlockingSummary || '存在已废止、失效或未确认的法条引用') : lawPassed ? '法源预检或正式 gate 已通过' : '尚未完成法条现行有效核验',
-      lawBlocked ? '先替换或核验阻断法条，再继续文书正式化。' : '核验所有法条、司法解释和引用来源，未核验不得正式交付。',
-      'legal_search_statute / legal_generate_citation_verification_report',
-    ),
-    makeWorkflowStep(
-      'sources',
-      '类案与来源',
-      hasSources ? 'done' : hasReasoning || hasFacts ? 'ready' : 'missing',
-      hasSources ? '已有外部检索或来源登记' : '待按法院层级检索类案并登记来源',
-      '按最高院、高院、中院、基层法院顺序登记有利/不利裁判规则。',
-      'legal_external_research_plan / legal_search_external_authorities',
-    ),
-    makeWorkflowStep(
-      'drafts',
-      '文书策略',
-      hasWorkProduct ? 'done' : hasEvidence && hasReasoning ? 'ready' : 'missing',
-      hasWorkProduct ? '已有文书或策略底稿' : '待生成起诉/答辩/质证/代理词/合同/标书底稿',
-      '根据角色生成文书包、代理词、法律意见书或合同/标书底稿。',
-      'legal_generate_litigation_packet / legal_generate_argument_or_opinion',
-    ),
-    makeWorkflowStep(
-      'filing',
-      '立案协作',
-      hasFilingHandoff ? 'done' : hasWorkProduct ? 'manual' : 'missing',
-      hasFilingHandoff ? '已有半自动立案交接单' : hasWorkProduct ? '可准备法院平台字段和材料清单' : '未到立案协作阶段',
-      '生成字段映射和上传清单；提交、签名、缴费、送达必须人工确认。',
-      'legal_prepare_filing_handoff',
-    ),
-    makeWorkflowStep(
-      'delivery',
-      '正式交付',
-      lawBlocked ? 'blocked' : hasFormalDelivery ? 'done' : lawPassed && hasWorkProduct ? 'ready' : 'missing',
-      lawBlocked ? '法源 gate 阻断，不能正式交付' : hasFormalDelivery ? '已有正式交付包或 gate 通过记录' : '正式交付包未生成',
-      '运行正式交付 gate，生成引用核验报告、来源登记和交付包。',
-      'legal_finalize_delivery_package',
-    ),
-  ];
-
-  const doneCount = steps.filter(step => step.state === 'done').length;
-  const blockedCount = steps.filter(step => step.state === 'blocked').length;
-  const missingCount = steps.filter(step => step.state === 'missing').length;
-  const nextStep = steps.find(step => step.state === 'blocked')
-    || steps.find(step => step.state === 'ready')
-    || steps.find(step => step.state === 'missing')
-    || steps.find(step => step.state === 'manual')
-    || null;
-
-  return {
-    steps,
-    doneCount,
-    blockedCount,
-    missingCount,
-    completionRatio: Math.round((doneCount / steps.length) * 100),
-    nextStep,
-    readyForDraft: hasEvidence && hasReasoning && !lawBlocked,
-    readyForFormalDelivery: lawPassed && hasWorkProduct && !lawBlocked,
-  };
+  return evaluateLegalCaseWorkflow(caseFile, options);
 }
 
 function normalizeLegalDateMatch(match?: RegExpMatchArray | null): string {
@@ -294,7 +275,7 @@ function extractHearingDate(text: string): string {
     const nested = hearingWindow[0].match(datePattern);
     if (nested) return normalizeLegalDateMatch(nested);
   }
-  return normalizeLegalDateMatch(text.match(datePattern));
+  return '';
 }
 
 export function extractLegalCaseHints(text: string): Partial<Pick<OrgLegalCaseFile, 'caseNumber' | 'court' | 'hearingDate' | 'judgmentDate' | 'cause'>> {
@@ -326,6 +307,16 @@ function canAccessCase(
     permission,
     ownerUserId: caseFile.createdBy,
   }).allowed;
+}
+
+export function legalWorkspaceNamespace(userId: string, orgId?: string): string {
+  return orgId || `personal:${String(userId || '').trim().replace(/[^a-zA-Z0-9_.@-]+/g, '_').replace(/^_+|_+$/g, '') || 'anonymous'}`;
+}
+
+/** Only server-issued receipts grant access; editable case prose does not. */
+export function canReadCaseOutput(orgId: string, userId: string, filePath: string): boolean {
+  return readStore().cases.some(item => item.orgId === orgId && canAccessCase(item, userId, 'read')
+    && (item.workflowRuns || []).some(run => run.artifacts.some(artifact => sameArtifactPath(artifact, filePath))));
 }
 
 export function listCases(orgId: string, query = '', limit = 50, actorUserId?: string): OrgLegalCaseFile[] {
@@ -361,25 +352,156 @@ export function getCase(
   return caseFile && canAccessCase(caseFile, actorUserId, permission) ? caseFile : null;
 }
 
+export interface LegalMaterialReview {
+  revision: string;
+  status: 'pending' | 'confirmed' | 'revoked' | 'stale';
+  reviewedAt?: string;
+  reviewerId?: string;
+  scope: 'archived_text' | 'archived_text_and_file';
+}
+
+const MATERIAL_REVIEW_ACTION = 'legal_case.material.review';
+
+function materialReviewRevision(caseFile: OrgLegalCaseFile, material: OrgLegalCaseMaterial): Pick<LegalMaterialReview, 'revision' | 'scope'> {
+  let fileState = material.localPath ? 'unavailable' : 'none';
+  let fileHash = '';
+  if (material.localPath) {
+    try {
+      const filePath = resolveMigratedDataFile(path.resolve(material.localPath));
+      if (fs.statSync(filePath).isFile()) {
+        fileHash = createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+        fileState = 'file';
+      } else fileState = 'directory';
+    } catch { /* An absent/unreadable file is never confirmed as a file version. */ }
+  }
+  const revision = createHash('sha256').update(JSON.stringify({
+    caseId: caseFile.id, orgId: caseFile.orgId,
+    caseSourceFingerprint: legalCaseSourceFingerprint(caseFile),
+    sources: (caseFile.materials || []).filter(isLegalSourceMaterial).map(item => [
+      item.id, item.type, item.source, item.title, item.content, item.localPath,
+    ]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    stage: caseFile.stage, judge: caseFile.judge,
+    dates: [caseFile.factDate, caseFile.hearingDate, caseFile.judgmentDate, caseFile.appealDeadline, caseFile.enforcementDeadline],
+    material: [material.id, material.type, material.source, material.title, material.content, material.fileName,
+      material.localPath, material.reasoningLinks, material.reasoningBasis],
+    fileState, fileHash,
+  })).digest('hex');
+  return { revision, scope: fileState === 'file' ? 'archived_text_and_file' : 'archived_text' };
+}
+
+/** The audit event is the only review authority; editable case snapshots are not. */
+export function getMaterialReview(orgId: string, userId: string, caseId: string, materialId: string): LegalMaterialReview | null {
+  const caseFile = getCase(orgId, caseId, userId);
+  const material = caseFile?.materials.find(item => item.id === materialId);
+  if (!caseFile || !material) return null;
+  const current = materialReviewRevision(caseFile, material);
+  let latest: { timestamp: string; userId: string; revision: string; decision: 'confirmed' | 'revoked' } | undefined;
+  for (const entry of EDB.listAuditLog(orgId, null)) {
+    if (entry.action !== MATERIAL_REVIEW_ACTION || entry.resourceType !== 'legal_case' || entry.resourceId !== caseId) continue;
+    try {
+      const details = JSON.parse(entry.details);
+      if (details.materialId !== materialId || !['confirmed', 'revoked'].includes(details.decision)
+        || !/^[a-f0-9]{64}$/.test(String(details.revision || ''))) continue;
+      // listAuditLog sorts newest first, retaining append order for equal timestamps.
+      // The last appended event therefore wins a confirmation/revocation in one ms.
+      if (!latest || entry.timestamp >= latest.timestamp) latest = {
+        timestamp: entry.timestamp, userId: entry.userId, revision: details.revision, decision: details.decision,
+      };
+    } catch { /* Ignore unrelated or malformed audit details. */ }
+  }
+  if (!latest) return { ...current, status: 'pending' };
+  return { ...current, status: latest.revision === current.revision ? latest.decision : 'stale',
+    reviewedAt: latest.timestamp, reviewerId: latest.userId };
+}
+
+/** Called only by the authenticated human review route, never by a model tool. */
+export function recordMaterialReview(orgId: string, userId: string, caseId: string, materialId: string,
+  input: { expectedRevision: string; decision: 'confirmed' | 'revoked' }): LegalMaterialReview | null {
+  const caseFile = getCase(orgId, caseId, userId, 'write');
+  const material = caseFile?.materials.find(item => item.id === materialId);
+  if (!caseFile || !material) return null;
+  const current = materialReviewRevision(caseFile, material);
+  if (input.expectedRevision !== current.revision) throw Object.assign(new Error('The archived material changed after review. Review its current version again.'),
+    { code: 'LEGAL_MATERIAL_REVISION_CHANGED', statusCode: 409 });
+  if (!['confirmed', 'revoked'].includes(input.decision)) throw Object.assign(new Error('A confirmed or revoked review decision is required.'), { statusCode: 400 });
+  EDB.logAudit({ orgId, userId, action: MATERIAL_REVIEW_ACTION, resourceType: 'legal_case', resourceId: caseId,
+    details: { materialId, revision: current.revision, decision: input.decision, scope: current.scope } });
+  return getMaterialReview(orgId, userId, caseId, materialId);
+}
+
+/** Removes only this case association; original files and knowledge entries remain. */
+export function removeMaterial(orgId: string, userId: string, caseId: string, materialId: string, expectedRevision: string): OrgLegalCaseFile | null {
+  const caseFile = getCase(orgId, caseId, userId, 'write');
+  const material = caseFile?.materials.find(item => item.id === materialId);
+  if (!caseFile || !material) return null;
+  const current = materialReviewRevision(caseFile, material);
+  if (expectedRevision !== current.revision) throw Object.assign(new Error('The archived material changed. Read its current version before removing it.'),
+    { code: 'LEGAL_MATERIAL_REVISION_CHANGED', statusCode: 409 });
+  const saved = updateCase(orgId, userId, caseId, { removedMaterialIds: [...(caseFile.removedMaterialIds || []), materialId] });
+  EDB.logAudit({ orgId, userId, action: 'legal_case.material.remove', resourceType: 'legal_case', resourceId: caseId,
+    details: { materialId, revision: current.revision, retainedFilesAndKnowledge: true } });
+  return saved;
+}
+
+export interface LegalCaseKnowledgeResult extends KnowledgeSearchResult {
+  caseId: string;
+  materialId?: string;
+  materialSource: string;
+}
+
+/** Read the case ledger itself: no duplicate archive, model dependency or
+ * newest-200 truncation. New and edited materials are visible on the next turn. */
+export function searchCaseKnowledge(orgId: string, userId: string, query: string, limit = 5): LegalCaseKnowledgeResult[] {
+  const articles: EDB.KbArticle[] = [];
+  const sources = new Map<string, Pick<LegalCaseKnowledgeResult, 'caseId' | 'materialId' | 'materialSource'>>();
+  for (const item of readStore().cases) {
+    if (item.orgId !== orgId || !canAccessCase(item, userId, 'read')) continue;
+    const add = (id: string, title: string, content: string, materialSource: string, materialId?: string) => {
+      if (!content.trim()) return;
+      sources.set(id, { caseId: item.id, materialId, materialSource });
+      articles.push({
+        id, orgId, title, content, category: 'legal_case_material',
+        tags: JSON.stringify([`case-id:${item.id}`, `source:${materialSource}`]),
+        authorId: item.createdBy, status: 'published', viewCount: 0,
+        createdAt: item.createdAt, updatedAt: item.updatedAt, ingestionManifest: '{}',
+      });
+    };
+    add(`case:${item.id}`, item.title,
+      [item.caseNumber, item.party, item.cause, item.court, item.notes].filter(Boolean).join('\n'), 'case_record');
+    for (const material of item.materials || []) {
+      add(`case:${item.id}:material:${material.id}`, `${item.title} / ${material.title}`,
+        material.content, material.source === 'tool' ? 'generated_draft_not_evidence' : material.source, material.id);
+    }
+  }
+  return searchKnowledgeText(articles, query, limit).map(result => ({ ...result, ...sources.get(result.articleId)! }));
+}
+
 export function createCase(orgId: string, userId: string, input: Partial<OrgLegalCaseFile>): OrgLegalCaseFile {
   const store = readStore();
   const ts = now();
   const caseFile: OrgLegalCaseFile = {
     id: randomUUID(),
     orgId,
-    title: normalizeText(input.title) || '未命名案件',
+    title: normalizeText(input.title) || CN_LEGAL_CASE_DEFAULTS.title,
     caseNumber: normalizeText(input.caseNumber),
     party: normalizeText(input.party),
     cause: normalizeText(input.cause),
     court: normalizeText(input.court),
     judge: normalizeText(input.judge),
     stage: (input.stage as LegalCaseStage) || 'consultation',
+    factDate: normalizeText(input.factDate) || undefined,
     hearingDate: normalizeText(input.hearingDate),
     judgmentDate: normalizeText(input.judgmentDate),
     appealDeadline: normalizeText(input.appealDeadline),
     enforcementDeadline: normalizeText(input.enforcementDeadline),
     notes: normalizeText(input.notes),
+    clientPartyName: normalizeText(input.clientPartyName),
+    clientRole: normalizeText(input.clientRole),
+    objective: normalizeText(input.objective),
     materials: Array.isArray(input.materials) ? input.materials : [],
+    assetTraceWorkflow: input.assetTraceWorkflow && typeof input.assetTraceWorkflow === 'object'
+      ? input.assetTraceWorkflow
+      : undefined,
     createdBy: userId,
     updatedBy: userId,
     createdAt: ts,
@@ -410,12 +532,17 @@ export function updateCase(orgId: string, userId: string, caseId: string, patch:
       permission: 'write', ownerUserId: current.createdBy,
     });
   }
+  const removedMaterialIds = [...new Set([...(current.removedMaterialIds || []), ...(Array.isArray(patch.removedMaterialIds) ? patch.removedMaterialIds.filter(id => typeof id === 'string' && id.length > 0 && id.length <= 200) : [])])];
+  const removed = new Set(removedMaterialIds);
   const next: OrgLegalCaseFile = {
     ...current,
     ...patch,
+    // Browser snapshots and case updates cannot manufacture verification receipts.
+    workflowRuns: current.workflowRuns?.filter(run => !run.materialIds.some(id => removed.has(id))),
     id: current.id,
     orgId: current.orgId,
-    materials: patch.materials || current.materials || [],
+    materials: (patch.materials || current.materials || []).filter(material => !removed.has(material.id)),
+    removedMaterialIds,
     updatedBy: userId,
     updatedAt: now(),
   };
@@ -431,6 +558,21 @@ export function updateCase(orgId: string, userId: string, caseId: string, patch:
     details: { fields: Object.keys(patch) },
   });
   return next;
+}
+
+export function recordWorkflowRun(orgId: string, userId: string, caseId: string,
+  run: Omit<LegalWorkflowRun, 'basis' | 'checkedAt'>): void {
+  if (!getCase(orgId, caseId, userId, 'write')) return;
+  const store = readStore();
+  const item = store.cases.find(value => value.orgId === orgId && value.id === caseId);
+  if (!item || run.materialIds.some(id => item.removedMaterialIds?.includes(id))) return;
+  item.workflowRuns = [{ ...run, checkedAt: now(), basis: legalCaseSourceFingerprint(item) }, ...(item.workflowRuns || []).map(previous => {
+    if (previous.tool !== run.tool) return previous;
+    const { displayText: _displayText, ...metadata } = previous; return metadata;
+  })].slice(0, 100);
+  item.updatedAt = now();
+  item.updatedBy = userId;
+  writeStore(store);
 }
 
 export function deleteCase(orgId: string, userId: string, caseId: string): OrgLegalCaseFile | null {
@@ -478,18 +620,19 @@ export function addMaterial(
   const nextMaterial: OrgLegalCaseMaterial = {
     id: randomUUID(),
     type: material.type,
-    title: normalizeText(material.title) || '案件材料',
+    title: normalizeText(material.title) || CN_LEGAL_CASE_DEFAULTS.materialTitle,
     content: normalizeText(material.content),
     fileName: material.fileName,
     localPath: material.localPath,
     source: material.source,
+    reasoningLinks: material.reasoningLinks,
+    reasoningBasis: material.reasoningBasis,
     createdBy: userId,
     createdAt: now(),
   };
   const nextMaterials = [nextMaterial, ...(current.materials || [])];
   updateCase(orgId, userId, caseId, {
     materials: nextMaterials,
-    notes: [current.notes, material.content ? `【材料归档】${nextMaterial.title}` : ''].filter(Boolean).join('\n'),
   });
   EDB.logAudit({
     orgId,

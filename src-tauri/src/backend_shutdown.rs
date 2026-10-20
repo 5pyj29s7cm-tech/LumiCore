@@ -89,7 +89,7 @@ fn parse_save_receipt(raw: &[u8], expected_pid: u32) -> Result<(), String> {
 /// Uses the existing native proof exchange, never a browser-supplied token or
 /// arbitrary URL. The caller additionally binds expected_pid to its own Child.
 pub fn request_backend_save(expected_pid: u32) -> Result<(), String> {
-    let identity = crate::local_bootstrap::bootstrap_local_identity(None)?;
+    let identity = crate::local_bootstrap::bootstrap_identity(None, None)?;
     let token = identity
         .get("token")
         .and_then(Value::as_str)

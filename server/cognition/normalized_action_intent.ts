@@ -839,6 +839,9 @@ function clientNavigation(text: string): NormalizedActionIntent | null {
   const surface = CLIENT_SURFACE_RULES.find(candidate => {
     const match = text.match(candidate.pattern);
     if (!match || match.index == null) return false;
+    // A registered English surface name must be a complete UI target, not a segment of another identifier.
+    if (/^[a-z0-9]/iu.test(match[0]) && /[a-z0-9_-]/iu.test(text[match.index - 1] || '')
+      || /[a-z0-9]$/iu.test(match[0]) && /[a-z0-9_-]/iu.test(text[match.index + match[0].length] || '')) return false;
     // The navigation verb must govern the client-surface noun. A capability
     // phrase such as "use desktop tools to open Notepad" contains both words,
     // but `open` comes after `tools` and targets Notepad, not Lumi's tools page.
@@ -1004,8 +1007,13 @@ function localWorkflowIntent(text: string): NormalizedActionIntent | null {
     confidence: 0.95, rule: `local-workflow-${intent}` };
 }
 
-export function genericExternalCommit(text: string): NormalizedActionIntent | null {
+export function genericExternalCommit(text: string, independentInstruction = false): NormalizedActionIntent | null {
   text = withoutNegatedLookupClauses(currentTurnText(text));
+  if (independentInstruction) {
+    text = text.replace(/^(?:(?:现在|请你?|帮我|替我|麻烦你)\s*|(?:please|now|then|next|you\s+must|you\s+should|must|should)\s+)*/iu, ''); // i18n-allow: Existing imperative modifiers, not action vocabulary.
+  }
+  const eligible = (match: RegExpMatchArray | null): match is RegExpMatchArray => Boolean(match && (!independentInstruction
+    || match.index === 0 && (!/^[a-z]/iu.test(match[1]) || new RegExp(`^${match[1]}\\b`, 'iu').test(text))));
   // Explicit negation and retrospective/explanatory language must never be
   // promoted into an external mutation merely because it contains an action
   // verb.
@@ -1013,52 +1021,52 @@ export function genericExternalCommit(text: string): NormalizedActionIntent | nu
   if (/(?:不要|别|无需|不用|取消|没有|并未|没让你|为什么|怎么会|刚才|之前).{0,30}(?:发布|提交|付款|支付|签署|签字|上传|post|publish|submit|pay|sign)/iu.test(text)) return null;
 
   // i18n-allow: Chinese payment semantic-role input recognition.
-  const payment = text.match(/(?:^|[，。！？!?；;\n])\s*(?:现在\s*)?(?:请(?:你)?|帮我|替我|麻烦你|please)?\s*(?:付款|支付|转账|打款|pay|transfer)\s*(?:给|to)?\s*([^，。！？!?\n]{1,80})/iu);
-  if (payment) {
+  const payment = text.match(/(?:^|[，。！？!?；;\n])\s*(?:现在\s*)?(?:请(?:你)?|帮我|替我|麻烦你|please)?\s*(付款|支付|转账|打款|pay|transfer)\s*(?:给|to)?\s*([^，。！？!?\n]{1,80})/iu);
+  if (eligible(payment)) {
     return {
       kind: 'payment', operation: 'mutate', subject: 'user',
-      target: trimSlot(payment[1]), payload: text,
+      target: trimSlot(payment[2]), payload: text,
       sideEffectClass: 'external_commit', relation: 'new', confidence: 0.94,
       rule: 'explicit-payment-commit',
     };
   }
 
   // i18n-allow: Chinese signature semantic-role input recognition.
-  const signature = text.match(/(?:签署|签字|盖章|sign)\s*(?:这份|这个|the)?\s*([^，。！？!?\n]{1,120})/iu);
-  if (signature) {
+  const signature = text.match(/(签署|签字|盖章|sign)\s*(?:这份|这个|the)?\s*([^，。！？!?\n]{1,120})/iu);
+  if (eligible(signature)) {
     return {
       kind: 'signature', operation: 'mutate', subject: 'user',
-      target: trimSlot(signature[1]), payload: text,
+      target: trimSlot(signature[2]), payload: text,
       sideEffectClass: 'external_commit', relation: 'new', confidence: 0.93,
       rule: 'explicit-signature-commit',
     };
   }
 
   // i18n-allow: Chinese publication semantic-role input recognition.
-  const publish = text.match(/(?:发布|发帖|公开发表|上线|publish|post)\s*(?:到|至|on|to)?\s*([^，。！？!?\n]{1,160})/iu);
+  const publish = text.match(/(发布|发帖|公开发表|上线|publish|post)\s*(?:到|至|on|to)?\s*([^，。！？!?\n]{1,160})/iu);
   // "Publish the local workflow" and "run the published workflow" refer to
   // a version in the local registry, not a public post. Real destinations
   // still belong to the external-commit boundary and keep payload redaction.
   const localPublication = publish && localWorkflowIntent(text)
     // i18n-allow: local workflow target qualifiers, including published adjective.
-    && /^(?:(?:的|这个|已审核的|本地的?|已有的|已经|已|the\b|a\b|reviewed\b|local\b|ed\b)\s*)*(?:工作流|\bworkflow\b)/iu.test(publish[1])
+    && /^(?:(?:的|这个|已审核的|本地的?|已有的|已经|已|the\b|a\b|reviewed\b|local\b|ed\b)\s*)*(?:工作流|\bworkflow\b)/iu.test(publish[2])
     // i18n-allow: a publication destination remains an external request.
-    && !/(?:到|至|\b(?:to|on|onto)\b)/iu.test(publish[1]);
-  if (publish && !localPublication) {
+    && !/(?:到|至|\b(?:to|on|onto)\b)/iu.test(publish[2]);
+  if (eligible(publish) && !localPublication) {
     return {
       kind: 'public_publish', operation: 'mutate', subject: 'user',
-      target: trimSlot(publish[1]), payload: text,
+      target: trimSlot(publish[2]), payload: text,
       sideEffectClass: 'external_commit', relation: 'new', confidence: 0.9,
       rule: 'explicit-publication-commit',
     };
   }
 
   // i18n-allow: Chinese submission semantic-role input recognition.
-  const submission = text.match(/(?:提交|上传|递交|submit|upload)\s*(?:到|至|给|to)?\s*([^，。！？!?\n]{1,160})/iu);
-  if (submission) {
+  const submission = text.match(/(提交|上传|递交|submit|upload)\s*(?:到|至|给|to)?\s*([^，。！？!?\n]{1,160})/iu);
+  if (eligible(submission)) {
     return {
       kind: 'external_submit', operation: 'mutate', subject: 'user',
-      target: trimSlot(submission[1]), payload: text,
+      target: trimSlot(submission[2]), payload: text,
       sideEffectClass: 'external_commit', relation: 'new', confidence: 0.88,
       rule: 'explicit-submission-commit',
     };
@@ -1139,12 +1147,23 @@ export function mediaGenerationIntent(value: string): NormalizedActionIntent | n
     payload: text, sideEffectClass: 'external_commit', relation: 'new', confidence: 0.98, rule: 'explicit-media-generation' };
 }
 
+/** Independent affirmative clauses shared by navigation and completion evidence. */
+export function independentActionClauses(value: string, sentenceScoped = false): string[] {
+  const text = currentTurnText(value);
+  if (isExplicitArtifactCreationText(text)) return [];
+  const affirmative = (part: string) => !/(?:不要|别|如果|假设|例如|说|为什么|怎么)|\b(?:don't|do not|if|said|why|how)\b/iu.test(part); // i18n-allow: No authority from negative or hypothetical clauses.
+  const clauses = sentenceScoped
+    ? text.split(/[；;。\n]|\.(?=\s|$)/u).filter(affirmative).flatMap(part => part.split(/[，,]/u))
+    : text.split(/[，,；;。\n]/u); // i18n-allow: Existing navigation boundaries remain unchanged.
+  return clauses.map(part => part.trim().replace(/^(?:然后|接着|同时|并且|再)\s*/u, '')).filter(Boolean) // i18n-allow: Independent instruction boundaries.
+    .filter(affirmative);
+}
+
 /** Independent client + application navigation must retain both obligations. */
 export function compositeNavigationInstructions(value: string): Array<{ text: string; intent: NormalizedActionIntent }> {
   const text = currentTurnText(value);
-  if (text.length > 1200 || isExplicitArtifactCreationText(text)) return [];
-  const instructions = text.split(/[，,；;。\n]/u).map(part => part.trim().replace(/^(?:然后|接着|同时|并且|再)\s*/u, '')).filter(Boolean) // i18n-allow: Independent instruction boundaries.
-    .filter(part => !/(?:不要|别|如果|假设|例如|说|为什么|怎么)|\b(?:don't|do not|if|said|why|how)\b/iu.test(part)) // i18n-allow: No authority from negative or hypothetical clauses.
+  if (text.length > 1200) return [];
+  const instructions = independentActionClauses(text)
     .map(part => ({ text: part, intent: clientNavigation(part) || localDesktopOperation(part) }))
     .filter((item): item is { text: string; intent: NormalizedActionIntent } => Boolean(item.intent));
   return instructions.length > 1 && instructions.some(item => item.intent.kind === 'client_navigation')

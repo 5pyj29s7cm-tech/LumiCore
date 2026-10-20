@@ -1,4 +1,5 @@
 import { verifiedSavedArtifactNames } from '../../cognition/user_output_protection';
+import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../../regions/messages/execution_evidence_messages';
 import { parseStoredArray } from '../../tools/receipt_payload';
 import { isGuardGeneratedConversationRecord, isGuardGeneratedAssistantText, projectGuardedAssistantText } from "../guard_history";
 import { buildCompactToolEvidenceNote, isUnverifiedExecutionAssistantRecord } from "../summary_grounding";
@@ -59,7 +60,7 @@ export function compactRecordForPrompt(m: MessageRecord): MessageRecord {
     && !evidenceNote
     && isUnverifiedExecutionAssistantRecord(m);
   const compactedMessage = guardedEvidence || (suppressedReply
-    ? '[The historical reply is omitted because its action claims lack attached evidence. This turn already has a response and is not a pending instruction. Refer to the original action receipts only when relevant to the newest user request.]'
+    ? CN_EXECUTION_EVIDENCE_MESSAGES.unsupportedRealWorldClaim
     : compactPromptText(m.message || '', CONTEXT_MESSAGE_CHAR_LIMIT));
   const compactedResponse = legacyCombinedGuardResponse || guardedEvidence
     ? ''

@@ -152,7 +152,7 @@ it('keeps a failed task handoff open and never implies the film has been exporte
   fireEvent.click(screen.getByRole('tab', { name: '3 · Create & export video' }));
   expect((screen.getByRole('button', { name: 'Compose & export with Lumi' }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole('tab', { name: '2 · Generate song' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Ask Lumi to make the song (trial)' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Create and select native audio (Official API)' }));
   expect((await screen.findByRole('alert')).textContent).toContain('No task created'); expect(p.onClose).not.toHaveBeenCalled(); expect(p.onTask).toHaveBeenCalledWith('Real task');
 });
 it('keeps timing inputs editable while dirty and saves them before closing', async () => {

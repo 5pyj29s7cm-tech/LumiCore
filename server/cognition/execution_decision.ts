@@ -569,7 +569,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     { limit: 6, context: input.visibilityContext },
   ).filter(tool => tool.name.startsWith('external_capability_action_')) || [];
   const allowToolUse = input.flow.allowToolUseForTurn
-    && !unboundTerseContinuation && !input.isSanctuary && !statusOnlyContinuation;
+    && !unboundTerseContinuation && !input.isSanctuary;
   const selfRepairToolPolicy = input.flow.selfRepairTurn && !buildClientDiagnosticPlan(input.flow.routeText || input.text).length && !statusOnlyContinuation
     ? buildSelfRepairToolPolicy(input.flow.routeText || input.text, input.toolRegistry, input.visibilityContext)
     : null;
@@ -578,7 +578,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     && !statusOnlyContinuation
     ? CLIENT_ACTION_TOOL_POLICY
     : null;
-  const entryToolPolicy = input.isSanctuary || statusOnlyContinuation
+  const entryToolPolicy = input.isSanctuary
     ? NO_TOOLS_POLICY
     : selfRepairToolPolicy
       ? selfRepairToolPolicy

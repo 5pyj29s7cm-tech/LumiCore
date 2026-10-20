@@ -156,7 +156,7 @@ function restartServer(): ChildProcess {
   child.on('exit', (code, signal) => {
     console.log(`[Launcher] Server exited — code=${code}, signal=${signal}`);
 
-    if (signal === 'SIGINT' || signal === 'SIGTERM') {
+    if (code === 0 || signal === 'SIGINT' || signal === 'SIGTERM') {
       console.log('[Launcher] Clean shutdown. Goodbye.');
       process.exit(0);
     }

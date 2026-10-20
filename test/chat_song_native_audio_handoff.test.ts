@@ -1,0 +1,64 @@
+import './helpers';
+import { expect, it, beforeAll, beforeEach, vi } from 'vitest';
+import { randomUUID, createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { initDatabase } from '../db_layer';
+import { ToolRegistry } from '../server/tools/registry';
+import { registerChatSongTools } from '../server/tools/definitions/chat_song_tools';
+import { executeToolCall, isCanonicalToolExecutionRecord } from '../server/tools/execution_engine';
+import { getChatSongProject } from '../server/creative/chat_song';
+import { generatedKnowledgeDirectory } from '../server/files/knowledge_directory';
+import { registerGeneratedKnowledgeFile } from '../server/files/generated_archive';
+import { chatSongTaskPrompt } from '../server/regions/packs/cn/chat_song';
+import type { ChatSongProject } from '../shared/chat_song';
+import type { ToolContext } from '../server/tools/types';
+const mock = vi.hoisted(() => ({ media: vi.fn() }));
+vi.mock('../server/media/process', () => ({ runMediaProcess: (...args: any[]) => mock.media(...args) }));
+const uid = 'native-audio-owner-fixture';
+const lines = [{ role: 'A', text: '你好，旧友', group: 1, reaction: '' }, { role: 'B', text: '一起回家', group: 2, reaction: '' }];
+const registry = new ToolRegistry(); registerChatSongTools(registry);
+const ctx = (): ToolContext => ({ userId: uid, authenticated: true, authRole: 'user', localExecution: true, executionBoundary: 'trusted_local', domain: 'personal', requestId: randomUUID(), taskId: randomUUID(), currentTurnExecutionRequested: true, allowLocalFileWrites: true });
+async function call(name: string, args: any) { return JSON.parse(await registry.execute(name, args, ctx())); }
+beforeAll(async () => { await initDatabase(); });
+beforeEach(() => { mock.media.mockReset().mockResolvedValue(JSON.stringify({ streams: [{ codec_type: 'audio' }], format: { duration: '15' } })); });
+
+it('uses the saved 120-second script once through the existing native-video audio request and returns it to the same project', () => {
+  const script = Array.from({ length: 32 }, (_, i) => ({ id: String(i + 1).padStart(2, '0'), role: (i % 3 ? 'A' : 'B') as 'A' | 'B', text: `原创唱词第${i + 1}句`, group: i + 1, reaction: '' }));
+  const p: ChatSongProject = { id: randomUUID(), revision: 7, scriptRevision: 4, title: 'Native song fixture', brief: { theme: '重逢', relationship: '旧友', twist: '一同回家', targetSeconds: 120, visualStyle: '', musicStyle: '木吉他慢唱，不要说唱', roleA: '旧友甲', roleB: '旧友乙' }, lines: script, scriptLocked: true, assets: [], song: null, timings: [], updatedAt: '' };
+  const task = chatSongTaskPrompt(p, 'unused.zip', 'music');
+  const args = JSON.parse(task.split('原声生成参数（数据）：\n')[1].split('\n原声交付：')[0]);
+  expect(args).toMatchObject({ officialOnly: true, duration: 120, size: '720x1280', audio: true, prompt_extend: false });
+  expect(args.segment_prompts).toHaveLength(4);
+  const all = args.segment_prompts.join('\n');
+  for (const line of script) expect(all.split(JSON.stringify(line.text))).toHaveLength(2);
+  expect(script.map(line => all.indexOf(JSON.stringify(line.text)))).toEqual([...script.map(line => all.indexOf(JSON.stringify(line.text)))].sort((a, b) => a - b));
+  expect(args.prompt).toContain(p.brief.musicStyle);
+  expect(task).toContain(`projectId=${p.id}`); expect(task).toContain(`revision=${p.revision}`); expect(task).toContain('action=select-song');
+  expect(task).not.toContain('music.douyin.com'); expect(task).toContain('不自行确认唱词'); expect(task).toContain('不能重新付费生成');
+  expect(chatSongTaskPrompt({ ...p, brief: { ...p.brief, targetSeconds: 31 } }, '', 'music')).toBe('');
+  expect(chatSongTaskPrompt({ ...p, brief: { ...p.brief, targetSeconds: 121 } }, '', 'music')).toBe('');
+  expect(chatSongTaskPrompt({ ...p, scriptLocked: false }, '', 'music')).toBe('');
+  const short = chatSongTaskPrompt({ ...p, brief: { ...p.brief, targetSeconds: 15 } }, '', 'music');
+  const shortArgs = JSON.parse(short.split('原声生成参数（数据）：\n')[1].split('\n原声交付：')[0]); expect(shortArgs.segment_prompts).toBeUndefined();
+  for (const line of script) expect(shortArgs.prompt.split(JSON.stringify(line.text))).toHaveLength(2);
+  const reuse = chatSongTaskPrompt({ ...p, song: { fileId: 'existing.mp4', name: 'existing', sha256: 'a'.repeat(64), duration: 120, scriptRevision: p.scriptRevision, confirmed: false } }, '', 'music');
+  expect(reuse).not.toContain('原声生成参数'); expect(reuse).toContain('不重新调用生成模型');
+});
+
+it('binds a generated native-audio MP4 to the same revision through the canonical owner and rejects a silent file', async () => {
+  let p = (await call('chat_song_project', { action: 'create', projectId: randomUUID(), title: 'Native audio link' })).project;
+  p = (await call('chat_song_project', { action: 'save', projectId: p.id, revision: p.revision, value: { title: p.title, brief: p.brief, lines } })).project;
+  p = (await call('chat_song_project', { action: 'lock-script', projectId: p.id, revision: p.revision })).project;
+  const name = 'owned-native-song.mp4', dir = generatedKnowledgeDirectory({ userId: uid, domain: 'personal' });
+  fs.writeFileSync(path.join(dir, name), 'Synthetic media fixture; only ffprobe track routing is tested.');
+  await registerGeneratedKnowledgeFile({ userId: uid, domain: 'personal' }, name);
+  const record = await executeToolCall({ registry, name: 'chat_song_project', arguments: { action: 'select-song', projectId: p.id, revision: p.revision, value: { fileId: name } }, executionOrigin: 'model_selected', context: ctx() });
+  expect(record.error).toBeFalsy(); expect(isCanonicalToolExecutionRecord(record)).toBe(true);
+  const saved = getChatSongProject(uid, p.id);
+  expect(saved.revision).toBe(p.revision + 1); expect(saved.song).toMatchObject({ fileId: name, scriptRevision: p.scriptRevision, duration: 15, confirmed: false });
+  expect(saved.song!.sha256).toBe(createHash('sha256').update(fs.readFileSync(path.join(dir, name))).digest('hex'));
+  mock.media.mockResolvedValueOnce(JSON.stringify({ streams: [{ codec_type: 'video' }], format: { duration: '15' } }));
+  await expect(call('chat_song_project', { action: 'select-song', projectId: p.id, revision: saved.revision, value: { fileId: name } })).rejects.toThrow(/expected track/);
+  expect(getChatSongProject(uid, p.id)).toEqual(saved);
+});

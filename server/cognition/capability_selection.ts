@@ -83,7 +83,7 @@ export interface ModelToolProjectionHints {
    * with the effective policy and final projection below.
    */
   requiredTools?: readonly string[];
-  /** Ordinary conversation may stay tool-free even in an action-capable mode. */
+  /** Explicit caller ceiling for discovery; semantic lane labels are advisory. */
   allowUnroutedDiscovery?: boolean;
 }
 
@@ -192,8 +192,7 @@ export function buildModelToolProjection(
         ...routedNames,
       ]).slice(0, maxTools);
 
-  const allowUnroutedDiscovery = hints.allowUnroutedDiscovery
-    ?? hints.lane !== 'conversation';
+  const allowUnroutedDiscovery = hints.allowUnroutedDiscovery ?? true;
   const shouldExposeDiscovery = !hardAllowlist
     && isAuthorized(MODEL_CAPABILITY_DISCOVERY_TOOL)
     && (Boolean(route?.toolNames?.length) || semanticNames.length > 0 || allowUnroutedDiscovery);

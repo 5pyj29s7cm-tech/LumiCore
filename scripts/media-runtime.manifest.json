@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "platform": "win32",
+  "arch": "x64",
+  "version": "8.1.1-full_build-www.gyan.dev",
+  "source": {
+    "distributor": "Gyan Doshi",
+    "url": "https://www.gyan.dev/ffmpeg/builds/",
+    "ffmpegCommit": "239f2c733d",
+    "ffmpegSourceUrl": "https://github.com/FFmpeg/FFmpeg/commit/239f2c733d",
+    "originalDistribution": "Gyan.FFmpeg via Microsoft WinGet"
+  },
+  "license": {
+    "spdx": "GPL-3.0-or-later",
+    "notice": "This distribution includes the unmodified separate FFmpeg and FFprobe executables. The accompanying LICENSE and README preserve upstream licensing, build configuration and external-library versions.",
+    "nonfreeEnabled": false
+  },
+  "files": [
+    {
+      "path": "bin/ffmpeg.exe",
+      "size": 227398656,
+      "sha256": "09948d4cdd0650da6ff5a87577469f2a218dc2615ae379f8f734d24c49de0f73"
+    },
+    {
+      "path": "bin/ffprobe.exe",
+      "size": 227193344,
+      "sha256": "a6618e99bb58869ded3c6f37b53aa1a8d701c3591dbb7b5b317d47369c112be2"
+    },
+    {
+      "path": "LICENSE",
+      "size": 35147,
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    {
+      "path": "README.txt",
+      "size": 45240,
+      "sha256": "35ef02f329d062a1b49397a2869718264b5f12776517791c02126f0efd323528"
+    }
+  ]
+}

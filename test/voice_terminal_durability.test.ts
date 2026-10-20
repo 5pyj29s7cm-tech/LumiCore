@@ -167,6 +167,7 @@ describe('voice durability', () => {
     const dispositionAt = strictHelper.indexOf('terminalTaskDisposition: input.blocked');
     expect(dispositionAt).toBeGreaterThan(strictHelper.indexOf('persistVoiceAssistantMessage('));
     expect(strictHelper).not.toContain('settleConversationActionExecutionRequest(');
+    expect(strictHelper).toContain('authorization: { isCurrent: isCurrentTurn }');
     expect(strictHelper.indexOf('flush: flushDBOrThrow')).toBeGreaterThan(dispositionAt);
     expect(source).toContain("socket.on('audio:cancel_turn', async");
     expect(source).toContain('await commitActiveVoiceCancellation(session, {');
