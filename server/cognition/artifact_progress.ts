@@ -1,47 +1,19 @@
 import type { ToolExecutionRecord } from '../tools/types';
 import fs from 'node:fs';
-import { isExplicitArtifactCreationText, independentActionClauses } from './normalized_action_intent';
+import { affirmativeActionInstructionClauses } from './action_instruction_clauses';
+export { actionInstructionClauses as artifactInstructionClauses } from './action_instruction_clauses';
 import { requestedSingleArtifact } from './artifact_write_scope';
 import { buildTaskTargetAnchorProjection, canonicalPathIdentity } from '../conversation/task_target_anchor';
-import { withoutLocationLiterals } from './location_literals';
 import { artifactReadbackText, artifactPathFromRecord, isArtifactProducerRecord, sameArtifactPath, resolveArtifactDelivery } from '../tools/artifact_evidence';
 import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
 import { CN_EXECUTION_EVIDENCE_MESSAGES as CN } from "../regions/messages/execution_evidence_messages";
 
 
-/** Shared quote-aware instruction projection; quoted content stays data. */
-export function artifactInstructionClauses(input: string): Array<{ text: string; probe: string; start: number }> {
-  const parts: string[] = [];
-  let start = 0, quote = '';
-  // i18n-allow: quote delimiters in user-supplied document content.
-  const pairs: Record<string, string> = { '“': '”', '‘': '’', '"': '"', "'": "'", '`': '`' };
-  for (let index = 0; index < input.length; index++) {
-    const char = input[index];
-    if (quote) { if (char === quote) quote = ''; continue; }
-    if (pairs[char] && !(char === "'" && /[a-z]/iu.test(input[index - 1] || '') && /[a-z]/iu.test(input[index + 1] || ''))) { quote = pairs[char]; continue; }
-    if (/[，,；;。\n]/u.test(char) || char === '.' && /\s|^$/u.test(input[index + 1] || '')) {
-      parts.push(input.slice(start, index + 1)); start = index + 1;
-    }
-  }
-  parts.push(input.slice(start));
-  let offset = 0;
-  return parts.map(part => {
-    const start = offset; offset += part.length;
-    const probe = part.replace(/“[^”]*”|‘[^’]*’|"[^"]*"|'[^']*'|`[^`]*`/gu, literal => {
-      const value = literal.slice(1, -1).trim();
-      return buildTaskTargetAnchorProjection({ taskText: value }).target.path === value ? literal : ' ';
-    });
-    return { text: part, probe, start };
-  });
-}
-
 /** Evidence only: keep independently named outputs and their original content apart. */
 export function requestedArtifactInstructions(input: string): Array<{ text: string; path: string }> {
   const instructions: Array<{ text: string; path: string }> = [];
-  for (const { text: part, probe } of artifactInstructionClauses(input)) {
-    // i18n-allow: reuse the existing hypothetical-clause boundary.
-    if (!independentActionClauses(withoutLocationLiterals(probe).replace(/\bfor\s+example\b/giu, '例如'), true).length) continue;
-    const artifact = isExplicitArtifactCreationText(probe) ? requestedSingleArtifact(probe) : null;
+  for (const { text: part, probe } of affirmativeActionInstructionClauses(input)) {
+    const artifact = requestedSingleArtifact(probe);
     if (artifact) instructions.push({ text: part.trim(), path: artifact.path });
     else if (instructions.length) {
       const referenced = buildTaskTargetAnchorProjection({ taskText: probe }).target.path;

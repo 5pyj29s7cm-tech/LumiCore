@@ -1,3 +1,4 @@
+import { mediaAuthoringMutationScope } from '../../cognition/media_creation_intent';
 
 
 export interface ChatIncomingAttachment {
@@ -118,6 +119,7 @@ export function buildStoredAttachmentSummary(userText: string, attachments: Chat
 export function shouldAllowLocalFileWriteForTurn(userText: string, attachments: ChatIncomingAttachment[]): boolean {
   const clean = String(userText || '').trim();
   if (!clean) return false;
+  if (mediaAuthoringMutationScope(clean)?.projectSelection) return true;
   if (/(?:不要|别|不用|无需|先别|暂时别).{0,12}(?:生成|创建|写入|保存|导出|输出|做成|整理成)/iu.test(clean)) return false;
 
   const explicitDeliverable =

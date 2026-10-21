@@ -1,7 +1,7 @@
 import { hasExplicitNoToolInstruction } from './no_tool_instruction';
 export { hasExplicitNoToolInstruction } from './no_tool_instruction';
 import type { ActionIntentAnalysis } from './normalized_action_intent';
-import { CLIENT_STATE_INSPECTION_REQUEST, withoutNegatedLookupClauses, isStoredMemoryRecallQuestion } from './normalized_action_intent';
+import { CLIENT_STATE_INSPECTION_REQUEST, withoutNegatedLookupClauses, isStoredMemoryRecallQuestion, hasAffirmativeArtifactMutationAction } from './normalized_action_intent';
 import { withoutLocationLiterals } from './location_literals';
 import {
   detectRequestedOperationMode,
@@ -76,7 +76,6 @@ const EXPLICIT_NO_EXTERNAL_COMMIT_PATTERNS: RegExp[] = [
   // i18n-allow: existing English send/submit prohibition, scoped by effect.
   /\b(?:do\s+not|don't|without)\s+(?:send|submit)\b/iu,
 ];
-const EXPLICIT_NO_MUTATION_PATTERNS = [...EXPLICIT_NO_LOCAL_MUTATION_PATTERNS, ...EXPLICIT_NO_EXTERNAL_COMMIT_PATTERNS];
 
 export function explicitNoMutationScope(text: string): { local: boolean; external: boolean } {
   const normalized = String(text || '').trim();
@@ -93,12 +92,7 @@ export function hasExplicitNoMutationInstruction(text: string): boolean {
 
 /** The positive artifact operation, with prohibited operations removed. */
 export function hasRequestedArtifactMutation(text: string): boolean {
-  const positive = EXPLICIT_NO_MUTATION_PATTERNS.reduce(
-    (value, pattern) => value.replace(new RegExp(pattern.source, `${pattern.flags.replace('g', '')}g`), ' '),
-    withoutLocationLiterals(String(text || '')),
-  );
-  // i18n-allow: multilingual task-operation recognition, not user-facing copy.
-  return /(?:创建|新建|写入|编辑|修改|更新|追加|替换|删除|重命名|移动|复制|保存|另存|导出|生成|起草|撰写|制作|整理成|做一份|给我一份|覆盖)|\b(?:creat(?:e|es|ed|ing)|writ(?:e|es|ing|ten)|edit(?:s|ed|ing)?|modif(?:y|ies|ied|ying)|updat(?:e|es|ed|ing)|append(?:s|ed|ing)?|replac(?:e|es|ed|ing)|delet(?:e|es|ed|ing)|remov(?:e|es|ed|ing)|renam(?:e|es|ed|ing)|mov(?:e|es|ed|ing)|copy|copies|copied|copying|sav(?:e|es|ed|ing)|export(?:s|ed|ing)?|generat(?:e|es|ed|ing)|draft(?:s|ed|ing)?|overwrit(?:e|es|ing|ten))\b/iu.test(positive);
+  return hasAffirmativeArtifactMutationAction(text);
 }
 
 const CLIENT_NAVIGATION_VERBS = /(?:\u6253\u5f00|\u8fdb\u5165|\u53bb|\u770b\u770b|\u5207\u6362|\u5207\u5230|\u6362\u5230|\u542f\u52a8|\u5f00\u542f|\u5f00\u59cb|\u5c55\u5f00|\u9000\u51fa|\u6536\u8d77|\u5173\u95ed|\u5173\u6389|\u56de\u5230|\u8fd4\u56de|\b(?:open|show|enter|switch|start|expand|exit|hide|close|collapse|return|go back)\b)/iu;

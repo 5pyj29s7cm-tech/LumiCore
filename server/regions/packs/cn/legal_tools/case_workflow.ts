@@ -267,20 +267,20 @@ export function archiveLegalReportToCase(args: Record<string, any>, params: {
   reasoningLinks?: LegalCases.OrgLegalCaseMaterial['reasoningLinks'];
   reasoningBasis?: string;
 }): string {
-  if (args.persistCase === false) return '- 案件空间：未归档（persistCase=false）';
+  if (args.persistCase === false) return '- 案件空间：未归档';
 
   const explicitCaseId = textArg(args, 'caseId');
   const explicitCaseName = textArg(args, 'caseName') || textArg(args, 'title');
   const shouldArchive = args.persistCase === true || !!explicitCaseId || !!explicitCaseName;
-  if (!shouldArchive) return '- 案件空间：未归档（未提供 caseId/caseName；设置 persistCase=true 可创建案件）';
+  if (!shouldArchive) return '- 案件空间：未归档（尚未关联案件）';
 
   let caseFile = explicitCaseId ? LegalCases.getCase(params.orgId, explicitCaseId, params.userId, 'write') : null;
-  if (explicitCaseId && !caseFile) return '- 案件空间：未归档（caseId 不存在或无权限）';
+  if (explicitCaseId && !caseFile) return '- 案件空间：未归档（关联案件不存在或无访问权限）';
   if (!caseFile && explicitCaseName) {
     caseFile = LegalCases.listCases(params.orgId, explicitCaseName, 1, params.userId)[0] || null;
   }
   if (!caseFile && explicitCaseId && !explicitCaseName && args.persistCase !== true) {
-    return '- 案件空间：未归档（caseId 不存在或无权限）';
+    return '- 案件空间：未归档（关联案件不存在或无访问权限）';
   }
   if (!caseFile) {
     caseFile = legalWrite(() => LegalCases.createCase(params.orgId, params.userId, {
@@ -302,6 +302,6 @@ export function archiveLegalReportToCase(args: Record<string, any>, params: {
     reasoningLinks: params.reasoningLinks, reasoningBasis: params.reasoningBasis,
   }));
   return material
-    ? `- 案件空间：已归档 caseId=${caseFile.id} materialId=${material.id}`
-    : `- 案件空间：未归档 caseId=${caseFile.id}`;
+    ? `- 案件空间：已归档至「${caseFile.title}」`
+    : '- 案件空间：未归档（保存未完成）';
 }

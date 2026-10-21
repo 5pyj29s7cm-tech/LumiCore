@@ -1,4 +1,5 @@
 import { requestedArtifactInstructions, artifactInstructionClauses } from './artifact_progress';
+import { affirmativeActionInstructionClauses } from './action_instruction_clauses';
 import { buildMediaGenerationContract } from './contracts/media_contract';
 import { isExplicitArtifactCreationText, isExternalCommitConfirmationOnlyRequest, normalizeActionIntent } from "./normalized_action_intent";
 import { isLegalEntryTurn, isRemoteLegalMessageTurn } from "./legal_entry";
@@ -555,6 +556,14 @@ export function buildActionEvidenceContract(input: string, analysis?: ActionInte
       .map(({ text }) => ({ text: text.trim(), contract: buildActionContract(text, undefined, analysis) }));
     if (artifacts.length > 1 || sources.length) return combineActionContracts(contract, [...sources,
       ...artifacts.map(({ text }) => ({ text, contract: buildActionContract(text, undefined, analysis) }))]);
+  }
+  // Reuse direct read intents: a path mentioned as a query value is not another source.
+  if (!contract.components?.length && requestsExactReadOnlyArtifactInspection(input)) {
+    const sources = affirmativeActionInstructionClauses(extractPrimaryTaskText(input) || input)
+      .map(({ probe }) => ({ text: probe, intent: normalizeActionIntent(probe, analysis) }))
+      .filter(item => item.intent.rule === 'explicit-local-artifact-read' && Boolean(item.intent.target))
+      .map(({ text, intent }) => ({ text, contract: buildActionContract(text, intent, analysis) }));
+    if (sources.length > 1) return combineActionContracts(contract, sources);
   }
   // This is completion evidence, never a positive execution grant. Keep an
   // independent final commit even when the routing contract chose its input read.

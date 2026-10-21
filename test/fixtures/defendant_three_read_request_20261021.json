@@ -1,0 +1,21 @@
+{
+  "prompt": "请只读取下面三份现有被告工作稿，分别把每一份的完整正文原样发回本次聊天，按20、21、23顺序标明文件名。三份都要从开头到结尾完整保留，不要摘要，不要只返回其中一份。\n\n1. 完整读取文件 C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/defendant-three-local-revision-20261021-1792536208941/20_statement-of-defense.md，展示该文件全部原文。\n2. 完整读取文件 C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/defendant-three-local-revision-20261021-1792536208941/21_cross-examination-opinion.md，展示该文件全部原文。\n3. 完整读取文件 C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/defendant-three-local-revision-20261021-1792536208941/23_argument-outline.md，展示该文件全部原文。\n\n本次仅取回这三份已经完成的修改稿：不重新起草、不改动任何文件、不重新生成文书包或26份文书，不入案、不归档、不签署、不提交、不对外发送，也不用打开桌面软件。任何一份未完整读到或未能全文交付，请明确指出，不能说三份都完成。",
+  "documents": [
+    {
+      "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/defendant-three-local-revision-20261021-1792536208941/20_statement-of-defense.md",
+      "sha256": "297dc6140abda7e601f8425d998b86d3a09024f3e00d3e0663f583562a3555a3",
+      "characters": 6262
+    },
+    {
+      "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/defendant-three-local-revision-20261021-1792536208941/21_cross-examination-opinion.md",
+      "sha256": "6eeb22b58dc38f3c18759e22848be1fd034692d9556b4a91b8e68eadc07ed324",
+      "characters": 3020
+    },
+    {
+      "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/defendant-three-local-revision-20261021-1792536208941/23_argument-outline.md",
+      "sha256": "ef7d453e52e1a8257955a05b29bd1df97032291f2dee285477abe15ad2a09fd8",
+      "characters": 7511
+    }
+  ],
+  "scope": "Original prepared task wording; synthetic bodies in unit tests only, no legal-content acceptance"
+}

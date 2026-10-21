@@ -219,8 +219,8 @@ export async function finalizeDeliveryPackageHandler(args: Record<string, any>, 
       localPath: outputDir,
     });
     const caseArchiveLine = caseId
-      ? blockedMaterial ? `- 案件空间：已归档阻断记录 materialId=${blockedMaterial.id}` : '- 案件空间：未归档（caseId 不存在或无权限）'
-      : '- 案件空间：未归档（未提供 caseId）';
+      ? blockedMaterial ? '- 案件空间：已归档阻断记录' : '- 案件空间：未归档（关联案件不存在或无访问权限）'
+      : '- 案件空间：未归档（尚未关联案件）';
 
     return [
       '# 正式交付包未生成',
@@ -265,8 +265,8 @@ export async function finalizeDeliveryPackageHandler(args: Record<string, any>, 
       localPath: outputDir,
     });
     const caseArchiveLine = caseId
-      ? blockedMaterial ? `- 案件空间：已归档阻断记录 materialId=${blockedMaterial.id}` : '- 案件空间：未归档（caseId 不存在或无权限）'
-      : '- 案件空间：未归档（未提供 caseId）';
+      ? blockedMaterial ? '- 案件空间：已归档阻断记录' : '- 案件空间：未归档（关联案件不存在或无访问权限）'
+      : '- 案件空间：未归档（尚未关联案件）';
 
     return [
       '# 正式交付包未生成',
@@ -324,8 +324,8 @@ export async function finalizeDeliveryPackageHandler(args: Record<string, any>, 
       localPath: outputDir,
     });
     const caseArchiveLine = caseId
-      ? blockedMaterial ? `- 案件空间：已归档阻断记录 materialId=${blockedMaterial.id}` : '- 案件空间：未归档（caseId 不存在或无权限）'
-      : '- 案件空间：未归档（未提供 caseId）';
+      ? blockedMaterial ? '- 案件空间：已归档阻断记录' : '- 案件空间：未归档（关联案件不存在或无访问权限）'
+      : '- 案件空间：未归档（尚未关联案件）';
 
     return [
       '# 正式交付包未生成',
@@ -387,8 +387,8 @@ export async function finalizeDeliveryPackageHandler(args: Record<string, any>, 
     localPath: outputDir,
   });
   const caseArchiveLine = caseId
-    ? archivedMaterial ? `- 案件空间：已归档正式交付包 materialId=${archivedMaterial.id}` : '- 案件空间：未归档（caseId 不存在或无权限）'
-    : '- 案件空间：未归档（未提供 caseId）';
+    ? archivedMaterial ? '- 案件空间：已归档正式交付包' : '- 案件空间：未归档（关联案件不存在或无访问权限）'
+    : '- 案件空间：未归档（尚未关联案件）';
 
   return [
     '# 正式交付包已生成',

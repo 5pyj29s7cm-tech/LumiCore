@@ -64,7 +64,7 @@ describe('existing contract tool revises a complete supplied NDA rather than req
     expect(prompt).toContain('没有模板正文时不得声称使用官方示范文本');
     expect(result.receipt).toMatchObject({ ok: true, status: 'generated', persisted: false, artifacts: [] });
     for (const body of bodies) expect(result.content).toContain(body);
-    expect(result.content).toContain('未归档（persistCase=false）');
+    expect(result.content).toContain('案件空间：未归档');
     expect(result.content).not.toContain('未找到');
     expect(result.content).not.toContain('价款、期限、违约责任仍需人工补齐');
     expect(ledgerSnapshot()).toBe(before);

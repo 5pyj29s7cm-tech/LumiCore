@@ -96,8 +96,9 @@ describe('media requests through the complete shared planning pipeline', () => {
     });
     expect({ intent: pipeline.normalizedIntent, route: pipeline.execution.toolRoute,
       execute: pipeline.executionRequested, projected: pipeline.modelToolProjection.toolNames,
-      ledger: pipeline.capabilityPlan.taskLedgerRequired }).toMatchObject({ execute: true, ledger: true,
+      ledger: pipeline.capabilityPlan.taskLedgerRequired }).toMatchObject({ execute: true, ledger: false,
         projected: expect.arrayContaining([tool]) });
+    expect(pipeline.taskId).toBeUndefined(); // The selected-call owner creates the chat task, not this planning-only projection.
     expect(classifyExecutionGuardIntent([text, structuredMediaRoutingEnvelope(media)].join('\n\n'))).toBe('action_execution');
     expect(pipeline.authorizationPolicy.forbiddenTools).toContain('send_email');
   });

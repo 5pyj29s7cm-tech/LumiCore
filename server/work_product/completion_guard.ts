@@ -1,6 +1,9 @@
+import { unsupportedRealWorldClaim } from '../cognition/result_claim_guards';
+import { inspectPublicExecutionReferences } from '../cognition/user_output_protection';
+import { isSuccessfulExactDocumentRead, documentReadMatchesRequestedTarget } from '../cognition/action_desktop_evidence';
 import fs from 'fs';
 import path from 'path';
-import { artifactRecordMatchesTurn } from '../tools/artifact_evidence';
+import { artifactRecordMatchesTurn, artifactReadbackTextSources } from '../tools/artifact_evidence';
 import { ToolExecutionRecord, type ToolContext } from '../tools/types';
 import {
   buildActionEvidenceContract,
@@ -456,9 +459,21 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
   const task = input.task || '';
   const response = input.response || '';
   if (!response.trim()) return { text: response, blocked: false };
-  const claimText = stripNegatedClaimClauses(response);
-
   const toolCalls = input.toolCalls || [];
+  const currentSourceReads = input.requestId && input.taskId
+    ? inspectPublicExecutionReferences({ ...input, toolCalls }, response).currentRecords.filter(record =>
+      isSuccessfulExactDocumentRead(record)
+      && documentReadMatchesRequestedTarget(record, task, input.acceptedTaskTarget))
+    : [];
+  const { verifiedText } = artifactReadbackTextSources(currentSourceReads, [task]);
+  const assistantText = verifiedText.filter(Boolean)
+    .reduce((value, source) => value.split(source).join('\n'), response);
+  const claimText = stripNegatedClaimClauses(assistantText);
+  const unsupportedClaim = assistantText !== response ? unsupportedRealWorldClaim({
+    taskText: task, responseText: claimText, toolRecords: toolCalls, source: input.source || 'chat',
+    requestId: input.requestId, taskId: input.taskId,
+  }) : null;
+  if (unsupportedClaim) return unsupportedClaim;
   const knowledgeObservation = formatGroundedKnowledgeObservation({ taskText: task, toolRecords: toolCalls });
   if (knowledgeObservation) return { text: knowledgeObservation, blocked: false };
   const toolOutcomes = toolCalls.map(call => ({ call, successful: isSuccessfulToolCall(call) }));

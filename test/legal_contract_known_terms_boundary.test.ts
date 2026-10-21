@@ -87,7 +87,7 @@ it('preserves confirmed gratuitous two-year terms through the actual handler wit
   expect(result).toContain('保密期限为签署后两年');
   expect(result).not.toContain('价款、期限');
   expect(result).toContain('签署日期、争议解决地点、签章代表和违约损失数额均待双方确认');
-  expect(result).toContain('未归档（persistCase=false）');
+  expect(result).toContain('案件空间：未归档');
   expect(ledgerSnapshot()).toBe(before);
   expect(create).toHaveBeenCalledTimes(1);
   const prompt = create.mock.calls[0][0].messages.map((message: any) => String(message.content)).join('\n');
@@ -111,7 +111,7 @@ it('does not turn empty section gaps into seven generic pending statements throu
   expect(body).toContain('虚构曜辰设备有限公司与虚构澄月咨询有限公司');
   expect(body).toContain('仅处理双方在合作评估中披露且明确标示的保密资料');
   expect(body).toContain('交易事实与法律仍待核对，不代表正式核验通过');
-  expect(result).toContain('未归档（persistCase=false）');
+  expect(result).toContain('案件空间：未归档');
   expect(ledgerSnapshot()).toBe(before);
   expect(create).toHaveBeenCalledTimes(1);
   const input = create.mock.calls[0][0].messages.map((message: any) => String(message.content)).join('\n');

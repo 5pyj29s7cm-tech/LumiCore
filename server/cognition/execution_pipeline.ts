@@ -39,7 +39,7 @@ import { restrictMediaGenerationTools } from './external_capability_boundary';
 import type { CapabilityExecutionPlan } from './capability_execution_plan';
 import { observeLayaDecision } from '../runtime/laya_shadow';
 import { hasExplicitNoMutationInstruction, hasExplicitNoToolInstruction, explicitNoMutationScope } from './tool_intent';
-import { avatarAuthoringMutationInstruction } from './media_creation_intent';
+import { avatarAuthoringMutationInstruction, mediaAuthoringMutationScope } from './media_creation_intent';
 import { executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import type { PendingAssistantOfferContext } from './pending_assistant_offer';
 import type { ToolContext, ServerBoundCapabilitySelection } from '../tools/types';
@@ -116,6 +116,7 @@ function applyCurrentTurnNoMutationConstraint(
   visibilityContext?: Pick<ToolContext, 'userId' | 'domain' | 'orgId' | 'autonomous' | 'source'>,
   acceptedIntent?: Readonly<NormalizedActionIntent>,
   analysis = new TurnAnalysis(),
+  mediaScope: ReturnType<typeof mediaAuthoringMutationScope> = null,
 ): LumiExecutionDecision {
   const originalText = text;
   // A confirmation-only external-commit request deliberately says both
@@ -124,8 +125,9 @@ function applyCurrentTurnNoMutationConstraint(
   // the confirmation gate, not the generic read-only filter, prevents the
   // side effect. Ordinary negative commands remain fully read-only.
   if (isExternalCommitConfirmationOnlyRequest(text)) return execution;
+  if (mediaScope?.projectSelectionRequested && !mediaScope.projectSelection) execution = restrictLumiExecutionTools(execution, ['chat_song_project']);
   const prohibition = explicitNoMutationScope(text);
-  if (prohibition.external && !prohibition.local) {
+  if (prohibition.external && !prohibition.local && !mediaScope?.projectSelection) {
     // A ban on sending/submitting never grants opaque actions or existing-state mutation.
     const retrievalOnly = analysis.contract(text).artifactMode === 'retrieve';
     const forbidden = registry.getCapabilityManifest(undefined, { context: visibilityContext }).filter(entry => {
@@ -186,13 +188,15 @@ function applyCurrentTurnNoMutationConstraint(
     && normalizedIntent.operation === 'create'
     && normalizedIntent.sideEffectClass === 'local_write'
   ) return execution;
-  if (!hasExplicitNoMutationInstruction(text)) return execution;
+  if (!hasExplicitNoMutationInstruction(text) && !mediaScope?.projectSelection) return execution;
   const avatarInstruction = avatarAuthoringMutationInstruction(text);
   const scopedAvatarAuthoring = avatarInstruction !== null && !hasExplicitNoMutationInstruction(avatarInstruction);
   const businessBoundary = localBusinessAnalysisBoundary(text);
   const scopedBusinessTools = businessBoundary && !hasExplicitNoMutationInstruction(businessBoundary.instruction) ? businessBoundary.tools : [];
   const requestedWorkflowCapture = preservedOutput && executionBeforeWorkflowSave(text);
+  const scopedMediaTools = mediaScope ? [mediaScope.generator, ...(mediaScope.projectSelection ? ['chat_song_project'] : [])] : [];
   const scopedTools = new Set([
+    ...scopedMediaTools,
     ...scopedBusinessTools,
     ...(scopedAvatarAuthoring ? ['memory_avatar_create', 'memory_avatar_import_image', 'memory_avatar_configure_animation', 'generate_image', 'ai_edit_image', 'get_image_generation_status'] : []),
     ...(preservedOutput ? ['code_execution'] : []),
@@ -202,6 +206,7 @@ function applyCurrentTurnNoMutationConstraint(
     .filter(entry => !scopedTools.has(entry.toolName) && (!preservedOutput || !isPreservedSourceOutputTool(entry.toolName)) && (
       entry.operation === 'create'
       || entry.operation === 'mutate'
+      || Boolean(mediaScope?.projectSelection) && entry.operation === 'unknown'
       || entry.sideEffects.some(effect => effect.type !== 'local_read' && !(
         entry.operation === 'observe' && effect.reversible === true && (effect.type === 'network_read'
           || effect.type === 'local_write' && entry.verification.required && entry.verification.strategy === 'artifact'
@@ -215,7 +220,9 @@ function applyCurrentTurnNoMutationConstraint(
     ...restricted,
     promptOverlay: [
       execution.promptOverlay,
-      scopedBusinessTools.length
+      scopedMediaTools.length
+        ? 'Only the explicitly requested media generation and the exact bound project song selection may persist. Do not change configuration, scripts, files, other projects, or lyric confirmation; do not send or publish.'
+        : scopedBusinessTools.length
         ? 'Only source-bound local business analysis and its task receipts may persist. Do not write personal memory, access store accounts, mutate external state, or perform unrelated local writes.'
         : scopedAvatarAuthoring
         ? 'Only the requested memory-person authoring and image operations may mutate state. Preserve existing people and all implementation files. Do not edit code/databases, send messages, or start a livestream.'
@@ -393,6 +400,7 @@ export function buildLumiExecutionPipeline(
   });
   const unrestrictedManifest = input.registry.getCapabilityManifest(routedExecution.toolPolicy, { context: visibilityContext });
   const constraintText = trustedActionContinuation && !preservedSourceOutputScope(actionText) ? effectiveText : actionText;
+  const mediaScope = mediaAuthoringMutationScope(constraintText);
   const execution = restrictLumiExecutionTools(
     applyCurrentTurnNoMutationConstraint(
       restrictMediaGenerationTools({ normalizedIntent, execution: routedExecution, manifest: unrestrictedManifest }),
@@ -401,6 +409,7 @@ export function buildLumiExecutionPipeline(
       visibilityContext,
       constraintText === resolution.userText ? resolution.userIntent : undefined,
       analysis,
+      mediaScope,
     ),
     taskRelation.binding === 'stale'
       ? ['*', ...(input.additionalForbiddenTools || [])] : input.additionalForbiddenTools,
@@ -440,6 +449,7 @@ export function buildLumiExecutionPipeline(
     pinnedTools: pinnedContinuationTools,
     requiredTools: [
       ...(mediaRequest ? [structuredMediaToolCall(mediaRequest).name] : []),
+      ...(mediaScope ? [mediaScope.generator, ...(mediaScope.projectSelection ? ['chat_song_project', 'chat_song_read'] : [])] : []),
       ...workflowRequiredTools,
       ...actionVerificationTools,
       ...preservedSourceOutputTools(actionText, acceptedTaskTarget),

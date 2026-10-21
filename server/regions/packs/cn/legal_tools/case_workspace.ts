@@ -119,7 +119,7 @@ export async function resolveLegalReasoningDraft(args: Record<string, any>, cont
     const pending = currentSources.filter(source => !knownQuotes.has(source.quote)
       && !originals.some(material => source.quote === `[材料 ${material.id}：${material.title}]`));
     const pendingFields = [...new Set(pending.map(source => source.materialId))];
-    if (pendingFields.length && args.persistCase === false) generationFailure = '本次输入尚未归档；persistCase=false，未忽略新材料或消耗模型调用，请先归档原件再继续。';
+    if (pendingFields.length && args.persistCase === false) generationFailure = '本次输入尚未归档，请先归档原件再继续。';
     else if (pendingFields.length) {
       if (!LegalCases.getCase(orgId, sourceCase.id, userId, 'write')) generationFailure = '本次输入尚未归档：当前案件不可写，未生成旧材料分析。';
       else for (const field of pendingFields) {
@@ -242,7 +242,7 @@ export async function reasoningMatrixHandler(args: Record<string, any>, context?
   }
 
   let caseFile: LegalCases.OrgLegalCaseFile | null = null;
-  let archiveLine = persist ? '- 案件空间：未归档（来源关联未通过）' : '- 案件空间：未归档（persistCase=false）';
+  let archiveLine = persist ? '- 案件空间：未归档（来源关联未通过）' : '- 案件空间：未归档';
   if (persist && traceability.passed) {
     const explicitCaseId = textArg(args, 'caseId');
     caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId, userId, 'write') : null;
@@ -267,8 +267,8 @@ export async function reasoningMatrixHandler(args: Record<string, any>, context?
       reasoningBasis: sourceCase ? legalCaseSourceFingerprint(sourceCase) : undefined,
     }));
     archiveLine = material
-      ? `- 案件空间：已归档 caseId=${caseFile.id} materialId=${material.id}`
-      : `- 案件空间：未归档 caseId=${caseFile.id}`;
+      ? `- 案件空间：已归档至「${caseFile.title}」`
+      : '- 案件空间：未归档（保存未完成）';
   }
 
   return encodeToolResult([
@@ -277,7 +277,7 @@ export async function reasoningMatrixHandler(args: Record<string, any>, context?
     `- 案件：${caseName}`,
     `- 现行有效法律预检：${legalReasoningGateStatus(lawGate)}`,
     `- 来源关联检查：${traceability.passed ? '通过（法律结论仍待律师复核）' : '未通过，尚缺规则与证据的逐项关联'}`,
-    reasoningPath ? `- 底稿文件：${reasoningPath}` : '- 底稿文件：未写入（writeFiles=false）',
+    reasoningPath ? `- 底稿文件：${reasoningPath}` : '- 底稿文件：未写入',
     archiveLine,
     ...(generationFailure ? [`- 未完成原因：${generationFailure}`] : []),
     ...traceability.errors.map(error => `- ${error}`),

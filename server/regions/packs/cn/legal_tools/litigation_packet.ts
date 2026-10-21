@@ -410,8 +410,8 @@ ${materialRows}
     content: archivedHandoff,
   });
   const archiveLine = caseId
-    ? archivedMaterial ? `已归档到案件空间 materialId=${archivedMaterial.id}` : '未归档（caseId 不存在或无权限）'
-    : '未归档（未提供 caseId）';
+    ? archivedMaterial ? '已归档到案件空间' : '未归档（关联案件不存在或无访问权限）'
+    : '未归档（尚未关联案件）';
   return `${archivedHandoff}
 
 ## 九、案件空间归档

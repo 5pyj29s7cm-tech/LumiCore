@@ -109,7 +109,7 @@ export async function meetingMinutesToCaseHandler(args: Record<string, any>, con
   legalWrite(() => fs.writeFileSync(caseUpdatePath, caseUpdateMarkdown, 'utf-8'));
   legalWrite(() => fs.writeFileSync(liveBriefPath, liveBriefMarkdown, 'utf-8'));
 
-  let archiveLine = '- 案件空间：未归档（persistCase=false）';
+  let archiveLine = '- 案件空间：未归档';
   let sourceMaterial: LegalCases.OrgLegalCaseMaterial | undefined | null;
   let reportMaterial: LegalCases.OrgLegalCaseMaterial | undefined | null;
   const meetingLabel = [textArg(args, 'meetingTime') || '时间未提供', textArg(args, 'meetingId')].filter(Boolean).join(' · ');
@@ -127,7 +127,7 @@ export async function meetingMinutesToCaseHandler(args: Record<string, any>, con
       localPath: minutesPath, source: 'tool',
     }));
     if (!sourceMaterial || !reportMaterial) throw new Error('The original transcript and meeting report were not both archived.');
-    archiveLine = '- 案件空间：已归档 caseId=' + caseFile.id;
+    archiveLine = '- 案件空间：已归档至「' + caseFile.title + '」';
   }
 
   return encodeToolResult([

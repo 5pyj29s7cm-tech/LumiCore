@@ -1,5 +1,6 @@
 import { CN_TASK_TARGET_ANCHOR_MESSAGES } from "../regions/messages/task_target_anchor_messages";
 import { classifySkillAuthoringIntent } from "../skills/authoring_intent";
+import { affirmativeActionClauses, normalizeActionIntent } from "../cognition/normalized_action_intent";
 import { isArtifactProducerRecord } from "../tools/artifact_evidence";
 import type { TaskTargetAnchorV1, AcceptedTaskTarget, TaskTargetEvidenceRecord, BuildTaskTargetAnchorInput, TaskTargetAnchorProjectionV1, EvidenceCandidate, TaskTargetToolCallGuardResult } from './targets/contracts';
 import { primaryTaskText, parseTaskTargetJson, unique, normalizedIdentity, compact } from './targets/values';
@@ -430,12 +431,17 @@ export function guardTaskTargetToolCall(input: {
     return { allowed: true, reason: '' };
   }
   const args = input.arguments || {};
-  const projection = buildTaskTargetAnchorProjection({
-    taskText: input.taskText,
-    evidence: input.toolRecords || [],
-    previousTarget: input.acceptedTaskTarget?.target,
-  });
   const target = callTarget(args);
+  const requestedRead = DOCUMENT_INTERFACE_RE.test(toolName) && !CURRENT_DOCUMENT_INTERFACE_RE.test(toolName) && concreteTargetPath(target)
+    ? affirmativeActionClauses(primaryTaskText(input.taskText)).find(probe => {
+        const intent = normalizeActionIntent(probe);
+        return intent.rule === 'explicit-local-artifact-read' && canonicalPathIdentity(intent.target || '') === canonicalPathIdentity(target);
+      }) : undefined;
+  const projection = buildTaskTargetAnchorProjection({
+    taskText: requestedRead || input.taskText,
+    evidence: input.toolRecords || [],
+    previousTarget: requestedRead ? undefined : input.acceptedTaskTarget?.target,
+  });
   const currentWps = prefersCurrentWpsDocument(input.taskText, projection.target.application);
   const currentAuthoringDocument = prefersCurrentAuthoringDocument(
     input.taskText,

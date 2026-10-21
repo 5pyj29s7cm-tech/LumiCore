@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { mediaAuthoringMutationScope } from '../../cognition/media_creation_intent';
+import { hasExplicitNoMutationInstruction } from '../../cognition/tool_intent';
 import fs from 'node:fs';
 import { CHAT_SONG_TEMPLATE } from '../../../shared/chat_song_layout';
 import { CHAT_SONG_AUDIO_EXTENSIONS, chatSongSongCurrent } from '../../../shared/chat_song';
@@ -60,6 +62,17 @@ export function registerChatSongTools(registry: ToolRegistry): void {
           ] };
         },
         preflight: (args: Record<string, any>, context?: ToolContext) => { confirmationProject(confirmationArguments(args), context); },
+      } : name === 'chat_song_project' ? {
+        serverOwnedArgumentBinder: (args: Record<string, any>, context?: ToolContext) => {
+          const taskText=context?.acceptedActionContract?.taskText || context?.routedTaskText || context?.actionIntent || '';
+          const mediaScope=mediaAuthoringMutationScope(taskText);
+          if(!mediaScope || !mediaScope.projectSelectionRequested && !hasExplicitNoMutationInstruction(taskText))return args;
+          const scope=mediaScope.projectSelection;
+          const value=parse(mutation,args);
+          const song=z.object({fileId:z.string().trim().min(1)}).strict().safeParse(value.value);
+          if(!scope || value.action!=='select-song' || value.projectId!==scope.projectId || value.revision!==scope.revision || value.title!==undefined || value.templateId!==undefined || !song.success)throw new ChatSongError(403,'This turn permits only its exact owned project song selection.');
+          return {...value,value:song.data};
+        },
       } : name === 'chat_song_render' ? { preflight: (args: Record<string, any>, context?: ToolContext) => { const value = parse(selected, args), project = current(owner(context), value.projectId, value.revision); if (project.brief.outputStyle !== 'animation') chatSongRenderTimeline(project); } } : {}),
       handler: async (args, context) => JSON.stringify(await handler(args, context)),
       capability: capabilityContract({ id: capabilityId, family: 'chat-song', lane: name === 'chat_song_render' || read ? 'media' : 'general', operation, risk: humanCheck ? 'high' : 'low',

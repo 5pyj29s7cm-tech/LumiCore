@@ -7,7 +7,9 @@ import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import { classifyExternalCliIntent, requestedCliProviders } from './external_cli_intent';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
 import { withoutLocationLiterals } from './location_literals';
-import { matchesCnTaskReceiptQuestion, matchesCnBoundArtifactEdit } from "../regions/input/zh_action_continuation";
+import { affirmativeActionClauses } from './action_instruction_clauses';
+export { affirmativeActionClauses } from './action_instruction_clauses';
+import { matchesCnTaskReceiptQuestion } from "../regions/input/zh_action_continuation";
 
 /** Read/search/navigation verbs in an explicitly forbidden clause are not requests.
  * Keep the original user message for the model and side-effect authorization.
@@ -243,59 +245,55 @@ function explicitArtifactPath(text: string): string {
   return relativeArtifactPath(text);
 }
 
-function hasAffirmativeArtifactCreationAction(text: string): boolean {
-  // Remove only clauses that negate the file mutation itself. A boundary such
-  // as "Do not report task status" must not erase a preceding affirmative
-  // write instruction.
-  // i18n-allow: Reviewed Chinese artifact-action input recognition; not user-visible copy.
-  const positiveChinese = text
-    .replace(
-      // i18n-allow: Reviewed Chinese artifact-action input recognition; not user-visible copy.
-      /(?:不要|别|无需|不用|禁止|请勿|勿).{0,16}(?:创建|新建|生成|写入|保存)[^，,。！？!?；;\n]*/gu,
-      ' ',
-    )
-    // Status interrogatives mention the historical verb but do not authorize
-    // another write (for example, "是否写入后回读").
-    // i18n-allow: Reviewed Chinese artifact-status input recognition; not user-visible copy.
-    .replace(/(?:是否|有没有|有没|能否).{0,16}(?:已经)?(?:创建|新建|生成|写入|保存)[^，,。！？!?；;\n]*/gu, ' ')
-    // i18n-allow: Reviewed Chinese artifact-status input recognition; not user-visible copy.
-    .replace(/(?:创建|新建|生成|写入|保存)(?:了|过)?(?:吗|没有|没|了没)[^，,。！？!?；;\n]*/gu, ' ');
-  // i18n-allow: Reviewed Chinese artifact-action input recognition; not user-visible copy.
-  if (/(?:创建|新建|生成|写入)/u.test(positiveChinese)) return true;
+/** One affirmative predicate owner for artifact creation, edits, and tool routing. */
+function affirmativeArtifactAction(text: string, only?: 'create' | 'mutate'): boolean {
+  // i18n-allow: Existing mutation operations in imperative rather than noun/status position.
+  const create = /^(?:创建|新建|生成|写入|保存|另存|导出|起草|撰写|制作|整理成|做一份|给我一份)|^(?:creat(?:e|ing)|write|writ(?:e|ing)|generate|save|export|draft)\b/iu;
+  // i18n-allow: Editing a bound document or field is an operation, not a mention of a revised draft.
+  const mutate = /^(?:编辑|修改|修订|调整|更新|追加|替换|删除|重命名|移动|复制|覆盖|改成|改为|换成)|^(?:edit|modify|revise|update|append|replace|delete|remove|rename|move|copy|overwrite)\b/iu;
+  for (const clause of affirmativeActionClauses(currentTurnText(text))) {
+    const value = withoutLocationLiterals(clause).trim()
+      .replace(/^(?:\[[^\]\r\n]*\]\s*)+/u, '')
+      .replace(/^(?:\d+[.)、]\s*)/u, '');
+    // i18n-allow: Retrospective/capability questions have no affirmative mutation predicate.
+    if (/^(?:是否|有没有|有没|能否)|(?:创建|新建|生成|写入|保存|修改|修订)(?:了|过)?(?:吗|没有|没|了没)/u.test(value)) continue;
+    // i18n-allow: Multilingual imperative prefixes and object-before-predicate grammar.
+    const head = value.replace(/^(?:(?:请你?|麻烦你?|帮我|给我(?!一份)|现在|直接|立即|务必|先|再|继续|然后|接着|同时|并且|并|也|本次|这次|(?:我)?(?:需要|要求|希望)你?|我想让你|你必须|你需要)\s*)+/u, '')
+      .replace(/^(?:(?:please|now|then|next|you\s+must|you\s+should|must|should|need\s+to|required\s+to|i\s+(?:need|want)\s+you\s+to|(?:can|could|would)\s+you)\s+)+/iu, '');
+    const predicates = [head];
+    // i18n-allow: Explicit object/location/tool prefixes retain their following operation.
+    if (/^(?:把|将|对|为|在|用|使用|通过|根据)/u.test(head)) {
+      for (let index = 1; index < Math.min(head.length, 180); index++) {
+    // i18n-allow: Chinese historical or attributive predicate input grammar.
+        if (/(?:的|之|已经|已|之前|先前|曾经)\s*$/u.test(head.slice(0, index))) continue;
+        const candidate = head.slice(index);
+        // A post-object edit needs a predicate complement or a terminal verb.
+        // This leaves an adjective inside the object (rather than an edit command) alone.
+        // i18n-allow: Disposal/object-predicate complements, not an artifact-name blacklist.
+        const boundEdit = /^(?:编辑|修改|修订|调整|更新|追加|替换|删除|重命名|移动|复制|覆盖)(?=为|成|到|一下|一次|掉|好|完成|并|然后|再|[，,。；;！？!?\s]*$)/u.test(candidate);
+        if (create.test(candidate) || boundEdit) predicates.push(candidate);
+      }
+    }
+    if (only !== 'mutate' && (predicates.some(part => create.test(part))
+      || /^(?:start|begin)\b[^.!?;\n]{0,120}\bby\s+creat(?:e|ing)\b/iu.test(head)
+      || /^(?:(?:use|call|invoke|run)\s+(?:the\s+)?)?(?:desktop_write_text_file|write_file)\b[\s\S]{0,120}\b(?:to\s+)?(?:write|create|generate|save)\b/iu.test(head)
+      || /^(?:call|use)\s+write_file\b/iu.test(head))) return true;
+    if (only !== 'create' && predicates.some(part => mutate.test(part))) return true;
+  }
+  return false;
+}
 
-  // i18n-allow: English artifact-creation input recognition; not user-visible copy.
-  const clauseImperative =
-    /(?:^|[\[\]{}()!?.,;:\n]\s*)(?:(?:please|now|then|next|you\s+must|you\s+should|must|should)\s+)*(?:create|write|generate|save)\b/iu;
-  // "Start a separate task by creating <path>" is an action contract, not a
-  // request to launch an application named "a separate task".
-  const startByCreating =
-    /\b(?:start|begin)\b[^.!?;\n]{0,120}\bby\s+creat(?:e|ing)\b/iu;
-  const requiredWriteTool =
-    /\b(?:must|should|need\s+to|required\s+to)\s+(?:call|use)\s+write_file\b/iu;
-  // Tool-directed wording is still an explicit mutation when the user gives
-  // an imperative such as "Use desktop_write_text_file ... to write ...".
-  // Previously this fell through as `kind:none`; with an unfinished task in
-  // the conversation, the generic continuation classifier then attached the
-  // independent instruction to the old task. Keep questions and negations out
-  // of this lane by requiring an imperative tool verb and rejecting a nearby
-  // negative guard.
-  const toolBackedWrite =
-    /\b(?:use|call|invoke|run)\s+(?:the\s+)?(?:desktop_write_text_file|write_file)\b[\s\S]{0,120}\b(?:to\s+)?(?:write|create|generate|save)\b/iu;
-  const negatedToolWrite =
-    /\b(?:do\s+not|don't|never|without)\s+(?:use|using|call|calling|invoke|run)\b[\s\S]{0,80}\b(?:desktop_write_text_file|write_file)\b/iu;
-  return (
-    clauseImperative.test(text)
-    || startByCreating.test(text)
-    || requiredWriteTool.test(text)
-    || (toolBackedWrite.test(text) && !negatedToolWrite.test(text))
-  );
+export function hasAffirmativeArtifactMutationAction(text: string): boolean {
+  return affirmativeArtifactAction(text);
 }
 
 function explicitArtifactCreationIntent(text: string): NormalizedActionIntent | null {
-  const target = explicitArtifactPath(text);
-  if (!target || !ARTIFACT_FILE_EXTENSION_RE.test(target) || !hasAffirmativeArtifactCreationAction(text)) {
-    return null;
-  }
+  const instruction = affirmativeActionClauses(text).find(probe => {
+    const target = explicitArtifactPath(probe);
+    return target && ARTIFACT_FILE_EXTENSION_RE.test(target) && affirmativeArtifactAction(probe, 'create');
+  });
+  if (!instruction) return null;
+  const target = explicitArtifactPath(instruction);
   return {
     kind: 'desktop_operation',
     operation: 'create',
@@ -310,26 +308,31 @@ function explicitArtifactCreationIntent(text: string): NormalizedActionIntent | 
 }
 
 function explicitArtifactEditIntent(text: string): NormalizedActionIntent | null {
-  const target = explicitArtifactPath(text);
-  // i18n-allow: User-directed edits to an existing local document, not a status query.
-  const refersToFile = Boolean(target) || /(?:刚才|刚刚|上一份|这份|该).{0,20}(?:表格|文件|文档|Excel|工作簿)/iu.test(text);
-  if (!refersToFile || !matchesCnBoundArtifactEdit(text, text)) return null;
+  const instruction = affirmativeActionClauses(text).find(probe => {
+    // i18n-allow: User-directed edits bind their object in the same affirmative instruction.
+    const refersToFile = Boolean(explicitArtifactPath(probe)) || /(?:刚才|刚刚|上一份|这份|该).{0,20}(?:表格|文件|文档|Excel|工作簿)/iu.test(probe);
+    return refersToFile && affirmativeArtifactAction(probe, 'mutate');
+  });
+  if (!instruction) return null;
+  const target = explicitArtifactPath(instruction);
   return { kind: 'desktop_operation', operation: 'mutate', subject: 'user',
     target: target || 'recent_artifact', payload: text, sideEffectClass: 'local_write',
     relation: 'new', confidence: 0.96, rule: 'explicit-artifact-edit' };
 }
 
 function explicitLocalArtifactReadIntent(text: string): NormalizedActionIntent | null {
-  const target = explicitArtifactPath(text);
-  if (!target) return null;
-  const targetIndex = text.indexOf(target);
-  const actionPrefix = targetIndex >= 0 ? text.slice(0, targetIndex).trim() : '';
-  // This owns only an explicit fresh command. “继续分析” and a path supplied
-  // by itself remain eligible to fill the target slot of an unfinished task.
-  // i18n-allow: Multilingual local-artifact read recognition; not user-visible copy.
-  if (!/^(?:(?:请|麻烦你|现在|直接)\s*)*(?:分析|读取|查看|审查|检查|总结)(?:一下)?\s*$|^(?:(?:please|now|directly)\s+)*(?:analy[sz]e|read|inspect|review|check|summari[sz]e)(?:\s+the)?\s*$/iu.test(actionPrefix)) {
-    return null;
-  }
+  const instruction = affirmativeActionClauses(text).find(probe => {
+    const target = explicitArtifactPath(probe);
+    if (!target) return false;
+    const targetIndex = probe.indexOf(target);
+    const actionPrefix = targetIndex >= 0 ? probe.slice(0, targetIndex).trim() : '';
+    // This owns only an explicit fresh command. A path supplied by itself
+    // remains eligible to fill the target slot of an unfinished task.
+    // i18n-allow: Existing read predicate with explicit read-only/completeness and file operands.
+    return /^(?:(?:请|麻烦你|现在|直接)\s*)*(?:(?:只|完整)\s*)*(?:分析|读取|查看|审查|检查|总结)(?:一下)?\s*(?:(?:文件|文档)\s*)?$|^(?:(?:please|now|directly)\s+)*(?:analy[sz]e|read|inspect|review|check|summari[sz]e)(?:\s+the)?\s*$/iu.test(actionPrefix);
+  });
+  if (!instruction) return null;
+  const target = explicitArtifactPath(instruction);
   return {
     kind: 'desktop_operation',
     operation: 'read',
@@ -1199,8 +1202,9 @@ export function normalizeActionIntent(value: string, analysis?: ActionIntentAnal
       };
     }
   }
-  const artifactCreation = explicitArtifactCreationIntent(text);
-  const artifactRead = explicitLocalArtifactReadIntent(text);
+  const artifactInput = currentTurnText(value);
+  const artifactCreation = explicitArtifactCreationIntent(artifactInput);
+  const artifactRead = explicitLocalArtifactReadIntent(artifactInput);
   const currentAuthoringDocumentRead = currentAuthoringDocumentReadIntent(text);
   const explicitArtifactCreation = Boolean(artifactCreation);
   const compositeNavigation = !artifactCreation && !artifactRead ? compositeNavigationInstructions(text) : [];
@@ -1214,7 +1218,7 @@ export function normalizeActionIntent(value: string, analysis?: ActionIntentAnal
     mediaGenerationIntent(text),
     persistentWorkTaskCreation(text),
     artifactCreation,
-    explicitArtifactEditIntent(text),
+    explicitArtifactEditIntent(artifactInput),
     artifactRead,
     currentAuthoringDocumentRead,
     compositeNavigation.find(item => item.intent.kind === 'desktop_operation')?.intent,
