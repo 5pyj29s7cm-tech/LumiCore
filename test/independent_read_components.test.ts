@@ -5,10 +5,16 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import fixture from './fixtures/defendant_three_read_request_20261021.json';
 import { initDatabase } from '../db_layer';
 import { ToolRegistry } from '../server/tools/registry';
+import { registerDocumentTools } from '../server/tools/definitions/document_tools';
+import { sanitizeToolRecordsForPersistence } from '../server/cognition/user_output_protection';
+import { artifactReadbackText } from '../server/tools/artifact_evidence';
+import { recordsToTaskReceipts } from '../server/cognition/task_execution_ledger';
+import crypto from 'node:crypto';
 import { registerFileOpsTools } from '../server/tools/definitions/file_ops';
 import { executeToolCall, isCanonicalToolExecutionRecord } from '../server/tools/execution_engine';
 import { buildActionEvidenceContract, hasCoreActionEvidence } from '../server/cognition/action_contract';
-import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
+import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from '../server/cognition/result_finalizer';
+import { finalizeLumiResponseForDelivery } from '../server/cognition/response_delivery';
 import type { ToolExecutionRecord } from '../server/tools/types';
 const current = {taskId:'independent-read-task', requestId:'independent-read-request'};
 let texts: string[], paths: string[], rows: ToolExecutionRecord[], missing: ToolExecutionRecord, task: string;
@@ -36,4 +42,34 @@ describe('independently requested file reads use existing all-component evidence
  it('does not turn a negative file mention into an independent read',()=>{const text='完整读取文件 '+paths[0]+'。不要读取文件 '+paths[1]+'。完整读取文件 '+paths[2]+'。';expect(buildActionEvidenceContract(text).components).toHaveLength(2);expect(core([rows[0],rows[2]],text)).toBe(true);expect(core([rows[1],rows[2]],text)).toBe(false);});
  it('does not turn a quoted read sentence into an independent read',()=>{const text='Read '+paths[0]+'. The note says "Read '+paths[1]+'.". Read '+paths[2]+'.';expect(buildActionEvidenceContract(text).components).toHaveLength(2);expect(core([rows[0],rows[2]],text)).toBe(true);});
  it('does not turn a quoted path queried inside a source into an independent read',()=>{const text='完整读取文件 '+paths[0]+'，检查其是否引用“'+paths[1]+'”。完整读取文件 '+paths[2]+'。';expect(buildActionEvidenceContract(text).components).toHaveLength(2);expect(core([rows[0],rows[2]],text)).toBe(true);expect(core([rows[1],rows[2]],text)).toBe(false);});
+});
+
+describe('complete extracted text survives the same terminal path as native chat',()=>{
+ it('delivers three large extracted bodies and filenames once across repeated finalization',async()=>{
+  const dir=fs.mkdtempSync(path.join(String(process.env.LUMI_DATA_DIR),'extract-delivery-'));
+  const names=['twenty.md','twenty-one.md','twenty-three.md'];
+  const bodies=names.map((name,i)=>('# '+name+'\n'+('Source '+i+' fact remains unknown.\n').repeat([210,105,250][i])+'END-'+i));
+  const targets=names.map((name,i)=>{const target=path.join(dir,name);fs.writeFileSync(target,bodies[i]);return target;});
+  const instruction=fixture.documents.reduce((text,doc,i)=>text.replace(doc.path,targets[i]),fixture.prompt);
+  const registry=new ToolRegistry();registerDocumentTools(registry);
+  const extracted:ToolExecutionRecord[]=[];
+  for(const [i,filePath] of targets.entries())extracted.push(await executeToolCall({registry,id:'extract-body-'+i,name:'extract_document_text',arguments:{filePath},context:{...current,userId:'independent-extract-user',domain:'personal',source:'chat',authenticated:true,authRole:'admin',localExecution:true,executionBoundary:'trusted_local',actionIntent:instruction,routedTaskText:instruction}}));
+  expect(extracted.every(isCanonicalToolExecutionRecord)).toBe(true);expect(extracted.map(row=>row.result)).toEqual(bodies);
+  const input={...current,taskText:instruction,responseText:'',toolRecords:extracted,source:'chat'};
+  const bounded=tryFinalizeVerifiedBoundedAction(input);expect(bounded?.blocked).toBe(false);
+  const final=await finalizeLumiResponseForDelivery({...input,responseText:bounded!.text,allowToolUse:false});
+  expect(final.finalization.blocked).toBe(false);
+  for(const [i,body]of bodies.entries()){expect(final.finalization.text.split(body)).toHaveLength(2);expect(final.finalization.text).toContain(names[i]);}
+  expect(final.finalization.text.length).toBeLessThan(bodies.join('\n').length+500);
+  const twice=finalizeLumiResponse({...input,responseText:final.finalization.text});expect(twice.blocked).toBe(false);expect(twice.text).toBe(final.finalization.text);
+  const stored=sanitizeToolRecordsForPersistence(extracted)!;const receipts=recordsToTaskReceipts(stored);
+  for(const [i,row]of stored.entries()){expect(row.result).toBe(bodies[i]);expect(artifactReadbackText(row)).toBe(bodies[i]);expect(receipts[i].receipt).toMatchObject({contentDigest:crypto.createHash('sha256').update(bodies[i]).digest('hex')});}
+ });
+ it('keeps the original digest when an oversized source or a secret cannot be stored verbatim',()=>{
+  for(const result of ['Long source line.\n'.repeat(5000),'Ordinary document. password=PRIVATE_SAMPLE_VALUE']){
+   const record={name:'read_file',arguments:{path:'C:/read.md'},result};const stored=sanitizeToolRecordsForPersistence([record])![0];
+   expect(stored.receipt.contentDigest).toBe(crypto.createHash('sha256').update(result).digest('hex'));expect(artifactReadbackText(stored)).toBeUndefined();
+   expect(stored.result.length).toBeLessThanOrEqual(65536);expect(stored.result).not.toContain('PRIVATE_SAMPLE_VALUE');
+  }
+ });
 });

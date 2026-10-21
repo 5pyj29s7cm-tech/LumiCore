@@ -55,7 +55,7 @@ it('projects the saved actual history from SQL verified evidence without changin
  const stored=JSON.stringify(db);
  const projected=projectConversationMessageForCustomer(original);
  expectBusiness(projected.message);expect(projected.blocked).not.toBe(true);
- fs.writeFileSync(path.join(String(process.env.LUMI_TEST_TMPDIR),'actual-qcc-public-projection.txt'),projected.message);
+ fs.writeFileSync(path.join(String(process.env.LUMI_TEST_TMPDIR || process.env.LUMI_DATA_DIR),'actual-qcc-public-projection.txt'),projected.message);
  expect(JSON.stringify(readDatabaseTables(['interactions','conversationActionReceipts']))).toBe(stored);
  expect(original.message).toBe(fixture.answer);
 });

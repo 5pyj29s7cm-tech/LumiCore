@@ -1,11 +1,12 @@
+import { actionInstructionClauses } from '../action_instruction_clauses';
 import type { ActionIntentAnalysis } from "../normalized_action_intent";
-import { buildTaskTargetAnchorProjection } from "../../conversation/task_target_anchor";
+import { buildTaskTargetAnchorProjection, outputDocumentInstruction } from "../../conversation/task_target_anchor";
 import { hasMixedStatusExecutionIntent, isImmediateAssistantRestatementRequest, normalizeActionIntent, type NormalizedActionIntent } from "../normalized_action_intent";
 import { matchesCnActionContinuation, matchesCnBoundArtifactEdit, matchesCnExplicitPlaybackRetry } from "../../regions/input/zh_action_continuation";
 import { hasExplicitNoMutationInstruction } from "../tool_intent";
 import { buildActionContract, requestedMediaPlayerTarget, requiresMediaPlaybackAction } from "../action_contract";
 import { isExplicitConfirmationReply } from "../../tools/pending_confirmation";
-import { isTaskCapsuleTargetContinuation } from "../../conversation/task_capsule";
+import { classifyTaskCapsuleTurn, isTaskCapsuleTargetContinuation } from "../../conversation/task_capsule";
 import type { ConversationActionContinuationState, RecentActionFollowupIntent } from './contracts';
 import { normalizeConversationActionState } from './state_normalization';
 import { compact, REFERENTIAL_CONTEXT_MAX_AGE_MS } from './history_values';
@@ -165,23 +166,24 @@ export function isExplicitUnfinishedTaskContinuation(text: string, state?: Conve
   const comparable = (value: string) => value.normalize('NFKC').replace(/\s+/gu, ' ').trim();
   const repeatsUnfinishedGoal = comparable(text) === comparable(state.goal)
     && normalizeActionIntent(text, analysis).operation !== 'status' && buildActionContract(text, undefined, analysis).applies;
-  if (!repeatsUnfinishedGoal && !explicitlyReferencesUnfinishedTask(text)) return false;
-  const value = compact(text, 700);
+  const value = compact(actionInstructionClauses(text).map(clause => clause.probe).join(''), 700);
+  if (!repeatsUnfinishedGoal && !explicitlyReferencesUnfinishedTask(value)) return false;
   const current = buildActionContract(value, undefined, analysis);
   const root = buildActionContract(state.goal, undefined, analysis);
-  if (!current.applies) return true;
-  const kinds = new Set([root.kind, ...(root.components || []).map(part => part.contract.kind)]);
-  if (kinds.has(current.kind)) return true;
   // A workflow's named output step is still part of that workflow even though
   // the latest sentence describes a file write rather than the whole recipe.
-  if (normalizeActionIntent(state.goal, analysis).kind === 'workflow' && current.kind === 'artifact_work') {
-    const target = buildTaskTargetAnchorProjection({ taskText: value }).target.path;
+  if (normalizeActionIntent(state.goal, analysis).kind === 'workflow' && (current.kind === 'artifact_work' || !current.applies)) {
+    const target = buildTaskTargetAnchorProjection({ taskText: outputDocumentInstruction(value) || value }).target.path;
     if (target) {
       const normalized = (text: string) => text.replace(/\\/g, '/').toLowerCase();
       const escaped = normalized(target).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return new RegExp(escaped + '(?:$|[\\s,，。;；"\u201d])', 'u').test(normalized(state.goal)); // i18n-allow: file-reference boundary punctuation.
     }
   }
+  if (!current.applies) return true;
+  const kinds = new Set([root.kind, ...(root.components || []).map(part => part.contract.kind)]);
+  if (kinds.has(current.kind)) return true;
+
   return false;
 }
 
@@ -221,7 +223,7 @@ export function classifyConversationActionFollowupIntent(
 ): RecentActionFollowupIntent {
   if (isImmediateAssistantRestatementRequest(text)) return 'repeat';
   const durableState = normalizeConversationActionState(state);
-  const compactText = compact(text, 500);
+  const compactText = compact(actionInstructionClauses(text).map(clause => clause.probe).join(''), 500);
   // Status must win before retry/target heuristics inspect the task's old goal.
   const normalizedIntent = acceptedIntent || normalizeActionIntent(compactText, analysis);
   if (normalizedIntent.kind === 'status_query') return 'status';
@@ -238,8 +240,8 @@ export function classifyConversationActionFollowupIntent(
   if (isNegativeResultCorrectionForTask(compactText, durableState)) return 'execute';
   if (isMediaPlaybackContinuationForTask(compactText, durableState, analysis)) return 'execute';
   if (isTaskPreparationContinuation(compactText, durableState, normalizedIntent, analysis)) return 'execute';
-  if (isReferentialArtifactEdit(text, durableState)) return 'execute';
-  if (isExplicitUnfinishedTaskContinuation(compactText, durableState, analysis)) return 'execute';
+  if (isReferentialArtifactEdit(compactText, durableState)) return 'execute';
+  if (isExplicitUnfinishedTaskContinuation(text, durableState, analysis)) return 'execute';
   if (
     durableState?.unfinished
     && normalizedIntent.relation === 'correction'
@@ -247,6 +249,9 @@ export function classifyConversationActionFollowupIntent(
     && normalizedIntent.kind !== 'correction_explanation'
     && normalizedIntent.operation !== 'status'
   ) return 'execute';
+  if (classifyTaskCapsuleTurn(compactText, durableState) === 'target_correction') return 'execute';
+  // An explicit reference that failed the same-goal check cannot be rescued by a bare filename/detail fallback.
+  if (explicitlyReferencesUnfinishedTask(compactText)) return 'none';
   // A self-contained normalized action is new work. Resolve this before a
   // TaskCapsule path/detail heuristic, otherwise a new artifact path or client
   // navigation can be swallowed by an unrelated unfinished file task.
@@ -259,8 +264,8 @@ export function classifyConversationActionFollowupIntent(
     normalizedIntent.kind === 'correction_explanation'
     || normalizedIntent.kind === 'work_task'
   ) return 'none';
-  if (hasMixedStatusExecutionIntent(text)) return 'execute';
-  const direct = classifyRecentActionFollowupIntent(text, analysis);
+  if (hasMixedStatusExecutionIntent(compactText)) return 'execute';
+  const direct = classifyRecentActionFollowupIntent(compactText, analysis);
   if (direct !== 'none') return direct;
   if (!durableState?.unfinished) return 'none';
   return AMBIGUOUS_UNFINISHED_TASK_STATUS_RE.test(compact(text, 500)) ? 'status' : 'none';

@@ -699,7 +699,7 @@ describe('execution guard recovery', () => {
     }
   });
 
-  it('persists verified receipt facts without storing screenshot or oversized raw payloads', () => {
+  it('persists verified receipt facts and bounded document text without screenshot payloads', () => {
     const records = sanitizeToolRecordsForPersistence([record({
       name: 'desktop_capture_screen',
       arguments: {
@@ -739,9 +739,9 @@ describe('execution guard recovery', () => {
     expect(records?.[0].terminalVerification.status).toBe('verified');
     expect(records?.[0].envelope.status).toBe('verified_success');
     expect(serialized).toContain('binary image omitted');
-    expect(serialized).toContain('stored result truncated');
+    expect(records?.[1].result).toBe('plain text '.repeat(2_000));
     expect(serialized).not.toMatch(/must-not-persist|data:image|AAAAA|BBBBB|CCCCC/iu);
-    expect(serialized.length).toBeLessThan(12_000);
+    expect(serialized.length).toBeLessThan(30_000);
   });
 
   it('keeps long desktop inventory receipts as valid bounded JSON with document and window evidence', () => {

@@ -1,7 +1,7 @@
 import { normalizePathIdentity } from '../../shared/file_identity';
 import crypto from 'node:crypto';
 import type { ToolExecutionRecord } from './types';
-import { parseReceiptObject, toolRecordTerminalPayload, toolRecordTerminalText } from './receipt_payload';
+import { parseReceiptObject, toolRecordTerminalPayload, toolRecordTerminalText, toolRecordSucceeded } from './receipt_payload';
 
 // Compatibility for built-ins whose older persisted receipts lack capability
 // metadata. New tools are recognized through their declared local-write effect.
@@ -31,6 +31,16 @@ export function isArtifactDeliveryRecord(record: ToolExecutionRecord): boolean {
 
 export function isArtifactReaderRecord(record: ToolExecutionRecord): boolean {
   return READERS.test(record.name);
+}
+
+export function artifactReadbackMetadata(record: ToolExecutionRecord) {
+  const text = String(record.result || '');
+  return isArtifactReaderRecord(record) && toolRecordSucceeded(record) && text ? {
+    kind: 'text_readback_metadata', encoding: 'UTF-8',
+    lineCount: text.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n').length,
+    byteLength: Buffer.byteLength(text, 'utf8'),
+    contentDigest: crypto.createHash('sha256').update(text, 'utf8').digest('hex'),
+  } : null;
 }
 
 /** Readback metadata proves a read occurred; it is not the document text. */

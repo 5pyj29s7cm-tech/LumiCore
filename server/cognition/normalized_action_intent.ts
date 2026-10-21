@@ -260,6 +260,8 @@ function affirmativeArtifactAction(text: string, only?: 'create' | 'mutate'): bo
     // i18n-allow: Multilingual imperative prefixes and object-before-predicate grammar.
     const head = value.replace(/^(?:(?:请你?|麻烦你?|帮我|给我(?!一份)|现在|直接|立即|务必|先|再|继续|然后|接着|同时|并且|并|也|本次|这次|(?:我)?(?:需要|要求|希望)你?|我想让你|你必须|你需要)\s*)+/u, '')
       .replace(/^(?:(?:please|now|then|next|you\s+must|you\s+should|must|should|need\s+to|required\s+to|i\s+(?:need|want)\s+you\s+to|(?:can|could|would)\s+you)\s+)+/iu, '');
+    // A replacement read predicate changes the selected action/target, not file contents.
+    if (mutate.test(head) && explicitLocalArtifactReadIntent(clause)) continue;
     const predicates = [head];
     // i18n-allow: Explicit object/location/tool prefixes retain their following operation.
     if (/^(?:把|将|对|为|在|用|使用|通过|根据)/u.test(head)) {
@@ -329,7 +331,7 @@ function explicitLocalArtifactReadIntent(text: string): NormalizedActionIntent |
     // This owns only an explicit fresh command. A path supplied by itself
     // remains eligible to fill the target slot of an unfinished task.
     // i18n-allow: Existing read predicate with explicit read-only/completeness and file operands.
-    return /^(?:(?:请|麻烦你|现在|直接)\s*)*(?:(?:只|完整)\s*)*(?:分析|读取|查看|审查|检查|总结)(?:一下)?\s*(?:(?:文件|文档)\s*)?$|^(?:(?:please|now|directly)\s+)*(?:analy[sz]e|read|inspect|review|check|summari[sz]e)(?:\s+the)?\s*$/iu.test(actionPrefix);
+    return /^(?:(?:请|麻烦你|现在|直接)\s*)*(?:(?:只|完整)\s*)*(?:(?:改成|改为|换成)\s*)?(?:分析|读取|查看|审查|检查|总结)(?:一下)?\s*(?:(?:文件|文档)\s*)?$|^(?:(?:please|now|directly)\s+)*(?:analy[sz]e|read|inspect|review|check|summari[sz]e)(?:\s+the)?\s*$/iu.test(actionPrefix);
   });
   if (!instruction) return null;
   const target = explicitArtifactPath(instruction);

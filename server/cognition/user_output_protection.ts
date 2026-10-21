@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { artifactPathFromRecord, isArtifactDeliveryRecord, artifactReadbackTextSources } from '../tools/artifact_evidence';
+import { artifactPathFromRecord, isArtifactDeliveryRecord, artifactReadbackTextSources, artifactReadbackMetadata } from '../tools/artifact_evidence';
 import { isCanonicalToolExecutionRecord } from '../tools/canonical_execution_record';
 import { isVerifiedCurrentTurnRecord } from './result_finalizer_support';
 import type { ToolExecutionRecord, ToolContext } from '../tools/types';
@@ -512,7 +512,16 @@ export function sanitizeToolRecordsForPersistence(value: unknown): any[] | undef
   const records = parseStoredArray(value, 2);
   if (records.length === 0) return undefined;
   return records.slice(-MAX_PERSISTED_TOOL_RECORDS)
-    .map(record => compactPersistedToolValue(compactToolRecordForPersistence(record)));
+    .map(record => {
+      const candidate = compactToolRecordForPersistence(record) as ToolExecutionRecord;
+      const compacted = compactPersistedToolValue(candidate) as ToolExecutionRecord;
+      const readback = artifactReadbackMetadata(candidate);
+      if (readback && typeof candidate.result === 'string' && !DATA_URL_RE.test(candidate.result) && !looksLikeLargeBase64(candidate.result)) {
+        compacted.result = redactSensitive(candidate.result).slice(0, 65_536);
+        if (!candidate.receipt) compacted.receipt = readback;
+      }
+      return compacted;
+    });
 }
 
 function boundedLabel(value: unknown): string {
@@ -659,7 +668,9 @@ export function sanitizeUserFacingExecutionOutput(
     options.trustedConfirmationRequestText || '',
   ).trim();
   if (trustedConfirmationRequestText && raw === trustedConfirmationRequestText) return redacted;
-  const oversizedUnscopedOutput = redacted.length > 50_000;
+  const unscopedOutput = inspected.verifiedText.map(text => text.trim()).sort((a, b) => b.length - a.length)
+    .reduce((text, verified) => verified ? text.replace(verified, '') : text, redacted);
+  const oversizedUnscopedOutput = unscopedOutput.length > 50_000;
   if (!containsUnsafeToolPayload(redacted) && !oversizedUnscopedOutput) return redacted;
   return humanSummary(redacted, options).slice(0, 1_200);
 }

@@ -576,9 +576,11 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
         ? records.find(record => isVerifiedCurrentTurnRecord(scoped, record) && isSuccessfulExactDocumentRead(record)
           && documentReadMatchesRequestedTarget(record, component.text, input.flow?.acceptedTaskTarget, input.flow?.currentAttachmentPaths)) : undefined;
       const componentInput = { ...scoped, taskText: component.text, flow: { rootTaskText: actionText } as LumiTurnFlow, completionGuard: undefined,
-        responseText: outputs.length === 1 ? '' : input.responseText || (sourceRead ? actualDocumentReadContent(sourceRead) : '') };
+        responseText: outputs.length === 1 ? '' : sourceRead && (!input.responseText || input.responseText.includes(actualDocumentReadContent(sourceRead)))
+          ? actualDocumentReadContent(sourceRead) : input.responseText };
       const result = (outputs.length === 1 ? formatGroundedArtifactResult(componentInput) : null)
         || finalizeLumiResponse(componentInput);
+      if (sourceRead && componentInput.responseText === actualDocumentReadContent(sourceRead)) result.text = artifactPathFromRecord(sourceRead).split(/[\\/]/u).pop() + '\n' + result.text;
       const complete = verified && !result.blocked && Boolean(result.text);
       return { complete, reason: result.blocked ? result.reason : undefined, text: complete || result.blocked && result.text ? result.text
         : isChineseText(actionText) ? CN_EXECUTION_EVIDENCE_MESSAGES.incompleteComponent(component.text) : `Not completed: ${component.text}` };
@@ -650,6 +652,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const protectedResponseText = sanitizeUserFacingExecutionOutput(safeResponseText, {
     task: actionText,
     toolRecords: input.toolRecords || [],
+    requestId: input.requestId, taskId: input.taskId,
   });
   if (protectedResponseText !== input.responseText) {
     input = { ...input, responseText: protectedResponseText };

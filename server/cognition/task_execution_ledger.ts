@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import type { ToolPolicy } from '../personality/types';
 import type { ToolExecutionIdentity, ToolExecutionRecord } from '../tools/types';
 import { EXECUTION_IDENTITY_FIELDS, toolExecutionIdentity } from '../tools/execution_identity';
-import { isArtifactReaderRecord } from '../tools/artifact_evidence';
+import { isArtifactReaderRecord, artifactReadbackMetadata } from '../tools/artifact_evidence';
 import { inspectPersistedToolExecutionReceipt } from '../tools/persisted_execution_receipt';
 import {
   buildActionEvidenceContract,
@@ -477,16 +477,7 @@ export function recordsToTaskReceipts(
   recordedAt = new Date().toISOString(),
 ): ConversationTaskReceipt[] {
   return coalesceToolExecutionRecords(records).map((record, index) => {
-    const rawResult = String(record.result || '');
-    const textReadbackMetadata = isArtifactReaderRecord(record) && toolRecordSucceeded(record) && rawResult
-      ? {
-          kind: 'text_readback_metadata',
-          encoding: 'UTF-8',
-          lineCount: rawResult.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n').length,
-          byteLength: Buffer.byteLength(rawResult, 'utf8'),
-          contentDigest: crypto.createHash('sha256').update(rawResult, 'utf8').digest('hex'),
-        }
-      : null;
+    const textReadbackMetadata = artifactReadbackMetadata(record);
     return ({
     id: compact(record.id, 180) || `receipt_${Date.now()}_${index}`,
     ...receiptScope(record),
