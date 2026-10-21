@@ -1,5 +1,5 @@
 import type { ActionIntentAnalysis } from './normalized_action_intent';
-import { normalizeActionIntent, independentActionClauses, withoutNegatedLookupClauses } from './normalized_action_intent';
+import { normalizeActionIntent, affirmativeActionClauses, withoutNegatedLookupClauses } from './normalized_action_intent';
 import { hasExplicitNoMutationInstruction } from './tool_intent';
 import { isMediaPauseRequest, isVideoPlaybackRequest } from './media_intent';
 import { withoutLocationLiterals } from './location_literals';
@@ -443,7 +443,7 @@ export function requiresArtifactOpen(input: string): boolean {
   const text = withoutLocationLiterals(input).replace(/((?:内容(?:为|是)|写入)\s*[：:]?\s*|\b(?:containing|content\s*(?:is|:|=))\s*)(?:“[^”]*”|‘[^’]*’|"[^"]*"|'[^']*'|`[^`]*`)/giu, '$1 ');
   // i18n-allow: reuse affirmative clauses so coordinated prohibitions stay negative.
   const positive = text.replace(/\bwithout\s+open(?:ing)?\b[^,;.!?\n]*/giu, ' ');
-  return independentActionClauses(withoutNegatedLookupClauses(positive), true).some(clause => /打开|\bopen\b/iu.test(clause));
+  return affirmativeActionClauses(withoutNegatedLookupClauses(positive)).some(clause => /打开|\bopen\b/iu.test(clause));
 }
 
 export function isDesktopAppInventoryRequest(text: string): boolean {

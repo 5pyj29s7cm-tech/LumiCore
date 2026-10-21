@@ -229,8 +229,7 @@ export function classifyExecutionGuardIntent(
   // A fresh imperative lookup stays execution; later conditional failure/status words are scope fences.
   const lookupInstruction = affirmativeActionClauses(clean).find(clause =>
     /\u67e5\u8be2|\u67e5\u627e|\u68c0\u7d22|\u641c\u7d22|\u8c03\u7528|\u4f7f\u7528|\u6267\u884c|\b(?:search|look\s+up|fetch|call|use|execute)\b/iu.test(clause)) || '';
-  if (normalizedIntent.kind === 'none' && lookupInstruction && !isExecutionStatusQuery(lookupInstruction) && /^(?:\u8bf7|\u4ec5|\u53ea|\u5e2e\u6211|\u66ff\u6211|\u9ebb\u70e6\u4f60|\u73b0\u5728|\u76f4\u63a5|please\b)/iu.test(clean)
-    && shouldAllowToolUseForTurn(clean)) return 'action_execution';
+  if (normalizedIntent.kind === 'none' && lookupInstruction && !isExecutionStatusQuery(lookupInstruction) && /^(?:\u8bf7|\u4ec5|\u53ea|\u5e2e\u6211|\u66ff\u6211|\u9ebb\u70e6\u4f60|\u73b0\u5728|\u76f4\u63a5|please\b)/iu.test(clean)) return 'action_execution';
   if (isExecutionStatusQuery(clean)) return 'status_query';
   if (CONVERSATION_ONLY.test(clean)) return 'conversation';
   const contract = buildActionContract(clean);

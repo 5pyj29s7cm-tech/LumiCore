@@ -490,11 +490,7 @@ export function hasClientActionIntent(text: string, analysis?: ActionIntentAnaly
     || isInformationOnlyQuestion(normalized, analysis) || isDesktopMusicControlRequest(normalized)) return false;
   if (only && hasExternalDesktopExecutionIntent(instruction)) return false;
   const requestedMode = detectRequestedOperationMode(instruction);
-  if (requestedMode && (!only || isPureOperationModeSwitchRequest(instruction, requestedMode))) return true;
-  if (hasExternalDesktopExecutionIntent(instruction)) return false;
-  if (EXTERNAL_APP_CONTEXT.test(instruction) && !LUMI_CLIENT_CONTEXT.test(instruction) && !ORGANIZATION_WORKSPACE_SURFACES.test(instruction)) return false;
-  return matchesIntentGrammar(instruction, STRUCTURED_CLIENT_ACTION_RULES)
-    || (only ? CLIENT_ACTION_ONLY_PATTERNS : CLIENT_ACTION_INTENT_PATTERNS).some(pattern => pattern.test(instruction));
+  return Boolean(requestedMode && (!only || isPureOperationModeSwitchRequest(instruction, requestedMode)));
 }
 
 export function hasClientActionOnlyIntent(text: string, analysis?: ActionIntentAnalysis): boolean {

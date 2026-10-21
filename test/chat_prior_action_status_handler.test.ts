@@ -276,7 +276,7 @@ describe('chat prior-action status handler', () => {
       expect(response.text).toContain('Target: settings');
       expect(response.text).toContain('Target section: voice');
       expect(response.text).toContain('Verification status: verified');
-      expect(response.text).toContain('Final status: blocked — The task has no verified completion receipt.');
+      expect(response.text).toContain('Final status: completed (durable receipt verified)');
       expect(response.text).not.toMatch(/执行动作|目标页面|最终状态/u);
     } else {
       expect(response.text).toContain('执行动作：open_settings');
@@ -284,7 +284,7 @@ describe('chat prior-action status handler', () => {
       expect(response.text).toContain('目标分区：voice');
       expect(response.text).toContain('验证状态：verified');
       expect(response.text).toContain('最终状态：');
-      expect(response.text).not.toContain('最终状态：已完成（持久回执已验证）');
+      expect(response.text).toContain('最终状态：已完成（持久回执已验证）');
     }
     expect(response.text).toContain('surface:settings:open');
     expect(response.text).toContain('settings-section:voice');

@@ -46,7 +46,7 @@ import {
   type RouteDefinition,
 } from "../regions/routing/tool_route_definitions";
 import {
-  hasNegatedMessagingSendIntent,
+  hasNegatedMessagingSendIntent, affirmativeActionClauses,
   isExplicitArtifactCreationText,
   isExternalCommitConfirmationOnlyRequest,
 } from './normalized_action_intent';
@@ -258,7 +258,8 @@ function addActionContractCapabilities(
   contract: ReturnType<typeof buildActionContract>,
   manifest: CapabilityRoutingProjection[],
 ): string[] {
-  const selected: string[] = [];
+  const selected = contract.preferredTools.filter(name => available.has(name));
+  for (const name of selected) out.add(name);
   for (const requirement of contract.preferredCapabilities || []) {
     const termPattern = requirement.terms.length
       ? new RegExp(requirement.terms.map(term => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'i')
@@ -808,10 +809,11 @@ function getConnectedMcpGate(options?: {
   }
 }
 
-function scoreDeclaration(text: string, declaration: ToolDeclaration): number {
+function scoreDeclaration(text: string, declaration: ToolDeclaration, exactOnly = false): number {
   const needle = `${declaration.function.name} ${declaration.function.description || ''}`.toLowerCase();
-  const lower = text.toLowerCase();
+  const lower = affirmativeActionClauses(text).join(' ').toLowerCase();
   const tokens = unique(lower.match(/[a-z0-9_]{3,}|[\u4e00-\u9fa5]{2,}/gi) || []);
+  if (exactOnly && !tokens.includes(declaration.function.name.toLowerCase())) return 0;
   let score = 0;
   for (const token of tokens) {
     if (needle.includes(token.toLowerCase())) score += token.length > 4 ? 2 : 1;
@@ -1114,9 +1116,9 @@ export function routeToolsForTurn(
     }
   }
 
-  if (categories.length === 0 && instructionText) {
+  if (instructionText) {
     const ranked = declarations
-      .map(declaration => ({ name: declaration.function.name, score: scoreDeclaration(instructionText, declaration) }))
+      .map(declaration => ({ name: declaration.function.name, score: scoreDeclaration(instructionText, declaration, categories.length > 0) }))
       .filter(item => item.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, 16);

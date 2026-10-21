@@ -166,7 +166,7 @@ const CLIENT_SURFACE_RULES: ReadonlyArray<{ pattern: RegExp; target: string; act
   { pattern: /(?:运行日志|runtime\s*log)/iu, target: 'runtime-log', action: 'open_computer_adaptation' }, // i18n-allow: Multilingual Lumi surface aliases.
   { pattern: /(?:通知中心|通知面板|notification\s*(?:center|panel))/iu, target: 'notifications', action: 'open_notifications' }, // i18n-allow: Multilingual Lumi surface aliases.
   { pattern: /(?:提醒面板|提醒中心|reminder\s*(?:center|panel))/iu, target: 'reminders', action: 'open_reminders' }, // i18n-allow: Multilingual Lumi surface aliases.
-  { pattern: /(?:设置界面|设置页面|客户端设置|settings)/iu, target: 'settings', action: 'open_settings' }, // i18n-allow: Multilingual Lumi surface aliases.
+  { pattern: /(?:设置界面|设置页面|客户端设置|Lumi\s*设置|settings)/iu, target: 'settings', action: 'open_settings' }, // i18n-allow: Multilingual Lumi surface aliases.
   { pattern: /(?:个人主页|个人主界面|个人桌面|主屏幕|主页面|主界面|首页|lumi\s*桌面|home)/iu, target: 'home', action: 'focus_home' }, // i18n-allow: Multilingual Lumi surface aliases.
   { pattern: /(?:壁纸(?:模式|状态)|wallpaper\s*(?:mode|state))/iu, target: 'wallpaper', action: 'set_wallpaper_mode' }, // i18n-allow: Speech alias for Lumi wallpaper mode.
   ...REGISTERED_CLIENT_SURFACE_RULES,
@@ -262,7 +262,7 @@ function affirmativeArtifactAction(text: string, only?: 'create' | 'mutate'): bo
       .replace(/^(?:(?:please|now|then|next|you\s+must|you\s+should|must|should|need\s+to|required\s+to|i\s+(?:need|want)\s+you\s+to|(?:can|could|would)\s+you)\s+)+/iu, '');
     // A replacement read predicate changes the selected action/target, not file contents.
     if (mutate.test(head) && explicitLocalArtifactReadIntent(clause)) continue;
-    const predicates = [head];
+    const predicates = head.split(/\s+(?:and\s+then|then|afterwards)\s+/iu);
     // i18n-allow: Explicit object/location/tool prefixes retain their following operation.
     if (/^(?:把|将|对|为|在|用|使用|通过|根据)/u.test(head)) {
       for (let index = 1; index < Math.min(head.length, 180); index++) {
