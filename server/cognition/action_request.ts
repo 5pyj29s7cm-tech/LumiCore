@@ -201,7 +201,7 @@ export function extractDesktopLaunchTarget(input: string, analysis?: ActionInten
 export function requiresVisualModelAvailabilityCheck(input: string): boolean {
   const text = compact(extractPrimaryTaskText(input));
   if (!text) return false;
-  const visualRole = /(?:\u89c6\u89c9|\u56fe\u50cf|\u5c4f\u5e55)(?:\u6a21\u578b|\u8bc6\u522b|\u7406\u89e3|\u611f\u77e5)|(?:vision|visual)(?:\s+(?:model|provider|perception|recognition))?/iu.test(text);
+  const visualRole = /(?:\u89c6\u89c9|\u56fe\u50cf|\u5c4f\u5e55)(?:\u6a21\u578b|\u8bc6\u522b|\u7406\u89e3|\u611f\u77e5)|\b(?:vision|visual)(?:\s+(?:model|provider|perception|recognition))?\b/iu.test(text);
   const liveProbe = /(?:\u68c0\u67e5|\u68c0\u6d4b|\u6d4b\u8bd5|\u9a8c\u8bc1|\u53ef\u7528|\u80fd\u7528|\u6b63\u5e38|\u72b6\u6001|\u8d77\u98de|\u6062\u590d)|\b(?:check|probe|test|verify|available|availability|working|healthy|status|back\s+online)\b/iu.test(text);
   return visualRole && liveProbe;
 }

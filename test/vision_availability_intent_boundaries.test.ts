@@ -1,0 +1,5 @@
+import './helpers';import{describe,it,expect}from'vitest';import{requiresVisualModelAvailabilityCheck}from'../server/cognition/action_request';import{finalizeLumiResponse}from'../server/cognition/result_finalizer';
+describe('vision probe intent uses complete role words',()=>{
+ it.each(['Query the existing video status at revision 3.','division status and revision 23','请查询原视频任务状态，project revision=3；不重新生成。'])('does not turn incidental substrings into a vision check: %s',text=>{expect(requiresVisualModelAvailabilityCheck(text)).toBe(false);expect(finalizeLumiResponse({taskText:text,responseText:'No video result has been retrieved yet.',toolRecords:[],source:'chat'}).text).not.toMatch(/visual model|视觉模型/iu);});
+ it.each(['Check the vision model status.','Is the visual provider available?','测试视觉模型是否可用'])('keeps an actual perception availability request: %s',text=>{expect(requiresVisualModelAvailabilityCheck(text)).toBe(true);});
+});

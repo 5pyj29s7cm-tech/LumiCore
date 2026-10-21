@@ -1160,7 +1160,7 @@ export function independentActionClauses(value: string, sentenceScoped = false):
   const clauses = sentenceScoped
     ? text.split(/[；;。\n]|\.(?=\s|$)/u).filter(affirmative).flatMap(part => part.split(/[，,]/u))
     : text.split(/[，,；;。\n]/u); // i18n-allow: Existing navigation boundaries remain unchanged.
-  return clauses.map(part => part.trim().replace(/^(?:然后|接着|同时|并且|再)\s*/u, '')).filter(Boolean) // i18n-allow: Independent instruction boundaries.
+  return clauses.map(part => part.trim().replace(/^(?:然后|接着|随后|之后|同时|并且|再)\s*/u, '')).filter(Boolean) // i18n-allow: Independent instruction boundaries.
     .filter(affirmative);
 }
 
