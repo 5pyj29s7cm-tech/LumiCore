@@ -151,10 +151,10 @@ export function hasCoreActionEvidence(
     const resolvedTarget = acceptedTaskTarget || (taskCapsule?.target.path && taskCapsule.target.status !== 'rejected'
       && (!currentTurn?.taskId || taskCapsule.taskId === currentTurn.taskId)
       ? { target: taskCapsule.target, source: 'task' as const, sourceId: taskCapsule.taskId } : undefined);
-    if (requestsExactReadOnlyArtifactInspection(taskText)) {
-      return hasVerifiedExactReadOnlyArtifactEvidence(successful, taskText, resolvedTarget);
-    }
     const current = successful.filter(record => artifactRecordMatchesTurn(record, currentTurn || {}));
+    if (requestsExactReadOnlyArtifactInspection(taskText)) {
+      return hasVerifiedExactReadOnlyArtifactEvidence(current, taskText, resolvedTarget);
+    }
     return getArtifactTaskProgress(taskText, current, undefined, analysis)?.complete === true;
   }
   if (contract.kind === 'external_cli_status') return verifiedExternalCliStatus(taskText, records, currentTurn) !== null;
