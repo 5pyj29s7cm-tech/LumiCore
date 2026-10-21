@@ -15,7 +15,9 @@ import {
 } from '../server/cognition/execution_guard_recovery';
 import type { ExecutionGuardRecoveryFinalization } from '../server/cognition/execution_guard_recovery';
 import type { ToolExecutionRecord } from '../server/tools/types';
-import { hasRequestedArtifactMutation } from '../server/cognition/tool_intent';
+import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
+import { buildActionContract } from '../server/cognition/action_contract';
+import { shouldAllowToolUseForTurn, hasRequestedArtifactMutation } from '../server/cognition/tool_intent';
 import { sanitizeToolRecordsForPersistence, sanitizeUserFacingExecutionOutput } from '../server/cognition/user_output_protection';
 import {
   clearAllPendingConfirmationsForTests,
@@ -41,6 +43,15 @@ function expectNaturalCustomerReply(text: string): void {
 }
 
 describe('execution guard recovery', () => {
+  it.each([
+    '仅执行一次 get_video_generation_status，参数为 {"recoveryId":"existing-provider-job"}，返回真实状态；禁止重新生成视频。',
+    '请使用 get_video_generation_status，参数 JSON 为 {"recoveryId":"existing-provider-job"}，把这一个工具返回的结果完整发回本次聊天。只取回原有结果；本次禁止生成视频、禁止生成音乐，也不改变任何工程。',
+    '请调用 company_query 查询企业信息，把实际结果返回本次聊天；不要修改文件。',
+  ])('keeps fresh tool result retrieval executable instead of reporting saved state: %s', task => {
+    expect(classifyExecutionGuardIntent(task), JSON.stringify({ task, normalized: normalizeActionIntent(task), tools: shouldAllowToolUseForTurn(task), contract: buildActionContract(task) })).toBe('action_execution');
+    expect(decideExecutionGuardRecovery({ task, blocked: true, allowToolUse: true, toolRecords: [], reason: 'No successful current-turn tool execution.' })).toMatchObject({ recoverable: true, intent: 'action_execution' });
+  });
+
   it.each(['继续回答。', 'Continue answering.'])('never asks the user to choose a conversation category after a filtered answer: %s', task => {
     const result = sanitizeExecutionResponseForDelivery({ text: '状态：受阻。\n证据：No successful current-turn tool execution.', blocked: true, reason: 'No successful current-turn tool execution.' }, { task, intent: 'conversation', toolRecords: [] });
     expect(result.text).toBeTruthy();
