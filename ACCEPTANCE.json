@@ -1,12 +1,12 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:49:26.893Z",
+  "updatedAt": "2026-10-26T11:49:27.686Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": 19,
-    "title": "继续第19项",
+    "id": 20,
+    "title": "继续第20项",
     "status": "ready",
     "instruction": "已过不重验；保留项不重开；逐项封存、本地提交"
   },
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-18",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-18/evidence-seal.json",
-    "sha256": "c892c0a6f027bb243f1cd64cb5fedc95fff9cfc7cf9a5abebeca7a97c4ec39ce",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-19",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-19/evidence-seal.json",
+    "sha256": "1970b00278a315b12b70138c4b2044ed38fe5c1f65fd7acd7beb946ac2036526",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,18 +67,18 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "d58835a1ff12f30166c93f1a7a4db2257c0dd41a",
+    "baseCommit": "a93580dacfb4494c96b1094caa409b50c51122a8",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
-    "item": 18,
-    "title": "API服务与所有功能在聊天执行",
+    "item": 19,
+    "title": "法律三段论",
     "status": "partial",
     "wholeItemPassed": false,
     "notes": [
-      "已有官方API适配、正常产物GET字节SHA相同及普通Socket全文/DB/终态通过沿用；语音结构终态离线55/55通过。",
-      "复合final_reply误阻、目录+创建误判及账号/设备/发布等已保留；不恢复相关修复。"
+      "法律意见8/8中条件涵摄及待证前提、人工三稿条件结论/来源定位沿用。",
+      "第2项事实推断及第7项真实类案补强缺口继续保留。"
     ],
     "scope": "existing-evidence-review",
     "effectiveEvidence": [
@@ -110,9 +110,10 @@
       15,
       16,
       17,
-      18
+      18,
+      19
     ],
-    "next": 19
+    "next": 20
   },
   "currentCheckpointValidation": {
     "jsonParsed": true,
