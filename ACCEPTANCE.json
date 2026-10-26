@@ -1,12 +1,12 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:46:45.623Z",
+  "updatedAt": "2026-10-26T11:48:20.248Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": 12,
-    "title": "继续第12项",
+    "id": 13,
+    "title": "继续第13项",
     "status": "ready",
     "instruction": "已过不重验；保留项不重开；逐项封存、本地提交"
   },
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-11",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-11/evidence-seal.json",
-    "sha256": "6539a1137246a4b58a25980f406575962bc0d6bac3bdcbbc73290a3c9f6b2021",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-12",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-12/evidence-seal.json",
+    "sha256": "ec7020fb4f5a46bdfeed77a2e7615b8f87ce20d7b3d2f20e30ff5bcf862aa469",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,37 +67,21 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "51dc37b6ca8b741786b579b4b6ef720e4f528ef0",
+    "baseCommit": "bf6c07dac23d617a2fdeced3683176d7c3182141",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
-    "item": 11,
-    "title": "企业数据查询",
+    "item": 12,
+    "title": "被执行人查询",
     "status": "partial",
+    "wholeItemPassed": false,
     "notes": [
-      "工商9字段、涉诉6/6和实控人既有结果保留，无重复查询。",
-      "新增正常API直接股东来源小步18/18通过及独审通过，13条来源原文值完整。",
-      "国家公示系统网页、公开检索错误及原生显示边界继续保留；整项仍部分通过。"
+      "既有执行来源与无结构明细提示、涉诉来源保存及实控人来源重试结果沿用。",
+      "不以涉诉/实控人替代执行信息；结构化执行明细和第4步原生阻断保留。"
     ],
-    "scope": "existing-evidence-review plus one actual product API shareholder query",
-    "newBusinessQueries": 1,
-    "newModelCalls": 0,
-    "directShareholderSource": {
-      "status": "passed",
-      "scope": "正常产品API直接股东单来源取回及保真",
-      "requestId": "d0aa2a57-2480-42bc-a8c0-51eb83c9fa0f",
-      "rows": 13,
-      "checks": "18/18",
-      "independentReview": "passed",
-      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item11-direct-shareholders-live",
-      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item11-direct-shareholders-live/evidence-seal.json",
-      "manifestSHA256": "d4bf70d58ea057cba9b30306de335606214e3e141a34fd42587c0957184cb57e",
-      "businessPOSTs": 1,
-      "newModelCalls": 0,
-      "wholeItemPassed": false,
-      "nativeClientAccepted": false
-    }
+    "scope": "existing-evidence-review",
+    "acceptedItemReopened": false
   },
   "orderedReviewProgress": {
     "start": 6,
@@ -107,9 +91,10 @@
       8,
       9,
       10,
-      11
+      11,
+      12
     ],
-    "next": 12
+    "next": 13
   },
   "currentCheckpointValidation": {
     "jsonParsed": true,
