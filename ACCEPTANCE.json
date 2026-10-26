@@ -1,12 +1,12 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:48:20.248Z",
+  "updatedAt": "2026-10-26T11:48:21.126Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": 13,
-    "title": "继续第13项",
+    "id": 14,
+    "title": "继续第14项",
     "status": "ready",
     "instruction": "已过不重验；保留项不重开；逐项封存、本地提交"
   },
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-12",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-12/evidence-seal.json",
-    "sha256": "ec7020fb4f5a46bdfeed77a2e7615b8f87ce20d7b3d2f20e30ff5bcf862aa469",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-13",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-13/evidence-seal.json",
+    "sha256": "c4d428bd1a9ede3d63604b2140a5c60512f7a8a2f0a910acfc608348a6183881",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,18 +67,18 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "bf6c07dac23d617a2fdeced3683176d7c3182141",
+    "baseCommit": "70ba14539145813284712afd4fb768717d53991d",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
-    "item": 12,
-    "title": "被执行人查询",
+    "item": 13,
+    "title": "短信链接PDF下载与入案",
     "status": "partial",
     "wholeItemPassed": false,
     "notes": [
-      "既有执行来源与无结构明细提示、涉诉来源保存及实控人来源重试结果沿用。",
-      "不以涉诉/实控人替代执行信息；结构化执行明细和第4步原生阻断保留。"
+      "隔离链4/4：3页60行PDF解析归档、字节匹配、通知页转PDF及权限边界沿用。",
+      "真实短信/法院认证、短链、加密扫描材料无样本，继续保留。"
     ],
     "scope": "existing-evidence-review",
     "acceptedItemReopened": false
@@ -92,9 +92,10 @@
       9,
       10,
       11,
-      12
+      12,
+      13
     ],
-    "next": 13
+    "next": 14
   },
   "currentCheckpointValidation": {
     "jsonParsed": true,
