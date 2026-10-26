@@ -1,12 +1,12 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:49:28.715Z",
+  "updatedAt": "2026-10-26T11:49:29.537Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": "G1",
-    "title": "继续第G1项",
+    "id": "G2",
+    "title": "继续第G2项",
     "status": "ready",
     "instruction": "已过不重验；保留项不重开；逐项封存、本地提交"
   },
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-20",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-20/evidence-seal.json",
-    "sha256": "699b03690434dd553032914a48afad12f3f154997b1dcddc631e462adf766045",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G1",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G1/evidence-seal.json",
+    "sha256": "718e762d3269aa8bbd1f09b566a0b04ca42c6d5b35916d4cc08c445b6c022d87",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,18 +67,18 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "6a95c7f3cbbe967fb5c43fabfa4b76a2c4f639ed",
+    "baseCommit": "332042ac3a68e3df53c6fcf8f110f7ae21211b06",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
-    "item": 20,
-    "title": "宣传视频、聊天唱歌、发布与数据分析",
+    "item": "G1",
+    "title": "开发启动与热更新",
     "status": "partial",
     "wholeItemPassed": false,
     "notes": [
-      "既有120秒视频交付、25行CSV统计限定样本、57项媒体隔离检查沿用。",
-      "歌曲下载/演唱形式、OAuth发布及真实平台数据保留；不再生成/下载/发布。"
+      "开发HTTP/Vite资源和版本200、正常保存重载、构建与类型检查沿用。",
+      "原生UI/HMR明确保留；health degraded旧隔离任务边界不升级。"
     ],
     "scope": "existing-evidence-review",
     "effectiveEvidence": [
@@ -112,9 +112,10 @@
       17,
       18,
       19,
-      20
+      20,
+      "G1"
     ],
-    "next": "G1"
+    "next": "G2"
   },
   "currentCheckpointValidation": {
     "jsonParsed": true,
