@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:51:11.846Z",
+  "updatedAt": "2026-10-26T11:57:02.766Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "本轮按序复核结束",
-    "status": "review-complete",
-    "instruction": "已过不重验；保留项不重开；逐项封存、本地提交"
+    "title": "本轮顺序复核及问题封存完成",
+    "status": "review-complete-with-retained-issues",
+    "instruction": "保留项继续封存；已过不重验；后续仅推进用户明确恢复的范围。"
   },
   "acceptedWholeItems": [
     3,
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G7",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G7/evidence-seal.json",
-    "sha256": "5596279b41b85a1a6079bfc4a4334cc3741a194bda584824fce349990670bfbf",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/evidence-seal.json",
+    "sha256": "0ed640dd85907f072b2e401b480f3f8c22c6ab7ed138e1ffb559e3f31568c488",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,7 +67,7 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "eb18ad57c0272d8dd1676f5a7b5d08bd03e5bb94",
+    "baseCommit": "246b9ff8345534091352f8014bfb203a74eac84a",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
@@ -120,13 +120,54 @@
       "G6",
       "G7"
     ],
-    "next": null
+    "next": null,
+    "status": "current-pass-complete"
   },
   "currentCheckpointValidation": {
     "jsonParsed": true,
     "gitDiffCheck": "passed",
     "sourceChanged": false,
-    "businessReplayed": false,
+    "existingPassedOperationsReplayed": false,
+    "priorSealedFilesVerified": "135/135",
+    "currentSubsealFilesVerified": "56/56",
+    "protectedAcceptedStateUnchanged": true,
+    "wholeApplicationAccepted": false
+  },
+  "orderedPassSummary": {
+    "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/acceptance-summary.json",
+    "text": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/问题与封存汇总.txt",
+    "counts": {
+      "total": 27,
+      "passed": 3,
+      "partial": 18,
+      "blocked": 4,
+      "failed": 1,
+      "deferred": 1
+    },
+    "acceptedWholeItems": [
+      3,
+      15,
+      16
+    ],
+    "newPassedSubcases": [
+      {
+        "item": 11,
+        "scope": "正常产品API直接股东单来源取回及保真",
+        "checks": "18/18",
+        "rows": 13,
+        "nativeAccepted": false
+      },
+      {
+        "item": "G6",
+        "scope": "本地已提交/工作树干净",
+        "wholeItemPassed": false
+      }
+    ],
+    "newBusinessPOSTs": 1,
+    "newModelCalls": 0,
+    "sourceCodeChanged": false,
+    "heldUnchanged": true,
+    "independentReview": "passed",
     "wholeApplicationAccepted": false
   }
 }
