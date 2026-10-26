@@ -1,12 +1,12 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:51:10.163Z",
+  "updatedAt": "2026-10-26T11:51:11.050Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": "G6",
-    "title": "继续第G6项",
+    "id": "G7",
+    "title": "继续第G7项",
     "status": "ready",
     "instruction": "已过不重验；保留项不重开；逐项封存、本地提交"
   },
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G5",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G5/evidence-seal.json",
-    "sha256": "b31c0417ed0a2d15f8f7612c8ea0d886e880c8927ee29fcd194c5df38cd0b5d1",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G6",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G6/evidence-seal.json",
+    "sha256": "a88b7f95893ecec8844716407fadc5595577ea33adac3f887065da4b4e8cb439",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,18 +67,18 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "fb44b8740d1a39bfbd530705eddf9d21899abb72",
+    "baseCommit": "dd3d0bd21fc516168ceede4c80f9c674da04e315",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
-    "item": "G5",
-    "title": "主程序与律师版共享后台、记录及版本自知",
+    "item": "G6",
+    "title": "最终双安装包、凭据检查、提交同步、工作树和磁盘",
     "status": "partial",
     "wholeItemPassed": false,
     "notes": [
-      "共享数据合并/隔离、只读存储及两仓来源身份可追溯证据沿用。",
-      "主程序与律师版双原生真实同步和版本自知保留，不要求用户重开。"
+      "已完成双仓本地源码/测试/检查点提交，当前每项后均验证工作树干净，关闭原未提交子缺口。",
+      "最终双安装包、安装/发布和未知历史凭据边界保留；未推送，旧格式诊断保持原时点。"
     ],
     "scope": "existing-evidence-review",
     "effectiveEvidence": [
@@ -92,7 +92,24 @@
         "sha256": "f2376fcfc8ba805978e30a32cb1173383f70a467017020946bc64902ba6851a7",
         "bytes": 8295
       }
-    ]
+    ],
+    "localCommitSubgap": {
+      "status": "passed",
+      "scope": "本地已提交及工作树干净",
+      "noPush": true,
+      "repositories": [
+        {
+          "edition": "legal",
+          "head": "7ef0e90bdf2198d1de0ac4869b063268cc203700",
+          "clean": true
+        },
+        {
+          "edition": "main",
+          "head": "dd3d0bd21fc516168ceede4c80f9c674da04e315",
+          "clean": true
+        }
+      ]
+    }
   },
   "orderedReviewProgress": {
     "start": 6,
@@ -116,9 +133,10 @@
       "G2",
       "G3",
       "G4",
-      "G5"
+      "G5",
+      "G6"
     ],
-    "next": "G6"
+    "next": "G7"
   },
   "currentCheckpointValidation": {
     "jsonParsed": true,
