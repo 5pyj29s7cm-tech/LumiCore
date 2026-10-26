@@ -1,12 +1,12 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:51:08.181Z",
+  "updatedAt": "2026-10-26T11:51:09.340Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": "G4",
-    "title": "继续第G4项",
+    "id": "G5",
+    "title": "继续第G5项",
     "status": "ready",
     "instruction": "已过不重验；保留项不重开；逐项封存、本地提交"
   },
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G3",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G3/evidence-seal.json",
-    "sha256": "74dd267eeee470726136553e0380f00f1718313e587b61f304cc35ae0d76b200",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G4",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G4/evidence-seal.json",
+    "sha256": "2b4cfa6e1f239e5f2234cde2c99b4f22c010001f49a5e5781f05caf7cdcc65ac",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,18 +67,18 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "c1aadb3d42eac7cef4a3ba6c5449405458726121",
+    "baseCommit": "d9346a0ca9667fff79fd297f52364f8010310e6e",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
-    "item": "G3",
-    "title": "语音唤醒与手动按钮：声音一致、点击不崩溃",
+    "item": "G4",
+    "title": "内外模式和桌面实际执行",
     "status": "partial",
     "wholeItemPassed": false,
     "notes": [
-      "既有语音配置/握手/生命周期沿用；结构终态已修，离线55/55通过。",
-      "真实麦克风、唤醒/按钮同声及设备稳定性保留；旧结构失败仅存历史。"
+      "用户模式按钮显示确认沿用；旧模式关键词删句和固定回退已物理删除。",
+      "模型模式陈述语义、真实桌面/一次确认及两项operation_mode_commands旧失败保留。"
     ],
     "scope": "existing-evidence-review",
     "effectiveEvidence": [
@@ -114,9 +114,10 @@
       20,
       "G1",
       "G2",
-      "G3"
+      "G3",
+      "G4"
     ],
-    "next": "G4"
+    "next": "G5"
   },
   "currentCheckpointValidation": {
     "jsonParsed": true,
