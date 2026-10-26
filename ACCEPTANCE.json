@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T13:38:56.932Z",
+  "updatedAt": "2026-10-26T15:02:40.749Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
     "id": 11,
-    "title": "直接股东真实页面显示",
-    "status": "native-input-blocked",
-    "instruction": "用户将Lumi Legal律师开发版恢复到前台并点财产线索；无需重发材料/账号。"
+    "title": "真实股东查询及共用会话恢复",
+    "status": "source-tests-passed-native-recovery-pending",
+    "instruction": "新律师窗口已连接；继续同窗backend刷新恢复和股东查询，不重放未明确失败的业务。"
   },
   "acceptedWholeItems": [
     3,
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/direct-shareholder-page-repair-20261026-1793018010524",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/direct-shareholder-page-repair-20261026-1793018010524/evidence-seal.json",
-    "sha256": "b8bcf0084bff9595659e8868384e8662c5607aa43d041cae7b40a6a580eef9c7",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/native-session-recovery-20261026-1793024327071",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/native-session-recovery-20261026-1793024327071/evidence-seal.json",
+    "sha256": "339d06ccf5f000c5beaa59bf2e808bc99572190e26313a04d065859d888604dc",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,7 +67,7 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "68d6539a019379628ae2e43a90885534241f912a",
+    "baseCommit": "18810e1c6a135ab80ebefb1b59998a3c68bfb052",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
@@ -205,5 +205,19 @@
       "error": "coordinate input geometry is unavailable",
       "userUiActionPending": true
     }
+  },
+  "latestNativeSessionRepair": {
+    "sourceEdition": "legal",
+    "sourceChanged": false,
+    "security": "32/32",
+    "frontend": "56/56",
+    "rust": "8/8",
+    "typecheck": "passed",
+    "desktopBuild": "passed",
+    "nativeStartupConnected": true,
+    "nativeBackendRestartRecoveryPassed": false,
+    "shareholderNativeQueryPassed": false,
+    "noAuthorizationBypass": true,
+    "noBusinessPostReplay": true
   }
 }
