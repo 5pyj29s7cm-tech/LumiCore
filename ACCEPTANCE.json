@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:57:02.766Z",
+  "updatedAt": "2026-10-26T13:14:40.212Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": null,
-    "title": "本轮顺序复核及问题封存完成",
-    "status": "review-complete-with-retained-issues",
-    "instruction": "保留项继续封存；已过不重验；后续仅推进用户明确恢复的范围。"
+    "id": 11,
+    "title": "直接股东页面显示",
+    "status": "source-and-component-passed-native-pending",
+    "instruction": "新发现的页面接入缺口已修；正常产品窗口实测待继续，原实控人步骤保留不动"
   },
   "acceptedWholeItems": [
     3,
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/evidence-seal.json",
-    "sha256": "0ed640dd85907f072b2e401b480f3f8c22c6ab7ed138e1ffb559e3f31568c488",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/direct-shareholder-page-repair-20261026-1793018010524",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/direct-shareholder-page-repair-20261026-1793018010524/evidence-seal.json",
+    "sha256": "b8bcf0084bff9595659e8868384e8662c5607aa43d041cae7b40a6a580eef9c7",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,7 +67,7 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "246b9ff8345534091352f8014bfb203a74eac84a",
+    "baseCommit": "6ad97c6d6de0f0acc4585cfe91df219c3d0357a2",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
@@ -169,5 +169,21 @@
     "heldUnchanged": true,
     "independentReview": "passed",
     "wholeApplicationAccepted": false
+  },
+  "latestShareholderPageRepair": {
+    "sourceEdition": "legal",
+    "nativeAccepted": false,
+    "wholeItemPassed": false,
+    "sourceChanged": false,
+    "backend": "64/64",
+    "components": "39 passed,2 existing optional skipped",
+    "real13RowsReplay": "5/5 overlapping",
+    "typecheck": "passed",
+    "desktopBuild": "passed",
+    "globalI18n": "failed-existing",
+    "i18nAdditions": 0,
+    "noNewSemanticRules": true,
+    "oldDuplicateProjectionRemoved": true,
+    "noNewProviderQueries": true
   }
 }
