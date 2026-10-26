@@ -1,12 +1,12 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:48:22.742Z",
+  "updatedAt": "2026-10-26T11:48:23.597Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": 16,
-    "title": "继续第16项",
+    "id": 17,
+    "title": "继续第17项",
     "status": "ready",
     "instruction": "已过不重验；保留项不重开；逐项封存、本地提交"
   },
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-15",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-15/evidence-seal.json",
-    "sha256": "afd7b5e461911af441b5bf6e540bc7a0a88e042d3928e09812672c8eb4de8f13",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-16",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-16/evidence-seal.json",
+    "sha256": "ec87cd3122882e55311e2ce4b11eb6fe523680b9e970e19d413e403ded01e34b",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,18 +67,18 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "4a8bd316c22d4ba4a66f41f4292800d5450e5f12",
+    "baseCommit": "8a4e1b1ff7a16d7c2dbde0a7411f1f3b585282d4",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
-    "item": 15,
-    "title": "飞书连接与各自聊天",
+    "item": 16,
+    "title": "个人和组织工作台",
     "status": "passed",
     "wholeItemPassed": true,
     "notes": [
-      "用户确认接入、去重后单条回复；通过封存状态保持。",
-      "不重发消息，不重新验收，不以动态总账哈希变化撤回通过结论。"
+      "用户确认组织布局、记录域、首页入口/返回及日间文字按钮；通过封存状态保持。",
+      "不重做已过操作；双原生同步缺口属于G5保留。"
     ],
     "scope": "existing-evidence-review",
     "acceptedItemReopened": false
@@ -95,9 +95,10 @@
       12,
       13,
       14,
-      15
+      15,
+      16
     ],
-    "next": 16
+    "next": 17
   },
   "currentCheckpointValidation": {
     "jsonParsed": true,
