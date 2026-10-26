@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T13:14:40.212Z",
+  "updatedAt": "2026-10-26T13:38:56.932Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
     "id": 11,
-    "title": "直接股东页面显示",
-    "status": "source-and-component-passed-native-pending",
-    "instruction": "新发现的页面接入缺口已修；正常产品窗口实测待继续，原实控人步骤保留不动"
+    "title": "直接股东真实页面显示",
+    "status": "native-input-blocked",
+    "instruction": "用户将Lumi Legal律师开发版恢复到前台并点财产线索；无需重发材料/账号。"
   },
   "acceptedWholeItems": [
     3,
@@ -67,7 +67,7 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "6ad97c6d6de0f0acc4585cfe91df219c3d0357a2",
+    "baseCommit": "68d6539a019379628ae2e43a90885534241f912a",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
@@ -184,6 +184,26 @@
     "i18nAdditions": 0,
     "noNewSemanticRules": true,
     "oldDuplicateProjectionRemoved": true,
-    "noNewProviderQueries": true
+    "noNewProviderQueries": true,
+    "runtime": {
+      "at": "2026-10-26T13:38:56.932Z",
+      "pid": 45220,
+      "startedAt": "2026-10-26T13:20:51.311Z",
+      "sourceRoot": "D:/lumiOS-variants/lumi-legal-client",
+      "sourceCommit": "b3b22a837ec5827aa891e05b85f20ff3bf9ee9d7",
+      "nodeVersion": "v24.19.0",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/direct-shareholder-page-repair-20261026-1793018010524/runtime-refresh/evidence-seal.json",
+      "manifestSHA256": "0f580a8badc92ef40a75afa1733d364a66b4e777f32b9a34ae171672d096b0ee",
+      "oldBackendStoppedAfterSavedReceipt": true,
+      "sourceResource200": true,
+      "nativeAccepted": false
+    },
+    "nativeControl": {
+      "textRead": true,
+      "click": false,
+      "capture": false,
+      "error": "coordinate input geometry is unavailable",
+      "userUiActionPending": true
+    }
   }
 }
