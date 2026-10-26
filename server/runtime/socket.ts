@@ -116,7 +116,9 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
   io.use((socket, next) => {
     const auth = getSocketAuth(socket, jwtSecret);
     if (!auth) {
-      next(new Error('Authentication required'));
+      const error: any = new Error('Authentication required');
+      error.data = { code: 'AUTHENTICATION_REQUIRED' };
+      next(error);
       return;
     }
     if (auth.orgId) {

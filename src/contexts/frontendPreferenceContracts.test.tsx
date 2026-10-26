@@ -198,3 +198,25 @@ describe('settings share confirmed context state', () => {
     } finally { timeout.mockRestore(); }
   });
 });
+
+describe('native session lifecycle refresh', () => {
+  it('reads the current server identity after recovery and ignores an older pending identity', async () => {
+    const hook = await app(), pending = deferred<any>();
+    mocks.me.mockReturnValueOnce(pending.promise).mockResolvedValue({ user: { uid: 'account-b', username: 'B', role: 'user' } });
+    act(() => { window.dispatchEvent(new Event('lumi:native-session-recovered')); });
+    await act(async () => { await hook.result.current.refreshUser(); }); expect(hook.result.current.user?.uid).toBe('account-b');
+    await act(async () => { pending.resolve({ user: { uid: 'synthetic-user', username: 'Old account', role: 'user' } }); });
+    expect(hook.result.current.user?.uid).toBe('account-b');
+  });
+  it('does not restore an identity when a recovery read finishes after explicit logout', async () => {
+    const hook = await app(), pending = deferred<any>(); mocks.me.mockReturnValueOnce(pending.promise);
+    act(() => { window.dispatchEvent(new Event('lumi:native-session-recovered')); });
+    await act(async () => { await hook.result.current.logout(); }); expect(hook.result.current.user).toBeNull();
+    await act(async () => { pending.resolve({ user: { uid: 'synthetic-user', username: 'Old account', role: 'user' } }); });
+    expect(hook.result.current.user).toBeNull(); expect(mocks.disconnect).toHaveBeenCalledTimes(1);
+  });
+  it('removes the recovery listener when its context owner unmounts', async () => {
+    const hook = await app(); hook.unmount(); const calls = mocks.me.mock.calls.length;
+    window.dispatchEvent(new Event('lumi:native-session-recovered')); await Promise.resolve(); expect(mocks.me).toHaveBeenCalledTimes(calls);
+  });
+});

@@ -2,9 +2,10 @@ import { io, Socket } from "socket.io-client";
 import { getSocketOrigin } from "./apiBridge";
 import {
   bootstrap,
+  canRecoverNativeSession,
+  NATIVE_SESSION_RECOVERED_EVENT,
   getDesktopSessionProof,
   getStoredToken,
-  isNativeDesktopRuntime,
 } from "./authService";
 
 function getDeviceFingerprint(): string {
@@ -82,7 +83,7 @@ function reportPreviousRecoveryReason() {
   }
 }
 
-function forceReconnect(socket: Socket, reason: string, detail: Record<string, unknown>) {
+function forceReconnect(socket: Socket, reason: string, detail: Record<string, unknown>, isCurrent: () => boolean) {
   const now = Date.now();
   if (now - lastForcedReconnectAt < FORCE_RECONNECT_THROTTLE_MS) return;
   lastForcedReconnectAt = now;
@@ -92,6 +93,7 @@ function forceReconnect(socket: Socket, reason: string, detail: Record<string, u
     socket.disconnect();
   } catch {}
   window.setTimeout(() => {
+    if (!isCurrent()) return;
     try {
       socket.connect();
     } catch (err: any) {
@@ -100,7 +102,9 @@ function forceReconnect(socket: Socket, reason: string, detail: Record<string, u
   }, 250);
 }
 
-function startWatchdog(socket: Socket) {
+function startWatchdog(socket: Socket, recoverNativeSession: () => Promise<void>) {
+  let authorizationStatus: 'ready' | 'recoverable' | 'denied' = 'ready';
+  let stopped = false;
   // Heartbeat to localStorage — survives page crashes and lets us detect recovery
   if (!heartbeatTimer) {
     heartbeatTimer = setInterval(() => {
@@ -109,6 +113,7 @@ function startWatchdog(socket: Socket) {
   }
 
   socket.on("connect", () => {
+    authorizationStatus = 'ready';
     recordRuntimeEvent('socket_connected', { id: socket.id });
     disconnectSince = null;
   });
@@ -119,26 +124,48 @@ function startWatchdog(socket: Socket) {
   });
 
   socket.on("connect_error", (err) => {
-    recordRuntimeEvent('socket_connect_error', { message: err.message });
+    const code = (err as any)?.data?.code;
+    if (code === 'AUTHENTICATION_REQUIRED' || code === 'DESKTOP_SESSION_PROOF_REQUIRED') authorizationStatus = 'recoverable';
+    else if (socket.active === false) authorizationStatus = 'denied';
+    recordRuntimeEvent('socket_connect_error', { message: err.message, code });
+  });
+
+  socket.on('device:registration_error', error => {
+    if (error?.socketId === socket.id && error?.code === 'DESKTOP_SESSION_PROOF_REQUIRED') authorizationStatus = 'recoverable';
+  });
+  socket.on('runtime:execution_boundary', boundary => {
+    if (boundary?.trustedLocalExecution !== true) authorizationStatus = 'recoverable';
   });
 
   // Periodic check: keep reconnecting in place. The native shell owns backend restarts.
   const checkInterval = setInterval(() => {
-    if (disconnectSince && (Date.now() - disconnectSince) > DISCONNECT_RECOVERY_MS) {
+    if (authorizationStatus === 'recoverable') {
+      void recoverNativeSession();
+      return;
+    }
+    if (authorizationStatus === 'ready' && disconnectSince !== null && (Date.now() - disconnectSince) > DISCONNECT_RECOVERY_MS) {
       const durationMs = Date.now() - disconnectSince;
-      forceReconnect(socket, 'socket_disconnected_reconnect', { durationMs });
+      forceReconnect(socket, 'socket_disconnected_reconnect', { durationMs }, () => !stopped);
     }
     // Also ping the server directly as a secondary health check
     const token = getStoredToken();
-    if (token) {
+    if (token && authorizationStatus === 'ready') {
       fetch('/api/auth/me', {
         headers: { Authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(5000),
+      }).then(response => {
+        if (stopped) return;
+        if (response.status === 401 || response.status === 403) {
+          authorizationStatus = response.status === 401 ? 'recoverable' : 'denied';
+          recordRuntimeEvent('socket_watchdog_authorization_rejected', { status: response.status });
+          if (response.status === 401) void recoverNativeSession();
+        }
       }).catch(() => {
+        if (stopped) return;
         // If fetch fails AND socket is disconnected, keep nudging the socket.
-        if (disconnectSince && (Date.now() - disconnectSince) > SERVER_UNREACHABLE_RECOVERY_MS) {
+        if (authorizationStatus === 'ready' && disconnectSince !== null && (Date.now() - disconnectSince) > SERVER_UNREACHABLE_RECOVERY_MS) {
           const durationMs = Date.now() - disconnectSince;
-          forceReconnect(socket, 'server_unreachable_socket_reconnect', { durationMs });
+          forceReconnect(socket, 'server_unreachable_socket_reconnect', { durationMs }, () => !stopped);
         }
       });
     }
@@ -147,11 +174,15 @@ function startWatchdog(socket: Socket) {
   // Visibility: when the user returns to the tab, check if we're still connected
   const onVisible = () => {
     if (document.visibilityState === 'visible') {
-      if (!socket.connected && disconnectSince && (Date.now() - disconnectSince) > 30_000) {
+      if (authorizationStatus === 'recoverable') {
+        void recoverNativeSession();
+        return;
+      }
+      if (authorizationStatus === 'ready' && !socket.connected && disconnectSince !== null && (Date.now() - disconnectSince) > 30_000) {
         const durationMs = Date.now() - disconnectSince;
         recordRuntimeEvent('socket_reconnect_on_visible', { durationMs });
         console.warn('[Watchdog] Page became visible but socket disconnected >30s, reconnecting', { durationMs });
-        forceReconnect(socket, 'socket_visible_reconnect', { durationMs });
+        forceReconnect(socket, 'socket_visible_reconnect', { durationMs }, () => !stopped);
       }
     }
   };
@@ -159,6 +190,7 @@ function startWatchdog(socket: Socket) {
 
   // Return cleanup
   return () => {
+    stopped = true;
     document.removeEventListener('visibilitychange', onVisible);
     clearInterval(checkInterval);
   };
@@ -209,15 +241,17 @@ class SocketService {
     recordRuntimeEvent('device_registration_rejected', { code });
   }
 
-  private async refreshExpiredNativeProof(reason: string) {
-    if (!isNativeDesktopRuntime() || this.nativeProofRefreshInFlight) return;
+  private async refreshNativeSession(reason: string) {
+    if (!canRecoverNativeSession() || this.nativeProofRefreshInFlight) return;
     const now = Date.now();
     if (now - this.lastNativeProofRefreshAt < 5_000) return;
     this.lastNativeProofRefreshAt = now;
     this.nativeProofRefreshInFlight = true;
+    const socket = this.socket;
     recordRuntimeEvent('desktop_session_proof_refresh_started', { reason });
     try {
       const result = await bootstrap();
+      if (this.socket !== socket || !socket) return;
       if (!result.success || !result.desktopSessionProof) {
         recordRuntimeEvent('desktop_session_proof_refresh_failed', {
           reason,
@@ -227,6 +261,7 @@ class SocketService {
       }
       recordRuntimeEvent('desktop_session_proof_refreshed', { reason });
       this.refreshAuth();
+      window.dispatchEvent(new Event(NATIVE_SESSION_RECOVERED_EVENT));
     } catch (error: any) {
       recordRuntimeEvent('desktop_session_proof_refresh_failed', {
         reason,
@@ -266,8 +301,8 @@ class SocketService {
 
       this.socket.on("connect_error", (err) => {
         console.error("[SocketService] Connect error:", err.message);
-        if ((err as any)?.data?.code === 'DESKTOP_SESSION_PROOF_REQUIRED') {
-          void this.refreshExpiredNativeProof('socket_connect_error');
+        if (['AUTHENTICATION_REQUIRED', 'DESKTOP_SESSION_PROOF_REQUIRED'].includes((err as any)?.data?.code)) {
+          void this.refreshNativeSession('socket_connect_error');
         }
       });
 
@@ -280,16 +315,16 @@ class SocketService {
       this.socket.on('device:registration_error', (error: any) => {
         if (error?.socketId !== this.socket?.id || typeof error?.code !== 'string') return;
         this.rejectDeviceRegistration(error.socketId, error.code);
-        if (error.code === 'DESKTOP_SESSION_PROOF_REQUIRED') void this.refreshExpiredNativeProof('device_registration_error');
+        if (error.code === 'DESKTOP_SESSION_PROOF_REQUIRED') void this.refreshNativeSession('device_registration_error');
       });
 
       this.socket.on('runtime:execution_boundary', (boundary: any) => {
         if (boundary?.trustedLocalExecution !== true) {
-          void this.refreshExpiredNativeProof('socket_remote_restricted_boundary');
+          void this.refreshNativeSession('socket_remote_restricted_boundary');
         }
       });
 
-      this.watchdogCleanup = startWatchdog(this.socket);
+      this.watchdogCleanup = startWatchdog(this.socket, () => this.refreshNativeSession('watchdog_authentication_required'));
     } else if (token !== this.token || desktopSessionProof !== this.desktopSessionProof) {
       this.token = token;
       this.desktopSessionProof = desktopSessionProof;

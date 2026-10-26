@@ -245,7 +245,7 @@ fn request_bootstrap(
     parse_http_response(&response)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct BackendLease {
     version: u8,
@@ -482,9 +482,12 @@ pub(crate) fn bootstrap_identity(
     Err("Native identity bootstrap failed".into())
 }
 
-/// Reuse requires the private canonical-root lease, its live process identity,
-/// the exact loopback PID, and a consumed/rotated native proof. No process is stopped.
-pub(crate) fn reuse_existing_backend(product_identifier: &str) -> Result<Option<u32>, String> {
+/// Return the actual account session only after validating the same private
+/// lease before and after the native proof exchange. This grants no child ownership.
+fn verified_shared_backend_session(
+    product_identifier: &str,
+    existing_token: Option<&str>,
+) -> Result<Option<(u32, Value)>, String> {
     let Some(lease) = read_backend_lease()? else {
         return Ok(None);
     };
@@ -492,17 +495,38 @@ pub(crate) fn reuse_existing_backend(product_identifier: &str) -> Result<Option<
         return Ok(None);
     }
     validate_reuse_version(lease.pid, &request_backend_version()?)?;
-    let _ = bootstrap_identity(None, Some(product_identifier))?;
+    let session = bootstrap_identity(existing_token, Some(product_identifier))?;
+    validate_reuse_version(lease.pid, &request_backend_version()?)?;
     let current =
         read_backend_lease()?.ok_or("The shared backend lease disappeared during bootstrap")?;
-    if current.pid != lease.pid
-        || current.owner_token != lease.owner_token
-        || !live_lease_owner(&current)?
-    {
+    if current != lease || !live_lease_owner(&current)? {
         return Err("The shared backend lease changed during bootstrap".into());
     }
-    validate_reuse_version(lease.pid, &request_backend_version()?)?;
-    Ok(Some(lease.pid))
+    Ok(Some((lease.pid, session)))
+}
+
+/// Reuse requires the private canonical-root lease, its live process identity,
+/// the exact loopback PID, and a consumed/rotated native proof. No process is stopped.
+pub(crate) fn reuse_existing_backend(product_identifier: &str) -> Result<Option<u32>, String> {
+    Ok(verified_shared_backend_session(product_identifier, None)?.map(|(pid, _)| pid))
+}
+
+fn commit_verified_attachment(
+    processes: &mut crate::BackendProcesses,
+    expected_pid: Option<u32>,
+    expected_error: &Option<String>,
+    verified_pid: u32,
+) -> Result<(), String> {
+    if processes.attached_pid != expected_pid
+        || &processes.startup_error != expected_error
+        || processes.node.is_some()
+        || processes.node_config.is_some()
+    {
+        return Err("The native backend attachment changed during bootstrap".into());
+    }
+    processes.attached_pid = Some(verified_pid);
+    processes.startup_error = None;
+    Ok(())
 }
 
 #[tauri::command]
@@ -517,16 +541,15 @@ pub fn bootstrap_local_identity(
             .map_err(|_| "Unable to inspect the backend startup result")?;
         (processes.attached_pid, processes.startup_error.clone())
     };
-    if let Some(error) = error {
-        return Err(error);
-    }
-    if let Some(pid) = attached_pid {
-        let lease = read_backend_lease()?.ok_or("The attached backend lease is unavailable")?;
-        if lease.pid != pid || !live_lease_owner(&lease)? {
-            return Err("The attached backend process changed".into());
-        }
-        validate_reuse_version(pid, &request_backend_version()?)?;
-        return bootstrap_identity(existing_token.as_deref(), Some(&app.config().identifier));
+    if attached_pid.is_some() || error.is_some() {
+        let (pid, session) =
+            verified_shared_backend_session(&app.config().identifier, existing_token.as_deref())?
+                .ok_or("The attached backend lease is unavailable or has no live owner")?;
+        let mut processes = state
+            .lock()
+            .map_err(|_| "Unable to update the backend attachment")?;
+        commit_verified_attachment(&mut processes, attached_pid, &error, pid)?;
+        return Ok(session);
     }
     bootstrap_identity(existing_token.as_deref(), None)
 }
@@ -615,7 +638,7 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn shared_reuse_requires_live_identity_and_a_rotated_exact_native_proof() {
+    fn shared_reuse_and_reattachment_require_one_verified_account_session() {
         use std::io::{Read, Write};
         use std::net::TcpListener;
         use std::sync::{
@@ -646,20 +669,37 @@ mod tests {
                 std::fs::remove_dir_all(&self.root).unwrap();
             }
         }
-        for rotate in [false, true] {
-            let root = std::env::temp_dir()
-                .join(format!("lumi-reuse-proof-{}-{rotate}", std::process::id()));
+        for scenario in [
+            "initial",
+            "reattach",
+            "startup-error",
+            "unconsumed",
+            "wrong-identity",
+            "wrong-pid",
+            "wrong-protocol",
+            "changed-lease",
+            "missing-lease",
+            "fake-owner",
+        ] {
+            let root = std::env::temp_dir().join(format!(
+                "lumi-reuse-proof-{}-{scenario}",
+                std::process::id()
+            ));
             std::fs::create_dir_all(root.join("runtime")).unwrap();
             let data_root = root.to_string_lossy().to_string();
             let digest = format!(
                 "{:x}",
                 <sha2::Sha256 as sha2::Digest>::digest(data_root.to_lowercase().as_bytes())
             );
-            std::fs::write(root.join("runtime/backend-instance.lock"), serde_json::to_vec(&serde_json::json!({
+            let lease_path = root.join("runtime/backend-instance.lock");
+            let lease = serde_json::json!({
                 "version": 1, "pid": std::process::id(), "hostname": sysinfo::System::host_name().unwrap(),
                 "dataRoot": data_root, "dataRootDigest": digest, "ownerToken": "a".repeat(64),
-                "processStartIdentity": super::windows_process_start_identity(std::process::id()).unwrap(), "leasePurpose": "backend"
-            })).unwrap()).unwrap();
+                "processStartIdentity": if scenario == "fake-owner" { "win-start-ticks:0".into() } else { super::windows_process_start_identity(std::process::id()).unwrap() }, "leasePurpose": "backend"
+            });
+            if scenario != "missing-lease" {
+                std::fs::write(&lease_path, serde_json::to_vec(&lease).unwrap()).unwrap();
+            }
             let proof = root.join("runtime/desktop-bootstrap.json");
             std::fs::write(&proof, serde_json::to_vec(&serde_json::json!({"version": 1, "proof": "a".repeat(64), "createdAt": "fixture", "expiresAt": "fixture"})).unwrap()).unwrap();
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -673,6 +713,7 @@ mod tests {
             let server_stop = stop.clone();
             let thread = std::thread::spawn(move || {
                 let mut requests = 0;
+                let mut bootstrap_requests = 0;
                 while !server_stop.load(Ordering::SeqCst) {
                     let (mut stream, _) = match listener.accept() {
                         Ok(value) => value,
@@ -711,19 +752,36 @@ mod tests {
                     }
                     let headers = String::from_utf8_lossy(&raw[..header_end]);
                     let body = if headers.starts_with("GET /api/version ") {
-                        serde_json::json!({"pid": std::process::id(), "sharedBackendProtocol": 1})
+                        if scenario == "changed-lease" && bootstrap_requests > 0 {
+                            let mut changed = lease.clone();
+                            changed["ownerToken"] = serde_json::json!("d".repeat(64));
+                            std::fs::write(&lease_path, serde_json::to_vec(&changed).unwrap())
+                                .unwrap();
+                        }
+                        serde_json::json!({"pid": if scenario == "wrong-pid" { std::process::id() + 1 } else { std::process::id() }, "sharedBackendProtocol": if scenario == "wrong-protocol" { 0 } else { 1 }})
                     } else {
+                        bootstrap_requests += 1;
+                        assert_eq!(bootstrap_requests, 1, "No intermediate account bootstrap");
                         assert!(headers.starts_with("POST /api/auth/bootstrap "));
                         assert!(headers
                             .contains(&format!("X-Lumi-Desktop-Bootstrap: {}", "a".repeat(64))));
+                        assert_eq!(
+                            headers
+                                .contains("Authorization: Bearer synthetic-existing-user-session"),
+                            scenario != "initial"
+                        );
                         let input: serde_json::Value =
                             serde_json::from_slice(&raw[header_end..header_end + length]).unwrap();
                         assert_eq!(input["sharedBackendReuse"], true);
                         assert_eq!(input["nativeProductIdentifier"], "com.lumiai.legal");
-                        if rotate {
+                        if scenario != "unconsumed" {
                             std::fs::write(&proof, serde_json::to_vec(&serde_json::json!({"version": 1, "proof": "b".repeat(64), "createdAt": "fixture", "expiresAt": "fixture"})).unwrap()).unwrap();
                         }
-                        serde_json::json!({"success": true, "desktopSessionProof": "c".repeat(64), "nativeClientIdentity": input["nativeClientIdentity"]})
+                        let mut identity = input["nativeClientIdentity"].clone();
+                        if scenario == "wrong-identity" {
+                            identity["pid"] = serde_json::json!(std::process::id() + 1);
+                        }
+                        serde_json::json!({"success": true, "token": "synthetic-restored-user-token", "user": { "uid": "synthetic-existing-user" }, "desktopSessionProof": "c".repeat(64), "nativeClientIdentity": identity})
                     };
                     let body = serde_json::to_vec(&body).unwrap();
                     stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).unwrap();
@@ -739,17 +797,106 @@ mod tests {
                 stop,
                 thread: Some(thread),
             };
-            let result = super::reuse_existing_backend("com.lumiai.legal");
-            if rotate {
-                assert_eq!(result.unwrap(), Some(std::process::id()));
+            if scenario == "initial" {
+                assert_eq!(
+                    super::reuse_existing_backend("com.lumiai.legal").unwrap(),
+                    Some(std::process::id())
+                );
             } else {
-                assert!(result
-                    .unwrap_err()
-                    .contains("consume this exact native bootstrap proof"));
+                let result = super::verified_shared_backend_session(
+                    "com.lumiai.legal",
+                    Some("synthetic-existing-user-session"),
+                )
+                .and_then(|value| {
+                    value.ok_or_else(|| {
+                        "The attached backend lease is unavailable or has no live owner".to_string()
+                    })
+                });
+                if ["reattach", "startup-error"].contains(&scenario) {
+                    let (pid, session) = result.unwrap();
+                    assert_eq!(pid, std::process::id());
+                    assert_eq!(session["token"], "synthetic-restored-user-token");
+                    assert_eq!(session["user"]["uid"], "synthetic-existing-user");
+                    let expected_pid = if scenario == "reattach" {
+                        Some(pid + 1)
+                    } else {
+                        None
+                    };
+                    let expected_error = if scenario == "startup-error" {
+                        Some("previous backend unavailable".to_string())
+                    } else {
+                        None
+                    };
+                    let mut state = super::super::BackendProcesses {
+                        node: None,
+                        python: None,
+                        node_restarts: 0,
+                        python_restarts: 0,
+                        node_config: None,
+                        attached_pid: expected_pid,
+                        startup_error: expected_error.clone(),
+                    };
+                    super::commit_verified_attachment(
+                        &mut state,
+                        expected_pid,
+                        &expected_error,
+                        pid,
+                    )
+                    .unwrap();
+                    assert_eq!(state.attached_pid, Some(pid));
+                    assert!(state.startup_error.is_none());
+                    assert!(
+                        state.node.is_none()
+                            && state.node_config.is_none()
+                            && state.python.is_none()
+                    );
+                } else {
+                    let failure = result.err().expect("Unverified backend must be rejected");
+                    let expected = match scenario {
+                        "unconsumed" | "wrong-identity" => {
+                            "consume this exact native bootstrap proof"
+                        }
+                        "wrong-pid" => "does not match",
+                        "wrong-protocol" => "must be updated",
+                        "changed-lease" => "lease changed",
+                        _ => "unavailable or has no live owner",
+                    };
+                    assert!(failure.contains(expected), "{scenario}: {failure}");
+                }
             }
             fixture.stop.store(true, Ordering::SeqCst);
             let count = fixture.thread.take().unwrap().join().unwrap();
-            assert_eq!(count, if rotate { 3 } else { 2 });
+            assert_eq!(
+                count,
+                match scenario {
+                    "missing-lease" | "fake-owner" => 0,
+                    "wrong-pid" | "wrong-protocol" => 1,
+                    "unconsumed" | "wrong-identity" => 2,
+                    _ => 3,
+                }
+            );
         }
+    }
+
+    #[test]
+    fn concurrent_attachment_or_startup_changes_cannot_be_overwritten() {
+        let mut state = super::super::BackendProcesses {
+            node: None,
+            python: None,
+            node_restarts: 0,
+            python_restarts: 0,
+            node_config: None,
+            attached_pid: Some(20),
+            startup_error: None,
+        };
+        assert!(super::commit_verified_attachment(&mut state, Some(10), &None, 30).is_err());
+        assert_eq!(state.attached_pid, Some(20));
+        state.startup_error = Some("a newer startup failure".to_string());
+        assert!(super::commit_verified_attachment(&mut state, Some(20), &None, 30).is_err());
+        assert_eq!(state.attached_pid, Some(20));
+        assert_eq!(
+            state.startup_error.as_deref(),
+            Some("a newer startup failure")
+        );
     }
 }

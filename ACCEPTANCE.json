@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T15:02:40.749Z",
+  "updatedAt": "2026-10-26T15:35:45.169Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
     "id": 11,
-    "title": "真实股东查询及共用会话恢复",
-    "status": "source-tests-passed-native-recovery-pending",
-    "instruction": "新律师窗口已连接；继续同窗backend刷新恢复和股东查询，不重放未明确失败的业务。"
+    "title": "直接股东真实表格及原始来源显示",
+    "status": "native-session-recovered-shareholder-result-pending",
+    "instruction": "在已连接的律师版打开财产线索，点查询直接股东并展开原文"
   },
   "acceptedWholeItems": [
     3,
@@ -49,11 +49,12 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/native-session-recovery-20261026-1793024327071",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/native-session-recovery-20261026-1793024327071/evidence-seal.json",
-    "sha256": "339d06ccf5f000c5beaa59bf2e808bc99572190e26313a04d065859d888604dc",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/native-session-closure-20261026-1793028741230",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/native-session-closure-20261026-1793028741230/evidence-seal.json",
+    "sha256": "1a65c19377a9221dac575465d5af61880b8ae91593a99f8df47bdb315d44e392",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
-    "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
+    "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json",
+    "files": 2
   },
   "workflow": {
     "afterEachSubcase": [
@@ -67,7 +68,7 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "18810e1c6a135ab80ebefb1b59998a3c68bfb052",
+    "baseCommit": "d517cde74f7bb0478d5481a1082291678e66f483",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
@@ -215,9 +216,49 @@
     "typecheck": "passed",
     "desktopBuild": "passed",
     "nativeStartupConnected": true,
-    "nativeBackendRestartRecoveryPassed": false,
+    "nativeBackendRestartRecoveryPassed": true,
     "shareholderNativeQueryPassed": false,
     "noAuthorizationBypass": true,
-    "noBusinessPostReplay": true
+    "noBusinessPostReplay": true,
+    "recoveryRequiredNormalPageRefresh": true,
+    "automaticDevelopmentPageRecoveryPassed": false,
+    "noRefreshRecoveryPassed": false,
+    "actualNormalRefreshRecovery": {
+      "status": "passed-after-normal-page-refresh",
+      "scope": "同一律师原生窗口更换backend PID后，正常刷新一次恢复附着、连接及设备登记",
+      "windowId": 23073094,
+      "backendBefore": 45220,
+      "backendAfter": 31492,
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/native-session-recovery-20261026-1793024327071/actual-backend-replacement-1793027024800/evidence-seal.json",
+      "manifestSHA256": "544ca0d701fff5304348bd9e6104f080d8d7f9952c6cdbc508f56e4a3688034f",
+      "automaticDevelopmentPageRecoveryPassed": false,
+      "noRefreshRecoveryPassed": false,
+      "wholeItemPassed": false
+    },
+    "mainBackport": {
+      "status": "source-tests-types-and-debug-build-passed",
+      "scope": "5 shared native session production owners and4 related tests",
+      "sourceEdition": "legal",
+      "targetEdition": "main",
+      "evidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-native-session-backport-20261026-1793027816355",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-native-session-backport-20261026-1793027816355/evidence-seal.json",
+        "sha256": "4526b2722b10aa9c623a46f0f21f8ce5a4301c4bfff2e205b02c32d71b75c979",
+        "files": 31
+      },
+      "tests": "62/62",
+      "typecheck": "passed",
+      "debugExe": {
+        "path": "D:/lumiOS/src-tauri/target/x86_64-pc-windows-gnu/debug/lumi-core.exe",
+        "bytes": 353936836,
+        "modifiedAt": "2026-10-26T15:25:16.577Z",
+        "sha256": "5bf665acef640a54af7997f31688e3cdb424cf6bd7b989cc2a9b945a453a4062",
+        "buildExit": 0
+      },
+      "nativeRuntimeAccepted": false,
+      "installerBuilt": false,
+      "desktopEntryChanged": false,
+      "installedProgramChanged": false
+    }
   }
 }

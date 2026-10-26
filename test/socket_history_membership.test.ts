@@ -83,6 +83,20 @@ async function fixture() {
   return { uid, orgId, token, client, work, personal, other, remove, write };
 }
 
+it.each([undefined, 'synthetic-invalid-session'])('rejects an unauthenticated socket with a recoverable session code: %s', async token => {
+  const client = connect(app.url, { transports: ['websocket'], auth: token ? { token } : {}, autoConnect: false, reconnection: false });
+  clients.push(client);
+  const rejection = await new Promise<any>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Missing authentication rejection')), 5000);
+    client.once('connect_error', error => { clearTimeout(timer); resolve(error); });
+    client.once('connect', () => { clearTimeout(timer); reject(new Error('Unauthenticated socket connected')); });
+    client.connect();
+  });
+  expect(rejection.message).toBe('Authentication required');
+  expect(rejection.data).toEqual({ code: 'AUTHENTICATION_REQUIRED' });
+  expect(client.connected).toBe(false);
+});
+
 it('normal work history is readable but excludes another user and the same users personal conversation', async () => {
   const f = await fixture();
   expect(JSON.stringify(await event(f.client, 'chat:messages', { conversationId: f.work.id }))).toContain('SYNTHETIC_WORK_HISTORY');

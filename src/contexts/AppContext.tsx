@@ -612,6 +612,12 @@ function useAppAccountActionsAndProvider(previousBindings: ReturnType<typeof use
   };
 
   useEffect(() => {
+    const recovered = () => { void refreshUser(); };
+    window.addEventListener(authService.NATIVE_SESSION_RECOVERED_EVENT, recovered);
+    return () => window.removeEventListener(authService.NATIVE_SESSION_RECOVERED_EVENT, recovered);
+  }, [refreshUser]);
+
+  useEffect(() => {
     let cancelled = false;
     const init = async () => {
       setLoading(true);
@@ -628,8 +634,7 @@ function useAppAccountActionsAndProvider(previousBindings: ReturnType<typeof use
         }
         let me = await authService.getMe();
         if (!me && !cancelled) {
-          // Clear stale token so apiBridge sends fresh one after bootstrap
-          try { localStorage.removeItem('lumi_auth_token'); } catch {}
+          // Preserve the account identity until native bootstrap supplies a replacement.
           let result = await authService.bootstrap();
           for (let retry = 0; !result.success && retry < 8 && !cancelled; retry++) {
             const delay = 500 + retry * 500; // 0.5s, 1s, 1.5s, ..., 4s
@@ -659,7 +664,6 @@ function useAppAccountActionsAndProvider(previousBindings: ReturnType<typeof use
           if (domainResult && !domainResult.success) {
             const fallback = await switchDomain('personal');
             if (!fallback.success) {
-              try { localStorage.removeItem('lumi_auth_token'); } catch {}
               const bootstrapped = await authService.bootstrap();
               if (bootstrapped.success) socketService.refreshAuth();
             }

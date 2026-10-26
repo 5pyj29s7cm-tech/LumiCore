@@ -30,14 +30,26 @@ export function isNativeDesktopRuntime(): boolean {
   return Boolean(runtime.__TAURI_INTERNALS__ || runtime.__TAURI_IPC__ || runtime.__TAURI__);
 }
 
-async function refreshNativeDesktopSessionProof(): Promise<void> {
-  if (!isNativeDesktopRuntime()) return;
-  const { invoke } = await import('@tauri-apps/api/core');
-  const session = await invoke<any>('bootstrap_local_identity', {
-    existingToken: getStoredToken(),
-  });
-  if (session?.token) storeToken(session.token);
-  if (session?.desktopSessionProof) storeDesktopSessionProof(session.desktopSessionProof);
+export const NATIVE_SESSION_RECOVERED_EVENT = 'lumi:native-session-recovered';
+
+interface NativeSessionResult {
+  success: boolean;
+  user?: User;
+  token?: string;
+  desktopSessionProof?: string;
+  desktopSessionExpiresAt?: string;
+  nativeClientIdentity?: NativeClientIdentity;
+  error?: string;
+}
+
+let sessionGeneration = 0;
+let nativeBootstrapAllowed = true;
+let nativeBootstrapInFlight: { generation: number; promise: Promise<NativeSessionResult> } | null = null;
+
+function acceptInteractiveToken(token: string) {
+  sessionGeneration += 1;
+  nativeBootstrapAllowed = true;
+  storeToken(token);
 }
 
 export async function register(username: string, password: string, phone: string): Promise<{ success: boolean; user?: User; error?: string }> {
@@ -53,8 +65,8 @@ export async function register(username: string, password: string, phone: string
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Registration failed");
     if (data.token) {
-      storeToken(data.token);
-      try { await refreshNativeDesktopSessionProof(); } catch {}
+      acceptInteractiveToken(data.token);
+      await bootstrap();
     }
     return data;
   } catch (error: any) {
@@ -75,8 +87,8 @@ export async function login(username: string, password: string): Promise<{ succe
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Login failed");
     if (data.token) {
-      storeToken(data.token);
-      try { await refreshNativeDesktopSessionProof(); } catch {}
+      acceptInteractiveToken(data.token);
+      await bootstrap();
     }
     return data;
   } catch (error: any) {
@@ -84,29 +96,40 @@ export async function login(username: string, password: string): Promise<{ succe
   }
 }
 
-export async function bootstrap(): Promise<{
-  success: boolean;
-  user?: User;
-  token?: string;
-  desktopSessionProof?: string;
-  desktopSessionExpiresAt?: string;
-  nativeClientIdentity?: NativeClientIdentity;
-  error?: string;
-}> {
-  try {
-    if (!isNativeDesktopRuntime()) {
-      return { success: false, error: 'Silent bootstrap is available only in the Lumi desktop client' };
-    }
-    const { invoke } = await import('@tauri-apps/api/core');
-    const data = await invoke<any>('bootstrap_local_identity', {
-      existingToken: getStoredToken(),
-    });
-    if (data.token) storeToken(data.token);
-    if (data.desktopSessionProof) storeDesktopSessionProof(data.desktopSessionProof);
-    return data;
-  } catch (error: any) {
-    return { success: false, error: error.message };
+export function canRecoverNativeSession(): boolean {
+  return isNativeDesktopRuntime() && nativeBootstrapAllowed;
+}
+
+export function bootstrap(): Promise<NativeSessionResult> {
+  if (!isNativeDesktopRuntime()) {
+    return Promise.resolve({ success: false, error: 'Silent bootstrap is available only in the Lumi desktop client' });
   }
+  if (!nativeBootstrapAllowed) {
+    return Promise.resolve({ success: false, error: 'Native session recovery stopped after sign-out' });
+  }
+  const generation = sessionGeneration;
+  if (nativeBootstrapInFlight?.generation === generation) return nativeBootstrapInFlight.promise;
+  const existingToken = getStoredToken();
+  const promise = (async (): Promise<NativeSessionResult> => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const data = await invoke<NativeSessionResult>('bootstrap_local_identity', { existingToken });
+      if (!nativeBootstrapAllowed || generation !== sessionGeneration || getStoredToken() !== existingToken) {
+        return { success: false, error: 'Native session refresh was superseded by a different account session' };
+      }
+      if (data.success) {
+        if (data.token) storeToken(data.token);
+        if (data.desktopSessionProof) storeDesktopSessionProof(data.desktopSessionProof);
+      }
+      return data;
+    } catch (error: any) {
+      return { success: false, error: error?.message || String(error) };
+    } finally {
+      if (nativeBootstrapInFlight?.generation === generation) nativeBootstrapInFlight = null;
+    }
+  })();
+  nativeBootstrapInFlight = { generation, promise };
+  return promise;
 }
 
 export async function getMe(): Promise<{ user: User } | null> {
@@ -120,6 +143,8 @@ export async function getMe(): Promise<{ user: User } | null> {
 }
 
 export async function logout(): Promise<{ remoteRevoked: boolean }> {
+  sessionGeneration += 1;
+  nativeBootstrapAllowed = false;
   // apiFetch captures the current authentication headers synchronously. Clear
   // local identity immediately, including when revocation is offline or hangs.
   const revocation = apiFetch('/api/auth/logout', { method: 'POST', signal: AbortSignal.timeout(6_000) });
