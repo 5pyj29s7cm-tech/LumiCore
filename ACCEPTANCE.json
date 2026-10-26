@@ -1,12 +1,12 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:40:08.713Z",
+  "updatedAt": "2026-10-26T11:40:09.513Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": 10,
-    "title": "继续第10项",
+    "id": 11,
+    "title": "继续第11项",
     "status": "ready",
     "instruction": "已过不重验；保留项不重开；逐项封存、本地提交"
   },
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-09",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-09/evidence-seal.json",
-    "sha256": "13bf52759a1e2dcdeaeb1a92be7a87934ee0773e69c8b8ab5191ed8a416a62dd",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-10",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-10/evidence-seal.json",
+    "sha256": "67cd1843932a42a558c5bc493b36cbd299f8aa2e596eb3a64674a262f76a3c58",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,18 +67,17 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "20aa10a84acc688bb9da220a0b18e0dfcdb37ccb",
+    "baseCommit": "4d5c001b717f5f3ae5d8604ec8b53766eab9de4a",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
-    "item": 9,
-    "title": "合同模板",
+    "item": 10,
+    "title": "PDF招标要求生成标书",
     "status": "partial",
-    "wholeItemPassed": false,
     "notes": [
-      "最新NDA正文9/9、正常聊天全文21/21、用户原生全文显示确认沿用。",
-      "仅历史同步after哈希证据缺口C11保留；旧正文失败不作当前失败。"
+      "已有两项目正文及有限检查结果沿用。",
+      "模型事实/材料绑定缺口按用户保留；不恢复Kimi或重复生成。"
     ],
     "scope": "existing-evidence-review"
   },
@@ -88,9 +87,10 @@
       6,
       7,
       8,
-      9
+      9,
+      10
     ],
-    "next": 10
+    "next": 11
   },
   "currentCheckpointValidation": {
     "jsonParsed": true,
