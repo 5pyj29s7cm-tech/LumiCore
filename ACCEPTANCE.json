@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:23:14.628Z",
+  "updatedAt": "2026-10-26T11:40:04.600Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": 6,
-    "title": "案件分析、策略和代理词",
-    "status": "partial",
-    "instruction": "从第6项继续；保留项目先不动；已确认项目不重验"
+    "id": 7,
+    "title": "继续第7项",
+    "status": "ready",
+    "instruction": "已过不重验；保留项不重开；逐项封存、本地提交"
   },
   "acceptedWholeItems": [
     3,
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/acceptance-git-checkpoint-20261026-1793013493787",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/acceptance-git-checkpoint-20261026-1793013493787/evidence-seal.json",
-    "sha256": "9bb62631bf592e5c297978cbaaac45ef2951d0caa031ddd1a11d5cf29a7dc40b",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-06",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-06/evidence-seal.json",
+    "sha256": "c3ef5c810ba01917276fdc7f76af8e84b04909c2ad98b94982ab5ba5ebe66a39",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,8 +67,33 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "4eb682a7920414690602a06465c5fdc804b1086c",
+    "baseCommit": "9e145bfd64c7e7bfea45729e4f41df83354af5f4",
     "branch": "feature/chat-song-workbench-20260916"
   },
-  "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release."
+  "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
+  "latestOrderedReview": {
+    "item": 6,
+    "title": "案件分析、策略和代理词",
+    "status": "partial",
+    "wholeItemPassed": false,
+    "notes": [
+      "法律意见完整样本8/8、用户策略确认、7511字代理工作稿及三稿全文交付34项检查沿用。",
+      "自动代理稿材料推断及原策略追踪缺口保留；不重复生成。"
+    ],
+    "scope": "existing-evidence-review"
+  },
+  "orderedReviewProgress": {
+    "start": 6,
+    "completed": [
+      6
+    ],
+    "next": 7
+  },
+  "currentCheckpointValidation": {
+    "jsonParsed": true,
+    "gitDiffCheck": "passed",
+    "sourceChanged": false,
+    "businessReplayed": false,
+    "wholeApplicationAccepted": false
+  }
 }
