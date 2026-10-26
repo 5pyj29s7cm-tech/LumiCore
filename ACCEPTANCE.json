@@ -1,12 +1,12 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:49:30.305Z",
+  "updatedAt": "2026-10-26T11:51:08.181Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": "G3",
-    "title": "继续第G3项",
+    "id": "G4",
+    "title": "继续第G4项",
     "status": "ready",
     "instruction": "已过不重验；保留项不重开；逐项封存、本地提交"
   },
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G2",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G2/evidence-seal.json",
-    "sha256": "c5735625e79651d3aa50d952fa469831330a6aa5e5d430eb06f87d91d1a04da8",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G3",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-G3/evidence-seal.json",
+    "sha256": "74dd267eeee470726136553e0380f00f1718313e587b61f304cc35ae0d76b200",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,18 +67,18 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "19a2984b3fe87dfa27968ca021cbeadde66e22ae",
+    "baseCommit": "c1aadb3d42eac7cef4a3ba6c5449405458726121",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
-    "item": "G2",
-    "title": "文件拖入、误导入删除、重开保留结果",
-    "status": "blocked",
+    "item": "G3",
+    "title": "语音唤醒与手动按钮：声音一致、点击不崩溃",
+    "status": "partial",
     "wholeItemPassed": false,
     "notes": [
-      "文件导入类型隔离UI及原件保真已有证据沿用。",
-      "真实Windows拖放、删除、重开联合链受原生输入保护阻断，继续保留。"
+      "既有语音配置/握手/生命周期沿用；结构终态已修，离线55/55通过。",
+      "真实麦克风、唤醒/按钮同声及设备稳定性保留；旧结构失败仅存历史。"
     ],
     "scope": "existing-evidence-review",
     "effectiveEvidence": [
@@ -92,8 +92,7 @@
         "sha256": "f2376fcfc8ba805978e30a32cb1173383f70a467017020946bc64902ba6851a7",
         "bytes": 8295
       }
-    ],
-    "priorTechnicalFailuresSupersededOnlyWithinProvenScope": true
+    ]
   },
   "orderedReviewProgress": {
     "start": 6,
@@ -114,9 +113,10 @@
       19,
       20,
       "G1",
-      "G2"
+      "G2",
+      "G3"
     ],
-    "next": "G3"
+    "next": "G4"
   },
   "currentCheckpointValidation": {
     "jsonParsed": true,
