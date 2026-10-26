@@ -1,12 +1,12 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:40:06.813Z",
+  "updatedAt": "2026-10-26T11:40:07.901Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": 8,
-    "title": "继续第8项",
+    "id": 9,
+    "title": "继续第9项",
     "status": "ready",
     "instruction": "已过不重验；保留项不重开；逐项封存、本地提交"
   },
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-07",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-07/evidence-seal.json",
-    "sha256": "ade1314d31a3309f2e50bebec234fde060ed46bd1e0291cdf89df82ace66e229",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-08",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-08/evidence-seal.json",
+    "sha256": "a77f702f58ac16d51a83c4a600b058eaeaa8b057e57d5409e2fae9902d8f59bc",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,18 +67,18 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "53c69d95c6a88e3bb5197acff79c6b0aa7db5891",
+    "baseCommit": "7d3d62a8c064b015431c0137f777f89c2018ca80",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
-    "item": 7,
-    "title": "争点与四法律库类案检索",
-    "status": "blocked",
+    "item": 8,
+    "title": "合同审查修改与法律意见",
+    "status": "partial",
     "wholeItemPassed": false,
     "notes": [
-      "已有争点/入口有限验证沿用。",
-      "四库正向认证、原判决及法院层级证明保留；不重复登录。"
+      "合同修改8/8、法律意见8/8、用户风险/建议界面确认沿用。",
+      "原完整风险审查追踪缺口保留；不重复生成。"
     ],
     "scope": "existing-evidence-review"
   },
@@ -86,9 +86,10 @@
     "start": 6,
     "completed": [
       6,
-      7
+      7,
+      8
     ],
-    "next": 8
+    "next": 9
   },
   "currentCheckpointValidation": {
     "jsonParsed": true,
