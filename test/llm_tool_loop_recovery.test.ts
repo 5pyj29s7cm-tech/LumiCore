@@ -991,3 +991,41 @@ describe('LLM tool-loop recovery and terminal truth', () => {
     ))).toBe(true);
   });
 });
+
+
+describe('normal legal source model/tool responses',()=>{
+ it('preserves the native request and model-selected source protocol through the actual public handler to the final response',async()=>{
+  const {Document,Packer,Paragraph}=await import('docx');
+  const {searchExternalAuthoritiesHandler}=await import('../server/regions/packs/cn/legal_tools/company_research');
+  const title='中华人民共和国虚构珊瑚记载法',body='记载应保留原始材料的形成日期。',recordId='normal-model-source-record',wordPath='normal-model-source.docx',wordUrl='https://flkoss.obs-bj2.cucloud.cn/'+wordPath;
+  const original=await Packer.toBuffer(new Document({sections:[{children:[new Paragraph(title),new Paragraph('第一条　'+body)]}]}));
+  const json=(value:unknown)=>new Response(JSON.stringify(value),{status:200,headers:{'Content-Type':'application/json'}});
+  const fetchMock=vi.fn(async(input:string|URL|Request,init?:RequestInit)=>{const url=String(input);
+   if(url==='https://flk.npc.gov.cn/law-search/search/list'){expect(JSON.parse(String(init?.body)).searchContent).toBe(title);return json({code:200,rows:[{bbbs:recordId,title}]});}
+   if(url==='https://flk.npc.gov.cn/law-search/search/flfgDetails?bbbs='+recordId)return json({code:200,data:{bbbs:recordId,title,sxx:3,gbrq:'2004-01-01',sxrq:'2004-07-01',zdjgName:'虚构发布机关',content:{children:[{title:'第一条'}]},ossFile:{ossWordPath:wordPath}}});
+   if(url==='https://flk.npc.gov.cn/law-search/download/pc?format=docx&bbbs='+recordId+'&fileId=')return json({code:200,data:{url:wordUrl}});
+   if(url===wordUrl)return new Response(new Uint8Array(original));
+   throw Error('Unexpected source request: '+url);
+  });vi.stubGlobal('fetch',fetchMock);
+  try{
+   const registry=new ToolRegistry(),name='legal_search_external_authorities';
+   registry.register({name,description:'Official source lookup',permission:'public',securityLevel:'safe',parameters:{type:'object',properties:{query:{type:'string'},sourceIds:{type:'array',items:{type:'string'}}},required:['query']},capability:{id:'test.normal-legal-source',family:'legal',lane:'industry',operation:'observe',risk:'low',sideEffects:[],verification:{strategy:'terminal_receipt',required:true,requiredFields:['ok'],requiredValues:{ok:true},successSignals:['source returned'],limitations:[]}},handler:searchExternalAuthoritiesHandler});
+   const current='\n  读取指定官方原文并直接回答，保留题目所给事件日期，不生成文件。  \n',finalText='根据读取的原文，相关义务见《'+title+'》第一条：“'+body+'”';
+   mocks.makeLLMCall.mockReset().mockResolvedValueOnce({text:'',reasoningContent:'UNCHANGED_MODEL_TOOL_REASONING',toolCalls:[{id:'model-source-call',name,arguments:{query:title+' 第1条',type:'law',sourceIds:['national-law-regulations'],includeOfficialWeb:true,persistCase:false,confirmedForKb:false}}]}).mockResolvedValueOnce({text:finalText,reasoningContent:'UNCHANGED_MODEL_FINAL_REASONING',toolCalls:null});
+   const result=await runWithTools([{role:'user',content:current,sourceMessageId:'normal-source-user'}],registry,{provider:'deepseek',model:'test-model',requestId:'normal-source-request'},undefined,3,...getters,undefined,{userId:'normal-source-user',requestId:'normal-source-request',taskId:'normal-source-task',source:'chat',toolPolicy:{allowedTools:[name],forbiddenTools:[],requireConfirmation:[],maxIterations:3},modelToolProjection:{maxTools:1,toolNames:[name],requiredToolNames:[name]}});
+   expect(result.text).toBe(finalText);expect(result.completionGuard?.blocked).not.toBe(true);expect(mocks.makeLLMCall).toHaveBeenCalledTimes(2);expect(fetchMock).toHaveBeenCalledTimes(4);
+   expect(result.toolCalls).toHaveLength(1);expect(result.toolCalls![0]).toMatchObject({name,requestId:'normal-source-request',taskId:'normal-source-task',terminalVerification:{status:'verified'}});
+   expect((result.toolCalls![0].receipt as {statuteSources:unknown[]}).statuteSources).toEqual([expect.objectContaining({title,recordId,sourceId:'national-law-regulations',provisions:{'1':expect.objectContaining({text:body})}})]);
+   const second=mocks.makeLLMCall.mock.calls[1];expect(second[1].map((tool:any)=>tool.function.name)).toEqual([name]);
+   expect(second[0].find((message:any)=>message.sourceMessageId==='normal-source-user')?.content).toBe(current);
+   expect(second[0].find((message:any)=>message.toolCalls?.some((call:any)=>call.id==='model-source-call'))?.reasoningContent).toBe('UNCHANGED_MODEL_TOOL_REASONING');
+   expect(second[0].some((message:any)=>message.role==='tool'&&message.name===name&&message.content.includes(body))).toBe(true);
+  }finally{vi.unstubAllGlobals();}
+ });
+ it('returns model text directly when no operation was selected',async()=>{
+  const registry=new ToolRegistry(),handler=vi.fn(async()=>encodeToolResult('observed',{ok:true}));registerReadOnlyProbe(registry,'legal_search_external_authorities',handler);
+  const text='《虚构珊瑚记载法》第二条：给定材料范围内的分析。';mocks.makeLLMCall.mockReset().mockResolvedValue({text,toolCalls:null});
+  const result=await runWithTools([{role:'user',content:'根据给定虚构材料直接在聊天回答，不生成文件。'}],registry,{provider:'deepseek',model:'test-model'},undefined,1,...getters,undefined,{source:'chat',requestId:'plain-model-text',taskId:'plain-model-task'});
+  expect(result.text).toBe(text);expect(handler).not.toHaveBeenCalled();expect(result.toolCalls).toEqual([]);expect(mocks.makeLLMCall).toHaveBeenCalledOnce();
+ });
+});

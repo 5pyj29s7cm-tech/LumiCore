@@ -1,14 +1,10 @@
 export { inspectPublicExecutionReferences } from '../../cognition/user_output_protection';
 import type { ToolExecutionRecord, ToolContext } from "../../tools/types";
-import { guardCompletionClaims, needsCompletionEvidence } from "../../work_product/completion_guard";
+import { guardCompletionClaims } from "../../work_product/completion_guard";
 import { buildActionEvidenceContract, hasCoreActionEvidence, resolveVerifiedCurrentAuthoringDocumentEvidence } from "../../cognition/action_contract";
 import { formatDesktopControlPausePresentation } from "../../regions/messages/desktop_control_messages";
 import { buildTaskTargetAnchorProjection } from "../../conversation/task_target_anchor";
 import { localizeInternalStatusLeak } from './summaries';
-
-export function hasCompletionGuardEvidence(records: ToolExecutionRecord[]): boolean {
-  return records.some(record => Boolean(record.error) || Boolean(String(record.result || '').trim()));
-}
 
 export function guardToolResponseIfNeeded(input: {
   task: string;
@@ -21,9 +17,6 @@ export function guardToolResponseIfNeeded(input: {
   acceptedActionContract?: ToolContext['acceptedActionContract'];
 }) {
   const task = input.task || '';
-  if (!hasCompletionGuardEvidence(input.toolCalls) && !needsCompletionEvidence(input.task)) {
-    return { text: localizeInternalStatusLeak(input.response, task), blocked: false as const };
-  }
   const guarded = guardCompletionClaims(input);
   return {
     ...guarded,

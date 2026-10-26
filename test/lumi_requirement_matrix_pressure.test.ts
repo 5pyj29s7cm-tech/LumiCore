@@ -224,9 +224,6 @@ describe('Lumi requirement matrix pressure', () => {
       expect(result.selection.lane, item.id).toBe('legal_casework');
       expect(result.route?.categories, item.id).toContain('legal');
       expect(result.route?.toolNames, item.id).toEqual(expect.arrayContaining(item.tools));
-      expect(result.execution.promptOverlay, item.id).toContain('Current-law gate');
-      expect(result.execution.promptOverlay, item.id).toContain('major premise');
-      expect(result.execution.promptOverlay, item.id).toContain('minor premise');
     }
   });
 

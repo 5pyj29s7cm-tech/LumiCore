@@ -1,0 +1,74 @@
+{
+  "schema": "lumi.acceptance.checkpoint.v1",
+  "updatedAt": "2026-10-26T11:23:14.628Z",
+  "localDate": "2026-10-26",
+  "timezone": "Asia/Shanghai",
+  "kind": "local-progress-checkpoint",
+  "currentItem": {
+    "id": 6,
+    "title": "案件分析、策略和代理词",
+    "status": "partial",
+    "instruction": "从第6项继续；保留项目先不动；已确认项目不重验"
+  },
+  "acceptedWholeItems": [
+    3,
+    15,
+    16
+  ],
+  "counts": {
+    "total": 27,
+    "passed": 3,
+    "partial": 18,
+    "blocked": 4,
+    "failed": 1,
+    "deferred": 1
+  },
+  "passedSubcaseRecords": 10,
+  "subcasesAreNotWholeItems": true,
+  "heldItems": {
+    "item2": "paused",
+    "item10": "retained",
+    "otherHeldIssues": "leave unchanged until resumed"
+  },
+  "modelPreferenceChanged": false,
+  "latestPassedSubsteps": [
+    "Existing generated artifact retrieved through authenticated HTTP with identical bytes/SHA",
+    "Existing file full body returned through normal Socket and persisted exactly once with terminal task/turn"
+  ],
+  "knownUnresolved": [
+    "Composite read/calculate/write reply still blocked by the retained analysis-finalization branch",
+    "Directory-plus-create expression remains one failing scoped check",
+    "Native input/capture and other held acceptance boundaries remain unverified"
+  ],
+  "validation": {
+    "tsc": "passed in both repositories",
+    "gitDiffCheck": "passed in both repositories",
+    "scopedLegalCore": "239/240; one known failure retained",
+    "fullSuiteReRun": false,
+    "wholeApplicationAccepted": false,
+    "installerReleased": false
+  },
+  "evidence": {
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/acceptance-git-checkpoint-20261026-1793013493787",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/acceptance-git-checkpoint-20261026-1793013493787/evidence-seal.json",
+    "sha256": "9bb62631bf592e5c297978cbaaac45ef2951d0caa031ddd1a11d5cf29a7dc40b",
+    "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
+    "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
+  },
+  "workflow": {
+    "afterEachSubcase": [
+      "record actual scoped outcome",
+      "seal immutable evidence",
+      "update acceptance checkpoint",
+      "commit related changes locally"
+    ],
+    "remotePushPerformed": false
+  },
+  "repository": {
+    "edition": "main",
+    "root": "D:/lumiOS",
+    "baseCommit": "4eb682a7920414690602a06465c5fdc804b1086c",
+    "branch": "feature/chat-song-workbench-20260916"
+  },
+  "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release."
+}

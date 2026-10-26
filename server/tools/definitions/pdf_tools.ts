@@ -9,6 +9,7 @@ import { extractPdfTextContent } from '../../utils/pdf_text';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import type { ToolCapabilityMetadata, ToolDefinition } from '../types';
 import { getGeneratedOutputDir } from '../../config/data_path';
+import { requestedSingleArtifact } from '../../cognition/artifact_write_scope';
 
 const require = createRequire(import.meta.url);
 
@@ -79,8 +80,20 @@ async function pdfToText(args: Record<string, any>): Promise<string> {
   return JSON.stringify({ ok: true, status: 'converted', path: outPath, characters: data.text.length, size: fs.statSync(outPath).size }, null, 2);
 }
 
+function resolveExplicitPdfOutput(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string' || !path.isAbsolute(value) || path.extname(value).toLowerCase() !== '.pdf') {
+    throw new Error('PDF outputPath must be an absolute .pdf file path.');
+  }
+  return path.resolve(value);
+}
+
 async function createPdf(args: Record<string, any>): Promise<string> {
   const { content, title, images } = args;
+  const explicitOutput = resolveExplicitPdfOutput(args.outputPath);
+  if (explicitOutput && fs.existsSync(explicitOutput)) {
+    throw new Error('PDF output already exists. Choose a new outputPath to preserve the existing file.');
+  }
   if (!content && (!images || images.length === 0)) throw new Error('content or images is required');
 
   const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
@@ -216,11 +229,11 @@ async function createPdf(args: Record<string, any>): Promise<string> {
 
   if (title) doc.setTitle(title);
 
-  const outDir = getGeneratedOutputDir();
   const fileName = `${String(title || 'document').replace(/[\\/:*?"<>|]/g, '_')}_${Date.now()}.pdf`;
-  const outPath = path.join(outDir, fileName);
+  const outPath = explicitOutput || path.join(getGeneratedOutputDir(), fileName);
   const pdfBytes = await doc.save();
-  fs.writeFileSync(outPath, pdfBytes);
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, pdfBytes, { flag: 'wx' });
   return JSON.stringify({ ok: true, status: 'created', path: outPath, pageCount: pages.length, size: pdfBytes.length }, null, 2);
 }
 
@@ -435,12 +448,13 @@ export function registerPdfTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'create_pdf',
-    description: 'Create a new PDF document from text content with optional embedded images. Supports CJK characters. Embed images alongside text with positioning (x, y, width, height, page, fullBleed). Saves to lumi_output.',
+    description: 'Create a new PDF document from text content with optional embedded images. Supports CJK characters. Embed images alongside text with positioning (x, y, width, height, page, fullBleed). Use outputPath for an exact absolute .pdf destination; otherwise saves a timestamped file to the generated output directory. Existing files are preserved.',
     parameters: {
       type: 'object',
       properties: {
         content: { type: 'string', description: 'The text content for the PDF body (optional if images are provided)' },
-        title: { type: 'string', description: 'Document title (used as filename)' },
+        title: { type: 'string', description: 'Document title (used as filename when outputPath is omitted)' },
+        outputPath: { type: 'string', description: 'Optional exact absolute .pdf output path requested by the user. Must name a new file.' },
         images: {
           type: 'array',
           items: {
@@ -461,6 +475,11 @@ export function registerPdfTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: createPdf,
+    serverOwnedArgumentBinder: (args, context) => {
+      const artifact = requestedSingleArtifact(String(context?.actionIntent || ''));
+      const requestedPath = artifact?.producer === 'create_pdf' ? artifact.path : undefined;
+      return { ...args, outputPath: resolveExplicitPdfOutput(args.outputPath) || requestedPath };
+    },
     permission: 'user',
     securityLevel: 'safe',
     capability: pdfArtifactCapability('office.pdf.create', 'new PDF document', 'created'),

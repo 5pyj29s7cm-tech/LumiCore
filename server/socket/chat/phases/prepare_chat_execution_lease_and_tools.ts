@@ -1,14 +1,11 @@
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
 import type { ToolExecutionRecord, ToolContext } from "../../../tools/types";
-import { buildInteractionModeOverlay } from "../../../cognition/turn_flow";
 import { withDesktopExecutionReceipt } from "../../../desktop/execution_runtime";
-import { executionBoundaryPromptOverlay, restrictVisibleToolNamesForExecutionBoundary } from "../../../tools/remote_policy";
-import { buildLumiOperatingKernelPrompt } from "../../../cognition/operating_kernel";
+import { restrictVisibleToolNamesForExecutionBoundary } from "../../../tools/remote_policy";
 import { startConversationActionExecutionHeartbeat } from "../../../conversation/manager";
 import { buildDurableTaskDeterministicToolRecoveryCall, buildStructuredMediaDeterministicToolRecoveryCall } from "../../../cognition/deterministic_tool_recovery";
 import { coalesceToolExecutionRecords, taskReceiptsToRecords } from "../../../cognition/task_execution_ledger";
 import { CN_TASK_EXECUTION_MESSAGES } from "../../../regions/messages/task_execution_messages";
-import { buildVisionRoutingOverlay } from "../../../cognition/vision_routing";
 import { createDesktopRelay } from "../../desktop_relay";
 import { createConversationReceiptObserver } from "../../../conversation/execution_receipt_archive";
 import { recordChatExecutionPersistenceUnknownDurably } from "../../chat_execution_registry";
@@ -187,7 +184,6 @@ export async function prepareChatExecutionLeaseAndTools(context: NonNullable<Awa
         coalesceToolExecutionRecords([...priorTaskRecords, ...records])
       );
       context.collectRequestTerminalRecords = () => withDesktopExecutionReceipt(context.requestToolRecords, context.desktopExecutionTracker);
-      const needsExecutionPrompt = context.toolSessionActive && context.toolSecurityContext.executionBoundary !== 'remote_restricted';
       console.log('[ChatHandler] tool gate:', context.executionDecision.allowToolUse ? 'authorized' : 'off', 'session:', context.toolSessionActive ? 'active' : 'conversation', 'operationMode:', context.operationMode, 'effective:', context.effectiveOperationMode, 'surface:', context.turnFlow.surface, 'clientActionOnly:', context.clientActionOnlyTurn, 'selfRepair:', context.selfRepairTurn, 'capabilityLane:', context.capabilitySelection.lane, 'trace:', context.intentTrace.summary, 'route:', context.toolRoute ? `${context.toolRoute.toolNames.length}/${context.toolRoute.totalAvailable} ${context.toolRoute.categories.join(',') || 'fallback'}` : 'none');
       if (context.turnAuthorization.isCurrent()) context.socket.emit('agent:intent_trace', context.intentTrace);
       if (context.toolRoute && context.turnAuthorization.isCurrent()) {
@@ -227,35 +223,6 @@ export async function prepareChatExecutionLeaseAndTools(context: NonNullable<Awa
           actuationTools: context.desktopExecutionPolicy.actuationTools,
           verificationTools: context.desktopExecutionPolicy.verificationTools,
           source: context.eventSource,
-        });
-      }
-      if (!remoteRestricted) {
-        context.effectiveSystemPrompt += '\n\n' + buildInteractionModeOverlay(context.turnFlow);
-      }
-      if (context.workSurfaceRoute.promptOverlay && needsExecutionPrompt) {
-        context.effectiveSystemPrompt += '\n\n' + context.workSurfaceRoute.promptOverlay;
-      }
-      context.effectiveSystemPrompt += '\n\n' + executionBoundaryPromptOverlay(
-        context.executionDecision.promptOverlay,
-        context.toolSecurityContext.executionBoundary,
-      );
-      if (needsExecutionPrompt) {
-        context.effectiveSystemPrompt += '\n\n' + context.capabilitySelection.promptOverlay;
-      }
-      if (context.desktopExecutionPolicy.promptOverlay && needsExecutionPrompt) {
-        context.effectiveSystemPrompt += '\n\n' + context.desktopExecutionPolicy.promptOverlay;
-      }
-      const visionRoutingOverlay = context.effectiveOperationMode !== 'meeting'
-        && needsExecutionPrompt
-        ? buildVisionRoutingOverlay(context.uid, context.text)
-        : '';
-      if (visionRoutingOverlay) {
-        context.effectiveSystemPrompt += '\n\n' + visionRoutingOverlay;
-      }
-      if (needsExecutionPrompt) {
-        context.effectiveSystemPrompt += '\n\n' + buildLumiOperatingKernelPrompt({
-          channel: 'chat',
-          flow: context.turnFlow,
         });
       }
   return { terminal: false as const, context: extendTurnBindings(context, {

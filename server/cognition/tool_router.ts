@@ -654,6 +654,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
     );
   }
   if (categories.includes('legal')) {
+    priorities.push('legal_search_external_authorities', 'web_search', 'url_fetch');
     if (/(?:\u7c7b\u6848|\u4eba\u6c11\u6cd5\u9662\u6848\u4f8b\u5e93|\u88c1\u5224\u6587\u4e66\u7f51|\u6cd5\u8749|\bAlpha\b|\bexternal\s+authorit)/i.test(instructionText)) {
       priorities.push(
         'legal_extract_dispute_focus',
@@ -1274,7 +1275,8 @@ export function routeToolsForTurn(
   const truncated = ordered.length > maxTools;
   return {
     toolNames: ordered.slice(0, maxTools),
-    requiredTools: externalLookupTools.filter(name => ordered.slice(0, maxTools).includes(name)),
+    requiredTools: unique([...externalLookupTools, ...(categories.includes('legal') ? ['legal_search_external_authorities', 'web_search', 'url_fetch'] : [])])
+      .filter(name => ordered.slice(0, maxTools).includes(name)),
     categories: unique(categories),
     reasons: unique(reasons),
     totalAvailable: declarations.length,

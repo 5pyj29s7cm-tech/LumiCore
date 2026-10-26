@@ -1,3 +1,4 @@
+import { reconcileCompletedChatReplay } from './completed_terminal_replay';
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
 import { isNamedPersistentWorkTaskStatusQuery } from "../../../cognition/action_contract";
 import { readRuntimeWorkForTurn } from "../../../cognition/runtime_work_read";
@@ -92,6 +93,20 @@ export async function resolveChatControlTurn(context: NonNullable<Awaited<Return
         }
       }
       if (context.rejectRevokedRequest()) { return { terminal: true as const, context: undefined }; }
+      try {
+        await reconcileCompletedChatReplay(context.executionScope, context.requestId);
+      } catch (error) {
+        console.error('[ChatHandler] Cached terminal reconciliation failed:', error);
+        try { context.ack?.({ ok: false, requestId: context.requestId, error: 'Execution recovery is unavailable.' }); } catch {}
+        return { terminal: true as const, context: undefined };
+      }
+      if (context.rejectRevokedRequest()) { return { terminal: true as const, context: undefined }; }
+      const replayExecution = getChatExecution(context.executionScope, context.requestId);
+      if (!replayExecution) {
+        try { context.ack?.({ ok: false, requestId: context.requestId, error: 'Execution is no longer recoverable.' }); } catch {}
+        return { terminal: true as const, context: undefined };
+      }
+      existingExecution = replayExecution;
       try { context.ack?.({ ok: true, requestId: context.requestId, receivedAt: existingExecution.createdAt }); } catch {}
       if (existingExecution.terminalEvent) {
         context.socket.emit(existingExecution.terminalEvent.event, {

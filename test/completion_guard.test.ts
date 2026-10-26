@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { guardCompletionClaims } from '../server/work_product/completion_guard';
+import { buildActionEvidenceContract } from '../server/cognition/action_contract';
 
 const INTERNAL_GUARD_LEAK_RE = /(?:\u72b6\u6001|\u8bc1\u636e)\s*[:\uff1a]|\u5177\u4f53\u963b\u585e|\u56de\u6267(?!\u884c)|target_mismatch|undefined|(?:^|\n)\s*[-*]\s+|No successful|current-turn|tool execution|execution-status claim/imu;
 
@@ -818,5 +819,137 @@ describe('completion guard current-app UI evidence', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.reason).toBe('Missing verified in-app save evidence.');
+  });
+});
+
+describe('conditional guidance and immediate execution share one promise owner', () => {
+  it.each([
+    '请先确认要用的文件名，我再按你确认的文件处理。',
+    '请在文件管理器中确认位置，把实际完整路径发给我，确认后再继续处理。',
+    '等你把文件补齐后，我再读取和合并。',
+    '你确认文件后，我再合并，完成后把文件发到当前聊天。',
+    '请补齐材料，做好后会把完整文书发给你。',
+    '完成之前，请先核对材料。',
+    '等你答复这两个点，我再动手。',
+    '你回复确认后，我就读取两份原文并合并。',
+    '你补齐文件后，我会生成文件发到当前聊天。',
+    '你确认要用这份文件 → 我立即执行合并。',
+    'If you confirm the file, I will now merge it.',
+    '待你确认实际材料，我才读取并合并。',
+    '我可以在你确认文件后执行。等你答复这两个点，我再动手。',
+    'Once you confirm the filename, I will read the document.',
+    'I will review the document after you supply it.',
+  ])('keeps a conditional next step without pretending execution has started: %s', response => {
+    expect(guardCompletionClaims({ task: '读取材料并生成合并文件', response, toolCalls: [] })).toMatchObject({ text: response, blocked: false });
+  });
+  it.each(['我先读取材料，再生成文件。', '现在我马上生成文件。', 'I will review the document now.'])('still requires evidence for an immediate action promise: %s', response => {
+    expect(guardCompletionClaims({ task: '读取材料并生成合并文件', response, toolCalls: [] }).blocked).toBe(true);
+  });
+  it.each([
+    '请先确认文件名，我再读取。现在我马上生成合并文件。',
+    '请先确认文件名，我再合并；我现在打开计算器。',
+    '请先确认文件名，我再合并，我现在打开计算器。',
+    '等你答复这两个点，我再动手，我现在打开计算器。',
+    '等你答复我再合并，但我先读取甲。',
+    '你确认文件 → 我立即执行合并；我正在生成文档。',
+    '当前步骤 → 我现在打开网页。',
+    '我现在打开你后面提供的文档。',
+    '准备完成 → 我立即执行读取。',
+    '你已经确认 → 我现在打开网页。',
+    '你确认文件 → 我立即执行合并。合并已经完成。',
+    '你确认后我再合并。合并文件已经完成。',
+    '完成后发给你；我已经生成了合并文件。',
+    '在你确认文件后我再合并，不过我现在打开计算器。',
+    'After you confirm, I will merge; I will now open Calculator.',
+  ])('does not let conditional advice hide a separate unexecuted immediate promise: %s', response => {
+    expect(guardCompletionClaims({ task: '读取材料并生成合并文件', response, toolCalls: [] }).blocked).toBe(true);
+  });
+});
+
+describe('actual missing-input model explanation', () => {
+  it('preserves guidance that waits for the missing source clarification', () => {
+    const response = "我先放下结论，因为有一个关键点需要你确认。\n\n**已在桌面定位到的“共同验收”系列文件（核实结果）：**\n\n| 文件 | 状态 |\n|---|---|\n| 共同验收甲.docx | ✅ 存在 |\n| 共同验收乙.docx | ✅ 存在 |\n| 共同验收.docx | ✅ 存在 |\n| 共同验收丙.docx | ❌ 未找到 |\n\n桌面上**没有「共同验收丙.docx」**。目前带“共同验收”字样的只有 `共同验收甲.docx`、`共同验收乙.docx` 和 `共同验收.docx` 三个文件。\n\n请问你要合并的“丙”是不是笔误，实际指的是 **「共同验收乙.docx」**？\n\n- 如果是：我确认后就把 **甲 + 乙** 合并成「共同验收合并.docx」，并保留两份文件的全部正文。\n- 如果“丙”确实存在，请告诉我它的确切位置（可能在别的文件夹），我再按正确路径处理。\n\n另外说明一句：我当前可用的桌面工具里没有原生的 .docx 合并器（现有 `merge_pdf` 只针对 PDF），合并 Word 需要走可见的 Word 桌面操作，我可以在你确认文件后执行。等你答复这两个点，我再动手。";
+    expect(guardCompletionClaims({ task: '读取两份 Word 并生成合并文件', response, toolCalls: [] })).toMatchObject({ text: response, blocked: false });
+  });
+});
+
+describe('future completion guidance from actual missing-input turn', () => {
+  it('does not turn completed-after wording into a completed-result assertion', () => {
+    const response = "我在桌面上核查了文件，遇到一个明确阻碍需要先和你确认。\n\n**查找结果：**\n- ✅ 找到「共同验收甲.docx」\n- ❌ **没有找到「共同验收丙.docx」**\n\n桌面上实际存在的相关文件只有这三个：\n- `C:\\Users\\Administrator\\Desktop\\共同验收甲.docx`\n- `C:\\Users\\Administrator\\Desktop\\共同验收乙.docx`\n- `C:\\Users\\Administrator\\Desktop\\共同验收.docx`\n\n由于你指定的第二份文件「共同验收丙.docx」不存在，我无法擅自替换成别的文件（合并会直接影响结果内容）。\n\n请确认一下，你说的第二份文件是哪一个？\n\n1. 是 **「共同验收乙.docx」** 吗？（可能是名称记错了）\n2. 还是 **「共同验收.docx」**？\n3. 或者「共同验收丙.docx」确实存在、只是我这边检索不到？如果是，麻烦告诉我它的完整路径或把文件放到桌面后告诉我。\n\n你确认后，我就把「共同验收甲.docx」和它合并成「共同验收合并.docx」，并保留两份的完整正文，完成后发到当前聊天。";
+    expect(guardCompletionClaims({ task: '读取两份 Word 并生成合并文件', response, toolCalls: [] })).toMatchObject({ text: response, blocked: false });
+  });
+});
+
+describe('reported inspection is not an action promise', () => {
+  it('does not treat an actual past filename search as a promise to read contents', () => {
+    const response = '我搜索了桌面目录，没有找到指定文件。你回复确认后，我就读取两份原文并合并。';
+    expect(guardCompletionClaims({ task: '读取两份文档并生成合并文件', response, toolCalls: [{ name: 'search_files', arguments: { directory: 'D:/Documents', pattern: '*.docx' }, result: '[]' }] })).toMatchObject({ text: response, blocked: false });
+  });
+});
+
+
+describe('inline analysis completion uses the current action contract through the tool-loop boundary', () => {
+  const scope = { requestId: 'inline-analysis-request', taskId: 'inline-analysis-task' };
+  const request = '根据刚才已经读出的正文，比较“source-a.docx”和“source-b.docx”的数量，分别说明是否一致以及差额。不要重新读取文件，也不要生成附件。';
+  const table = '\n\n| 文件 | 数量 |\n|---|---:|\n| source-a.docx | 12 |\n| source-b.docx | 9 |\n\n数量不一致，相差3个。';
+  const denial = '未重新读取文件，也未生成附件。';
+  async function upstream(task: string, text: string) {
+    const { guardToolResponseIfNeeded } = await import('../server/llm/tool_loop/projection');
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const contract = buildActionEvidenceContract(task);
+    const completionGuard = guardToolResponseIfNeeded({ task, response: text, toolCalls: [], ...scope });
+    return { completionGuard, finalization: finalizeLumiResponse({ taskText: task, responseText: completionGuard.text,
+      completionGuard, toolRecords: [], source: 'chat', ...scope, flow: { routeText: task, allowToolUseForTurn: true,
+        completionEvidenceNeeded: true, acceptedActionContract: { taskText: task, contract } } as any }) };
+  }
+  it.each([
+    '根据刚才已经读出的正文，比较已完成。',
+    '我已完成比较，现回复如下：',
+    '我已完成比较并回复如下：',
+    '已输出比较结论如下：',
+    '我已完成上述分析。',
+  ])('preserves an analytical completion with a full table and denied external actions: %s', async prefix => {
+    const answer = prefix + table + denial;
+    expect(buildActionEvidenceContract(request)).toMatchObject({ kind: 'none', applies: false });
+    const result = await upstream(request, answer);
+    expect(result.completionGuard).toMatchObject({ blocked: false, text: answer });
+    expect(result.finalization).toMatchObject({ blocked: false, text: answer });
+  });
+  it.each([
+    '报告文件已保存到 D:/case-source/result.docx。',
+    '我已发送结果给审阅人。',
+    '已打开 source-a.docx。',
+    '已重新读取两份文件并完成比较，数量不一致，相差3个。',
+    '我已核对原件，比较已完成。',
+    '本轮已读取 source-a.docx。',
+    '已创建 result.docx。',
+    '我已完成比较，并把结果发给审阅人了。',
+    '比较已完成。我已打开 source-a.docx。',
+    '比较已完成。报告文件已保存到 D:/case-source/result.docx。',
+  ])('still blocks an unsupported physical action in an analytical reply: %s', async claim => {
+    const result = await upstream(request, claim + table);
+    expect(result.completionGuard.blocked).toBe(true);
+    expect(result.finalization.blocked).toBe(true);
+  });
+  it.each([
+    '没有把结果发给审阅人，也没有生成附件。',
+    '尚未把结果发给审阅人。',
+    '如果已经把结果发给审阅人了，需要另行确认。',
+    '原文引用“我已完成比较，并把结果发给审阅人了”。',
+  ])('does not convert denials, hypotheticals or quoted sends into actual execution: %s', async statement => {
+    const answer = '比较已完成。' + table + statement;
+    const result = await upstream(request, answer);
+    expect(result.completionGuard).toMatchObject({ blocked: false, text: answer });
+    expect(result.finalization).toMatchObject({ blocked: false, text: answer });
+  });
+  it.each([
+    request + '然后重新读取桌面的“new-source.docx”，核对完整正文。',
+    request + '然后创建 D:/case-source/comparison.txt，内容为“数量不同”。',
+    request + '然后给审阅人发送消息“数量不同”。',
+    '读取 D:/case-source/a.docx 和 D:/case-source/b.docx，然后创建 D:/case-source/result.txt。',
+  ])('requires evidence for fresh or compound actions despite historical source context: %s', async task => {
+    const result = await upstream(task, '任务已完成。');
+    expect(result.completionGuard.blocked).toBe(true);
+    expect(result.finalization.blocked).toBe(true);
   });
 });

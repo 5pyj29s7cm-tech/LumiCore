@@ -1,13 +1,52 @@
 import type { ToolExecutionRecord } from '../tools/types';
 import fs from 'node:fs';
-import { affirmativeActionInstructionClauses } from './action_instruction_clauses';
+import { affirmativeActionInstructionClauses, actionInstructionClauses } from './action_instruction_clauses';
 export { actionInstructionClauses as artifactInstructionClauses } from './action_instruction_clauses';
-import { requestedSingleArtifact } from './artifact_write_scope';
-import { buildTaskTargetAnchorProjection, canonicalPathIdentity } from '../conversation/task_target_anchor';
-import { artifactReadbackText, artifactPathFromRecord, isArtifactProducerRecord, sameArtifactPath, resolveArtifactDelivery } from '../tools/artifact_evidence';
+import { requestedSingleArtifact, resolveExplicitUserArtifactPath } from './artifact_write_scope';
+import { buildTaskTargetAnchorProjection, canonicalPathIdentity, sourceDocumentInstruction } from '../conversation/task_target_anchor';
+import { artifactReadbackText, artifactPathFromRecord, isArtifactProducerRecord, isArtifactReaderRecord, artifactRecordMatchesTurn, sameArtifactPath, resolveArtifactDelivery } from '../tools/artifact_evidence';
+import { toolRecordSucceeded } from '../tools/receipt_payload';
 import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
 import { CN_EXECUTION_EVIDENCE_MESSAGES as CN } from "../regions/messages/execution_evidence_messages";
 
+
+
+/** A requested source attachment remains a read; it never becomes a producer. */
+export function projectRequestedSourceArtifactHandoff(task: string, records: ToolExecutionRecord[], turn: { requestId?: string; taskId?: string } = {}) {
+  const sourceText = sourceDocumentInstruction(task);
+  const source = buildTaskTargetAnchorProjection({ taskText: sourceText }).target;
+  const sourcePath = resolveExplicitUserArtifactPath(sourceText);
+  const name = sourcePath.split(/[\\/]/u).at(-1) || source.object;
+  // i18n-allow: same-chat handoff instructions and later restrictions share clause order.
+  const affirmative = new Set(affirmativeActionInstructionClauses(task).map(item => item.text));
+  const sourceReference = (probe: string, text: string) => /(?:原|源)(?:Word|PDF|文件|文档|稿)|\b(?:original|source)\s+(?:word|pdf|file|document)\b/iu.test(probe)
+    || Boolean(name && text.includes(name));
+  let required = false;
+  for (const { probe, text } of actionInstructionClauses(task)) {
+    const restriction = probe.replace(/((?:不要|别|不必|无需|不用|禁止|请勿|只|仅)(?:要|需|需要)?)\s*把\s*([^，,。；;\n]{1,80}?)\s*(发送|发|附上|附|回传|交付|返回)/gu, '$1$3$2');
+    if (affirmative.has(text) && sourceReference(probe, text)
+      && /(?:发(?:送|回|到|在)?|回传|附上|交付|返回|提供).{0,24}(?:当前聊天|本次聊天|这里)|\b(?:send|return|attach|provide)\b.{0,120}\b(?:here|(?:this|current)\s+chat)\b/iu.test(probe)) required = true;
+    if (sourceReference(probe, text)
+      && /(?:不要|别|不必|无需|不用|禁止|请勿)\s*(?:再)?(?:发送|发|附上|附|回传|交付|返回)|\b(?:do not|don't|never)\s+(?:send|attach|return|provide)\b/iu.test(restriction)) required = false;
+    const only = restriction.match(/(?:只|仅)(?:要|需|需要)?(?:发送|发|附上|回传|交付|返回)\s*([^。；;\n]{1,80})|\b(?:only\s+(?:send|attach|return|provide)|(?:send|attach|return|provide)\s+only)\s+([^.;\n]{1,80})/iu);
+    if (only && !sourceReference(only[1] || only[2], only[1] || only[2])) {
+      const value = only[1] || only[2];
+      const formats = value.match(/\b(?:PDF|Word|DOCX?|XLSX?|Excel|PPTX?|PowerPoint|TXT)\b/giu) || [];
+      const sourceFormat = /\.docx?$/iu.test(name) ? /^(?:word|docx?)$/iu : /\.pdf$/iu.test(name) ? /^pdf$/iu
+        : /\.xlsx?$/iu.test(name) ? /^(?:excel|xlsx?)$/iu : /\.pptx?$/iu.test(name) ? /^(?:powerpoint|pptx?)$/iu : /^txt$/iu;
+      if (formats.length && !formats.some(format => sourceFormat.test(format)) || /(?:新文件|新文档)|\bnew\s+(?:file|document)\b/iu.test(value)) required = false;
+    }
+  }
+  const paths: string[] = [];
+  if (required && sourcePath && turn.requestId && turn.taskId) {
+    const observed = records.some(record => isArtifactReaderRecord(record) && artifactRecordMatchesTurn(record, turn)
+      && record.terminalVerification?.status === 'verified' && toolRecordSucceeded(record)
+      && (!record.envelope || record.envelope.status === 'verified_success')
+      && sameArtifactPath(sourcePath, artifactPathFromRecord(record)));
+    if (observed) try { const stat = fs.statSync(sourcePath); if (stat.isFile() && stat.size > 0) paths.push(sourcePath); } catch { /* Missing sources cannot be attached. */ }
+  }
+  return { required: Boolean(required && name), paths, missing: Boolean(required && name && !paths.length), sourcePath: sourcePath || source.object };
+}
 
 /** Evidence only: keep independently named outputs and their original content apart. */
 export function requestedArtifactInstructions(input: string): Array<{ text: string; path: string }> {
@@ -109,6 +148,7 @@ export function checkArtifactContent(requirements: ArtifactContentRequirement[],
 export function projectArtifactProgress(task: string, records: ToolExecutionRecord[], options: {
   readbackRequired: boolean; openRequired: boolean; openVerified: (path: string) => boolean;
   acceptsOutput: (path: string) => boolean;
+  turn?: { requestId?: string; taskId?: string };
 }) {
   const instructions = requestedArtifactInstructions(task);
   const target = instructions.length === 1 ? instructions[0].path : '';
@@ -131,11 +171,12 @@ export function projectArtifactProgress(task: string, records: ToolExecutionReco
   const spreadsheet = missingSpreadsheetRequirements(task, records);
   const readbackRequired = options.readbackRequired || requirements.length > 0 && content === undefined;
   const opened = options.openRequired && options.openVerified(delivery.outputPath);
+  const sourceAttachment = projectRequestedSourceArtifactHandoff(task, records, options.turn);
   const next = readbackRequired && !delivery.readback ? 'readback'
     : missingContent.length ? 'repair_content' : spreadsheet.length ? 'repair_workbook'
-      : options.openRequired && !opened ? 'open' : 'complete';
+      : options.openRequired && !opened ? 'open' : sourceAttachment.missing ? 'source_attachment' : 'complete';
   return {
-    savedPath: delivery.outputPath, producer: delivery.producer.name,
+    savedPath: delivery.outputPath, producer: delivery.producer.name, sourceAttachment,
     readBack: Boolean(delivery.readback), readbackRequired, contentChecks: checks,
     missingContent, missingSpreadsheetRequirements: spreadsheet,
     openRequestedAndPending: options.openRequired && !opened,
@@ -157,10 +198,12 @@ export function artifactProgressFeedback(progress: NonNullable<ReturnType<typeof
     ...(progress.missingSpreadsheetRequirements.length ? [zh ? CN.spreadsheetIncomplete(progress.missingSpreadsheetRequirements)
       : `Workbook requirements missing: ${progress.missingSpreadsheetRequirements.join(', ')}`] : []),
     ...(progress.openRequestedAndPending ? [zh ? CN.artifactPendingOpen : 'Requested application open is unverified'] : []),
+    ...(progress.sourceAttachment?.missing ? [zh ? `尚未读取并附上原文件：${progress.sourceAttachment.sourcePath}` : `The requested original file has not been read and attached: ${progress.sourceAttachment.sourcePath}`] : []),
   ];
   const nextSteps = progress.complete ? [] : [progress.next === 'readback'
     ? zh ? CN.artifactNextRead : 'Read the saved version and verify the requirements.'
     : progress.next === 'open' ? zh ? CN.artifactNextOpen : 'Open the saved file and verify the target window.'
+      : progress.next === 'source_attachment' ? zh ? '读取指定原文件，并将原文件和新文件一起附在当前聊天。' : 'Read the exact original and attach it alongside the new file in this chat.'
       : zh ? CN.artifactNextRepair : 'Repair the listed requirements, preserve existing work, then read back the new version.'];
   return { completed, incomplete, nextSteps, evidence: [progress.savedPath] };
 }

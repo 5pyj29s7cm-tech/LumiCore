@@ -31,7 +31,6 @@ import { recordLatency } from "../monitor/latency_store";
 import { optionalAuth, requireAuth, requireLocalRequest, resolveDomain } from "../middleware/auth";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { recordTokenUsage } from "../llm/token_tracker";
-import { buildUnifiedLegalEntryPrompt } from "../cognition/legal_entry";
 import {
   createPreFinalizationTextGate,
   shouldDeferModelOutputUntilFinalized,
@@ -70,22 +69,6 @@ function buildRestProviderMessages(messages: unknown, prompt: unknown, systemIns
     { role: 'system', content: systemContent },
     ...buildRestConversationMessages(messages, prompt),
   ];
-}
-
-function buildRestChatSystemInstruction(input: {
-  routeText: string;
-  domain: 'personal' | 'work';
-  orgId: string;
-  source: string;
-}): string {
-  const legalOverlay = buildUnifiedLegalEntryPrompt({
-    text: input.routeText,
-    domain: input.domain,
-    orgId: input.orgId,
-    channel: 'chat',
-    source: input.source,
-  });
-  return [REST_CHAT_BASE_SYSTEM_INSTRUCTION, legalOverlay].filter(Boolean).join('\n\n');
 }
 
 function dateLikeToIso(value: unknown, fallback = Date.now()): string {
@@ -291,7 +274,7 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
           personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 80 },
           executionBoundary, isSanctuary: !req.user, taskId: businessMetadata?.conversationTaskId },
         assemble: execution => {
-          const systemInstruction = buildRestChatSystemInstruction({ routeText, domain, orgId, source: 'rest_chat' });
+          const systemInstruction = REST_CHAT_BASE_SYSTEM_INSTRUCTION;
           if (caller) return { systemPrompt: systemInstruction,
             messages: caller.provider === 'gemini' || caller.provider === 'anthropic'
               ? [{ role: 'system', content: systemInstruction }, ...conversationMessages]

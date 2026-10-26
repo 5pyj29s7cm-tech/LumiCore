@@ -133,3 +133,25 @@ export const LUMI_OFFICIAL_SUPPORTED_ROLES = LUMI_MODEL_ROLE_IDS.filter(
 export const LUMI_OFFICIAL_UNSUPPORTED_ROLES = LUMI_MODEL_ROLE_IDS.filter(
   role => !LUMI_OFFICIAL_ROLE_CAPABILITIES[role],
 );
+
+/** Public, exact upstream capacity metadata, never a default for other models. */
+export interface ModelContextLimits {
+  contextWindow?: number;
+  maxInputTokens?: number;
+  maxOutputTokens?: number;
+  sourceUrl?: string;
+}
+
+export function documentedModelContextLimits(provider: string, model: string, upstreamModel?: string): ModelContextLimits {
+  const upstreamKnown = upstreamModel === undefined || upstreamModel === 'deepseek-v4-pro'
+    || upstreamModel === 'deepseek-v4-pro-0813';
+  if (provider === 'relay' && model === 'aliyun/deepseek-v4-pro' && upstreamKnown) return {
+    contextWindow: 1_000_000, maxInputTokens: 1_000_000, maxOutputTokens: 393_216,
+    sourceUrl: 'https://help.aliyun.com/zh/model-studio/deepseek-v4-pro',
+  };
+  if (provider === 'deepseek' && (model === 'deepseek-v4-pro' || model === 'deepseek-v4-pro-0813')) return {
+    contextWindow: 1_000_000, maxInputTokens: 1_000_000, maxOutputTokens: 393_216,
+    sourceUrl: 'https://api-docs.deepseek.com/quick_start/pricing/',
+  };
+  return {};
+}

@@ -19,31 +19,10 @@ const code = (relativePath: string) => ts.createPrinter({ removeComments: true }
 );
 
 describe('customer-facing assistant output projection', () => {
-  it.each([
-    '本轮没有真实回执证明“工具没打开”，也不存在需要你切换的“工具可用模式”。如果任务没有执行，Lumi 应该继续真实工具链，不能把内部路由问题推给你。',
-    'No receipt shows that tools were disabled. Lumi must resume the real tool route instead of shifting an internal routing failure to the user.',
-    '[The historical reply is omitted because its action claims lack attached evidence. This turn already has a response and is not a pending instruction.]',
-  ])('keeps old program directives out of final text, history and streaming: %s', leaked => {
-    expect(containsInternalExecutionLanguage(leaked)).toBe(true);
-    const projected = sanitizeAgentResponseTextForDisplay(leaked, 'zh');
-    expect(projected).not.toMatch(/Lumi\s*(?:应该|must|should)|historical reply|内部路由|真实回执/u);
-    for (const normalize of [normalizeChatHistoryRecord, normalizeVoiceHistoryRecord]) {
-      expect(JSON.stringify(normalize({ role: 'assistant', message: leaked, cognitiveIntent: 'work_product_guard' }))).not.toContain(leaked);
+  it('preserves ordinary Markdown and literal diagnostic commentary', () => {
+    for (const text of ['### Result\n\n- **Ready**\n- [Open](https://example.com)', 'Status: failed.\nEvidence: Desktop execution ended as target_mismatch.\nConcrete blocker: Desktop target application has not matched a fresh observation.']) {
+      expect(sanitizeAgentResponseTextForDisplay(text, 'en')).toBe(text);
     }
-    for (let i = 1; i <= leaked.length; i++) expect(sanitizeAgentStreamingTextForDisplay(leaked.slice(0, i), 'zh')).not.toMatch(/Lumi\s*(?:应该|must|should)|historical reply|内部路由|真实回执/u);
-  });
-
-  it('keeps ordinary Markdown intact and replaces runtime diagnostics', () => {
-    const markdown = '### Result\n\n- **Ready**\n- [Open](https://example.com)';
-    expect(sanitizeAgentResponseTextForDisplay(markdown, 'en')).toBe(markdown);
-
-    const projected = sanitizeAgentResponseTextForDisplay([
-      'Status: failed.',
-      'Evidence: Desktop execution ended as target_mismatch.',
-      'Concrete blocker: Desktop target application has not matched a fresh observation.',
-    ].join('\n'), 'en');
-    expect(projected).toContain('window no longer matched the target');
-    expect(projected).not.toMatch(/Status:|Evidence:|Concrete blocker:|target_mismatch|Desktop execution/i);
   });
 
   it('does not mistake technical identifiers or desktop tool names for leaked status reports', () => {
@@ -69,7 +48,7 @@ describe('customer-facing assistant output projection', () => {
     expect(sanitizeAgentResponseTextForDisplay(codeExample, 'en')).toBe(codeExample);
   });
 
-  it('still projects explicit recovery codes and structured failure reports', () => {
+  it('recognizes recovery codes without rewriting supplied prose', () => {
     for (const diagnostic of [
       'Desktop execution ended as target_mismatch.',
       'Internal execution recovery: execution_recovery_incomplete.',
@@ -77,41 +56,21 @@ describe('customer-facing assistant output projection', () => {
     ]) {
       expect(containsInternalExecutionLanguage(diagnostic), diagnostic).toBe(true);
       const projected = sanitizeAgentResponseTextForDisplay(diagnostic, 'zh');
-      expect(projected).not.toBe(diagnostic);
-      expect(projected).not.toMatch(/target_mismatch|execution_recovery_incomplete|状态：|证据：|具体阻塞：/u);
+      expect(projected).toBe(diagnostic);
     }
   });
 
-  it('buffers a short stream prefix and never flashes an internal report heading', () => {
+  it('buffers short stream prefixes while preserving complete ordinary status prose', () => {
     expect(sanitizeAgentStreamingTextForDisplay('状态：', 'zh')).toBe('');
     expect(sanitizeAgentStreamingTextForDisplay('Status:', 'en')).toBe('');
     expect(sanitizeAgentStreamingTextForDisplay('这是一条正常但还很短的回复', 'zh')).toBe('');
     expect(sanitizeAgentStreamingTextForDisplay('这是一条已经足够长、可以安全显示给用户阅读的普通流式回复。', 'zh'))
       .toContain('可以安全显示');
     expect(sanitizeAgentStreamingTextForDisplay('状态：受阻。\n证据：暂时没有可核验的执行结果。', 'zh'))
-      .not.toMatch(/状态|证据|回执/u);
+      .toBe('状态：受阻。\n证据：暂时没有可核验的执行结果。');
   });
 
-  it.each(['zh', 'en'] as const)('hides old confirmation instructions in history and every stream prefix (%s)', locale => {
-    const old = locale === 'zh'
-      ? '这项操作还没有执行，需要你确认后才能继续。\n操作：computer_use\n内容摘要：' + 'a'.repeat(64) + '\n参数：{"task":"把WPS切到前台并等待下一步指令","max_steps":20}'
-      : 'Confirmation is required before this action can run.\nAction: computer_use\nPayload digest: ' + 'a'.repeat(64) + '\nArguments: {"task":"Wait for the next model instruction","max_steps":20}';
-    const history = sanitizeAgentResponseTextForDisplay(old, locale);
-    expect(history).toMatch(/确认|confirm/u);
-    expect(history).not.toMatch(/computer_use|max_steps|下一步指令|next model instruction|a{64}/u);
-    for (let i = 1; i <= old.length; i += 1) {
-      expect(sanitizeAgentStreamingTextForDisplay(old.slice(0, i), locale)).not.toMatch(/computer_use|max_steps|下一步指令|next model instruction|a{64}/u);
-    }
-  });
 
-  it('projects old confirmation replies into public dialogue without their model instructions', () => {
-    const leaked = '这项操作还没有执行，需要你确认后才能继续。\n参数：{"task":"读取WPS并等待下一步模型指令","max_steps":20}';
-    for (const normalize of [normalizeChatHistoryRecord, normalizeVoiceHistoryRecord]) {
-      expect(normalize({ role: 'assistant', message: leaked })).toEqual([{ role: 'assistant', content: '这项操作还未执行。请先查看本次操作的目标和内容，再回复“确认”或“取消”。' }]);
-      expect(normalize({ role: 'user', message: '帮我打印会议安排', response: leaked }))
-        .toEqual([{ role: 'user', content: '帮我打印会议安排' }]);
-    }
-  });
 
   it('hides tool markup after prose in final, history, voice, and every stream prefix', () => {
     const prose = '我先把客户端当前状态拉出来看一眼，按真实界面给你讲，不凭印象说。\n\n';
@@ -120,9 +79,8 @@ describe('customer-facing assistant output projection', () => {
       expect(containsInternalExecutionLanguage(leaked)).toBe(true);
       const projected = sanitizeAgentResponseTextForDisplay(leaked, 'zh');
       expect(projected).not.toMatch(/client_get_state|&lt;|<\//u);
-      for (const normalize of [normalizeChatHistoryRecord, normalizeVoiceHistoryRecord]) {
-        expect(JSON.stringify(normalize({ role: 'assistant', message: leaked }))).not.toContain('client_get_state');
-      }
+      expect(normalizeChatHistoryRecord({ role: 'assistant', message: leaked })).toEqual([{ role: 'assistant', content: leaked }]);
+      expect(JSON.stringify(normalizeVoiceHistoryRecord({ role: 'assistant', message: leaked }))).not.toContain('client_get_state');
       for (let i = 1; i <= leaked.length; i += 1) {
         expect(sanitizeAgentStreamingTextForDisplay(leaked.slice(0, i), 'zh')).not.toMatch(/client_get|<client|&lt;client/u);
       }

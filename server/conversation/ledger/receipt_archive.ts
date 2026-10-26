@@ -166,7 +166,7 @@ export function archiveBoundConversationActionReceipts(
           ))
         : null;
       const authoritativeDisposition = Boolean(
-        (disposition?.outcome === 'blocked' || disposition?.outcome === 'cancelled')
+        (disposition?.outcome === 'blocked' || disposition?.outcome === 'cancelled' || disposition?.outcome === 'completed')
         && disposition.taskId === taskId
         && dispositionRequestId
         && dispositionReason

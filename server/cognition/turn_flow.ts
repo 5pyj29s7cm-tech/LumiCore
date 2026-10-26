@@ -4,17 +4,13 @@ import { isStoredMemoryRecallQuestion } from './normalized_action_intent';
 import { withoutLocationLiterals } from './location_literals';
 import { mediaCreationInstruction, isAvatarAuthoringRequest } from './media_creation_intent';
 import type { OperationMode } from './operation_modes';
-import {
-  detectRequestedOperationMode,
-  buildOperationModeTaxonomyPrompt,
-  getOperationModeConfig,
-  normalizeOperationMode,
-} from './operation_modes';
+import { detectRequestedOperationMode, normalizeOperationMode } from './operation_modes';
 import {
   hasClientActionOnlyIntent,
   hasExplicitNoMutationInstruction,
   hasExplicitNoToolInstruction,
   isConversationalProductFeedback,
+  isInformationOnlyQuestion,
   isDiagnosticOrRepairRequest,
 } from './tool_intent';
 import { hasVisionIntent } from './vision_routing';
@@ -185,7 +181,7 @@ export function buildTurnFlowPromptOverlay(flow: Omit<LumiTurnFlow, 'promptOverl
     '3. Use the task center only for persistent work with state, follow-up, artifacts, blockers, and confirmation boundaries.',
     '4. Treat matched skill workflows as capability candidates. The model decides whether they fit the current turn; never let a demo/script override the current user wording or task parameters.',
     '5. Use external software, browser, desktop control, and MCP/tools as Lumi\'s capabilities, not as separate execution subjects. Verify visible or file results before claiming completion.',
-    '6. Keep one LumiCore execution owner for the whole task. Continue the same task state through planning, tool use, confirmation, correction, recovery, and final feedback.',
+    '6. Keep one LumiCore execution owner for the whole task.',
     'Execution governance:',
     `- Result verification: ${flow.executionGovernance.verificationIntent} (${flow.executionGovernance.verificationReason}). Before saying work is done, rely on tool evidence, visible desktop evidence, file existence/content checks, or work_product_verify/work_takeover_task_verify_result.`,
     analysis.authoring(flow.routeText) !== 'none'
@@ -406,6 +402,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   // i18n-allow: A standalone Chinese completed-action acknowledgement has no new instruction.
   const completedActionAcknowledgement = /^(?:已经|已)?(?:打开|关闭|保存|发送|完成)(?:好)?了[。.!！\s]*$/u.test(input.text);
   const readOnlyConversationTurn = completedActionAcknowledgement || isStoredMemoryRecallQuestion(input.text)
+    || currentActionIntent.kind === 'none' && isInformationOnlyQuestion(input.text, analysis)
     || !statusOnlyContinuation && currentActionIntent.kind === 'status_query' && currentActionIntent.target === 'previous_action'
     || isConversationalProductFeedback(input.text, analysis)
     || (
@@ -506,7 +503,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     workflowHint: matchedWorkflow,
     executionGovernance: execution.governance,
     completionEvidenceNeeded: execution.completionEvidenceNeeded,
-    routeText: readOnlyConversationTurn
+    routeText: readOnlyConversationTurn || explicitNoToolInstruction
       ? input.text
       : !conceptualCapabilityQuestion && !statusOnlyContinuation && workTakeover.shouldResumeTask && workTakeover.routeText
       ? workTakeover.routeText
@@ -529,28 +526,4 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
         : '',
     ].filter(Boolean).join('\n\n'),
   };
-}
-
-export function buildInteractionModeOverlay(flow: LumiTurnFlow): string {
-  const opModeConfig = getOperationModeConfig(flow.effectiveOperationMode);
-  const restatementOverlay = /(?:只|仅)?(?:复述|重复|完整说出|原样说出)|其他不变|只(?:说|保留|复述)事实/u.test(flow.routeText)
-    ? '\n\n## Factual Restatement Fidelity\nUse only facts explicitly stated by the user in the relevant recent turns. Apply the latest correction as a replacement and keep every other fact unchanged. Do not add reminders, scheduling, ownership, implications, advice, inferred next steps, or claims that anything was saved or recorded.'
-    : '';
-  if (flow.conceptualCapabilityQuestion) {
-    return [
-      '## Capability Explanation',
-      'This turn explains the unified Lumi core and its capabilities. Use declared read-only tools when needed for current evidence; do not resume an existing task or mutate state. A routed subset is not the installed tool inventory; never ask the user to enable, mount, or switch to a fictional tool mode.',
-      buildOperationModeTaxonomyPrompt(),
-    ].join('\n') + restatementOverlay;
-  }
-  if (flow.clientActionOnlyTurn) {
-    return '## Client Surface Capability Hint\nThe user may be asking to open a client-native surface. Treat client_get_state and client_action as the strongest candidates, but let the model decide from the current manifest whether to respond or act. This hint cannot grant capabilities or narrow the hard operation-mode policy. For meeting capture, keep the explicit user-intent and microphone permission boundary.' + restatementOverlay;
-  }
-  if (flow.selfRepairTurn) {
-    return '## Client Self-Repair Capability Hint\nThe user may be reporting that Lumi or one of its client workflows is failing. Prefer evidence-bearing inspection and a safe verified recovery when the manifest and current receipts support it; do not merely repeat the raw error. This semantic hint does not grant or remove capabilities. Writes, desktop control, external app automation, and system changes remain governed by hard policy and confirmation.' + restatementOverlay;
-  }
-  if (opModeConfig && (flow.allowToolUseForTurn || flow.effectiveOperationMode === 'meeting')) {
-    return opModeConfig.promptOverlay + restatementOverlay;
-  }
-  return '## Interaction Mode\nThis turn is chat-only. Do not call tools, operate the desktop, or claim that you are taking actions. Answer naturally unless the user gives an explicit command.' + restatementOverlay;
 }

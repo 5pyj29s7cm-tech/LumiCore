@@ -12,7 +12,6 @@ import { refreshRuntimeActivatedToolAuthorization, resolveModelVisibleToolNames,
 import { hasCompletedCoreAction } from './projection';
 import { resolveArtifactReadbackCall, buildArtifactProgressPrompt } from './artifacts';
 import { toolCallSignature } from './recovery';
-import { compactMessagesForModel } from './context_budget';
 import type { ModelBudgetAttempt } from './model_budget';
 import type { LLMConfig } from './contracts';
 
@@ -71,7 +70,7 @@ export async function prepareToolLoopModelResponse(state: ToolLoopState, iterati
       && state.context?.trustedActionContinuation && exposedToolNames.has('get_workflow_run')
       ? resolveConversationWorkflowRun(state.context) : null;
     const llmStart = Date.now();
-    const modelMessages = compactMessagesForModel(state.conversationHistory);
+    const modelMessages = [...state.conversationHistory];
     const artifactProgress = buildArtifactProgressPrompt(state.primaryTask, state.executionLog, {
       requestId: state.toolExecutionContext?.requestId || state.config.requestId, taskId: state.toolExecutionContext?.taskId,
     });
@@ -91,8 +90,10 @@ export async function prepareToolLoopModelResponse(state: ToolLoopState, iterati
         taskId: state.toolExecutionContext?.taskId || '', revision: state.toolExecutionContext?.taskRevision ?? null,
         trustedContinuation: state.toolExecutionContext?.trustedActionContinuation === true,
         declaredTools: toolDeclarations.map(tool => tool.function.name),
-        forbiddenTools: state.toolExecutionContext?.toolPolicy?.forbiddenTools || [],
-        confirmationTools: state.toolExecutionContext?.toolPolicy?.requireConfirmation || [],
+        forbiddenTools: (state.toolExecutionContext?.toolPolicy?.forbiddenTools || [])
+          .filter(name => name === '*' || exposedToolNames.has(name)),
+        confirmationTools: (state.toolExecutionContext?.toolPolicy?.requireConfirmation || [])
+          .filter(name => exposedToolNames.has(name)),
         acceptedTarget: state.toolExecutionContext?.acceptedTaskTarget || null,
       },
       requiredFields: ['resolutionId', 'requestId', 'turnRowId', 'externalMessageId', 'taskId', 'revision', 'declaredTools', 'forbiddenTools', 'confirmationTools', 'acceptedTarget'],

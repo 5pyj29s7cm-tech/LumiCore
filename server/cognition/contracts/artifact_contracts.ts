@@ -57,21 +57,23 @@ export function buildReadOnlyArtifactInspectionContract(): LumiActionContract {
   return withDefaults({
     kind: 'artifact_work',
     label: 'Exact read-only file inspection',
-    coreAction: 'Read complete source text without mutation: local files use the exact user-named absolute path; knowledge sources use the original current-turn fileIds in the current authorized scope. Answer only from the complete verified source text. For each question retain the original source qualifier and state only what it establishes: unproven P leaves P unknown, not proven not-P. Preserve the speaker, scope of negation and plans; an exact quote cannot justify a contrary conclusion.',
+    coreAction: 'Read complete source text without mutation for each explicitly requested input. Local files require the exact source path in the user-specified location; knowledge sources require the original current-turn fileIds in the current authorized scope. Use the existing reader for the document format. Deliver each successfully read complete body separately and report each unavailable input separately. Answer only from verified source text. For each question retain the original source qualifier and state only what it establishes: unproven P leaves P unknown, not proven not-P. Preserve the speaker, scope of negation and plans; an exact quote cannot justify a contrary conclusion.',
     preparationIsNotCompletion: [
       'listing a directory or searching for a possible file',
       'reading a model-selected path that the user did not name',
       'returning only file metadata, knowledge inventory, or truncated excerpts without complete source text',
       'reading a source file before an unfinished create, write, or edit action',
+      'reading only one input when multiple complete source bodies were requested',
     ],
     requiredEvidence: [
-      'verified read_file receipt for the user-named absolute local path, or verified knowledge_file_stats mode=source_text receipt for the original fileIds in the current authorized scope',
-      'non-empty complete source text from that receipt, matching the current source revisions',
+      'for each requested input, a current-turn verified exact-source receipt from its format-appropriate document reader, or verified knowledge_file_stats mode=source_text for the original fileIds in the current authorized scope',
+      'non-empty complete source text from each successful receipt, matching the current source revisions',
+      'each requested source body is delivered separately; a missing or failed input remains explicitly incomplete without hiding the successful source bodies',
     ],
-    preferredTools: ['read_file', 'knowledge_file_stats'],
-    verificationTools: ['read_file', 'knowledge_file_stats'],
-    nextStep: 'Use read_file for an exact user-named local absolute path, or knowledge_file_stats with the original current-turn fileIds for knowledge sources. A verified read proves retrieval only.',
-    caution: 'A knowledge fileId is not a local path. Never guess its directory. A local basename, directory search, guessed path, knowledge inventory, truncated source, or preparatory read cannot complete this contract.',
+    preferredTools: ['read_docx', 'read_pdf', 'read_xlsx', 'extract_document_text', 'read_file', 'knowledge_file_stats'],
+    verificationTools: ['read_docx', 'read_pdf', 'read_xlsx', 'extract_document_text', 'read_file', 'knowledge_file_stats'],
+    nextStep: 'Resolve each explicitly named source only within its requested location, then read its exact path with the existing format-appropriate reader: DOCX uses read_docx, PDF uses read_pdf, XLSX uses read_xlsx, other supported documents use extract_document_text, and UTF-8 plain text uses read_file. Knowledge sources use knowledge_file_stats with the original current-turn fileIds. Do not retry Office or PDF files through read_file. Read and deliver each independent input separately; if one input is unavailable, state its exact failed location or read outcome and continue the other independent inputs. Do not create or modify files. A verified read proves retrieval only.',
+    caution: 'A knowledge fileId is not a local path. Never guess its directory. A local basename, directory search, guessed path, knowledge inventory, truncated source, or preparatory read cannot complete this contract. One successful read cannot prove every input completed, and one missing input must not suppress another input that was read successfully. Do not claim the whole request completed while an input or its requested full-text delivery remains incomplete.',
   });
 }
 

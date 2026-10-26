@@ -12,7 +12,7 @@ import {
 } from './action_continuation';
 import { classifyTaskCapsuleTurn } from '../conversation/task_capsule';
 import { normalizeActionIntent, type NormalizedActionIntent } from './normalized_action_intent';
-import { hasExplicitNoToolInstruction } from './tool_intent';
+import { hasExplicitNoToolInstruction, isInformationOnlyQuestion } from './tool_intent';
 import {
   resolvePendingRuntimeCleanupOffer,
   type PendingAssistantOfferContext,
@@ -192,7 +192,8 @@ function feedbackKind(
   // phrase about continuing later must not override a current status question.
   if (followup === 'status' && normalizedIntent.target !== 'runtime_work') return 'status';
   if (followup === 'repeat') return 'repeat';
-  if (hasExplicitNoToolInstruction(normalized)) return 'new_task';
+  if (hasExplicitNoToolInstruction(normalized)
+    || normalizedIntent.kind === 'none' && isInformationOnlyQuestion(normalized)) return 'new_task';
   if (isReferentialArtifactEdit(normalized, state)) return 'correction';
   if (isTaskPreparationContinuation(normalized, state, normalizedIntent)) return 'continue';
   if (isExplicitUnfinishedTaskContinuation(normalized, state)) return 'continue';

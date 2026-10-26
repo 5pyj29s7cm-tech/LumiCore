@@ -1,8 +1,14 @@
-import type { ToolExecutionRecord } from "../../tools/types";
+import type { ToolExecutionRecord, ToolContext } from "../../tools/types";
 import type { NormalizedMessage } from "../providers";
 import { isConfirmationBlockedToolRecord } from "../../tools/confirmation_block";
 import { CN_DURABLE_EXECUTION_MESSAGES, CN_TOOL_LOOP_MESSAGES } from "../../regions/messages/durable_execution_messages";
 import { collectExistingArtifacts, formatBytes } from './artifacts';
+import { formatCnToolFailureDetail } from '../../regions/messages/voice_fast_path_messages';
+import { actualDocumentReadContent, documentReadMatchesRequestedTarget, isSuccessfulExactDocumentRead, requestsExactReadOnlyArtifactInspection } from '../../cognition/action_desktop_evidence';
+import { inspectPublicExecutionReferences, sanitizeUserFacingExecutionOutput } from '../../cognition/user_output_protection';
+import { artifactPathFromRecord, artifactRecordMatchesTurn } from '../../tools/artifact_evidence';
+import { isCanonicalToolExecutionRecord } from '../../tools/canonical_execution_record';
+import { CN_TASK_EXECUTION_MESSAGES } from '../../regions/messages/task_execution_messages';
 
 export function getPrimaryUserText(messages: NormalizedMessage[]): string {
   const rawContent = [...messages].reverse().find(m => m.role === 'user')?.content || '';
@@ -74,7 +80,7 @@ export function buildConfirmationBlockedSummary(executionLog: ToolExecutionRecor
   ].filter(Boolean).join('\n');
 }
 
-export function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], task: string = ''): string {
+export function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], task: string = '', context?: ToolContext): string {
   if (executionLog.some(isConfirmationBlockedToolRecord)) {
     return buildConfirmationBlockedSummary(executionLog, task);
   }
@@ -88,36 +94,48 @@ export function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], 
 
   const artifacts = collectExistingArtifacts(executionLog).slice(0, 8);
 
-  const recentSteps = executionLog.slice(-6).map((record, index) => {
-    const status = record.error
-      ? (isZh ? CN_TOOL_LOOP_MESSAGES.notCompletedStatus : 'not completed')
-      : record.terminalVerification?.status === 'verified'
-        ? (isZh ? CN_DURABLE_EXECUTION_MESSAGES.verifiedStatus : 'verified')
-        : (isZh ? CN_DURABLE_EXECUTION_MESSAGES.unverifiedStatus : 'not yet confirmed complete');
-    return `${index + 1}. ${humanToolLabel(record.name)} - ${status}`;
-  });
+  const readOnly = requestsExactReadOnlyArtifactInspection(task);
+  const projectionInput = { task, toolCalls: executionLog, requestId: context?.requestId, taskId: context?.taskId, completionRequest: context?.completionRequest };
+  const currentRecords = context?.requestId && context?.taskId
+    ? inspectPublicExecutionReferences(projectionInput, '').currentRecords : [];
+  const sourceBodies = readOnly ? currentRecords.filter(record => isSuccessfulExactDocumentRead(record)
+    && documentReadMatchesRequestedTarget(record, task, context?.acceptedTaskTarget, [], context?.userId
+      ? { userId: context.userId, domain: context.domain || 'personal', orgId: context.orgId || '' } : undefined))
+    .map(record => [artifactPathFromRecord(record), actualDocumentReadContent(record)].filter(Boolean).join('\n')) : [];
+  const failedRecords = executionLog.filter(record => record.error && (!readOnly || !context
+    || Boolean(context.requestId && context.taskId && isCanonicalToolExecutionRecord(record) && artifactRecordMatchesTurn(record, context))));
+  const failures = isZh || readOnly ? [...new Set(failedRecords.map(record => {
+    const detail = isZh ? formatCnToolFailureDetail(record.error!) : String(record.error);
+    const source = readOnly ? artifactPathFromRecord(record) : '';
+    return source ? source + ': ' + detail : detail;
+  }))] : [];
+  const preserveSourceBodies = (summary: string): string => {
+    if (!readOnly || !context?.requestId || !context?.taskId) return summary;
+    if (inspectPublicExecutionReferences(projectionInput, summary).privateReference) return CN_TASK_EXECUTION_MESSAGES.incompleteWholeRequest;
+    return sanitizeUserFacingExecutionOutput(summary, { task, toolRecords: executionLog });
+  };
 
   if (isZh) {
-    return [
+    return preserveSourceBodies([
       CN_DURABLE_EXECUTION_MESSAGES.recoveryBudgetExhausted,
-      CN_TOOL_LOOP_MESSAGES.progressHeading,
-      ...recentSteps,
+      ...sourceBodies,
+      ...failures,
       artifacts.length > 0 ? CN_TOOL_LOOP_MESSAGES.verifiedArtifactsHeading : '',
       ...artifacts.map(artifact => `- ${artifact.path} (${formatBytes(artifact.size)})`),
       artifacts.length > 0
         ? CN_DURABLE_EXECUTION_MESSAGES.resumeFromVerifiedArtifacts
-        : CN_DURABLE_EXECUTION_MESSAGES.resumeWithoutVerifiedArtifacts,
-    ].filter(Boolean).join('\n');
+        : sourceBodies.length ? '' : CN_DURABLE_EXECUTION_MESSAGES.resumeWithoutVerifiedArtifacts,
+    ].filter(Boolean).join('\n'));
   }
 
-  return [
+  return preserveSourceBodies([
     'This request is not complete.',
-    'Progress:',
-    ...recentSteps,
+    ...sourceBodies,
+    ...failures,
     artifacts.length > 0 ? 'Verified generated files:' : '',
     ...artifacts.map(artifact => `- ${artifact.path} (${formatBytes(artifact.size)})`),
     artifacts.length > 0
       ? 'The files listed above were created; the request remains incomplete.'
-      : 'Files may have been created; deliverable results have not yet been confirmed.',
-  ].filter(Boolean).join('\n');
+      : sourceBodies.length ? '' : 'Deliverable results have not yet been confirmed.',
+  ].filter(Boolean).join('\n'));
 }

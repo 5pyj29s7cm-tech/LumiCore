@@ -120,7 +120,7 @@ describe('Lumi turn flow', () => {
 
   it('does not join navigation verbs and client-surface nouns across separate clauses', async () => {
     const { initDatabase } = await import('../db_layer');
-    const { buildLumiTurnFlow, buildInteractionModeOverlay } = await import('../server/cognition/turn_flow');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
     await initDatabase();
     const flow = buildLumiTurnFlow({
       userId: 'turn_flow_factual_restatement',
@@ -132,7 +132,6 @@ describe('Lumi turn flow', () => {
 
     expect(flow.clientActionOnlyTurn).toBe(false);
     expect(flow.allowToolUseForTurn).toBe(true);
-    expect(buildInteractionModeOverlay(flow)).toContain('Factual Restatement Fidelity');
   });
 
   it.each(['chat', 'voice'] as const)('keeps capability access questions conversational in %s', async (channel) => {
@@ -816,4 +815,46 @@ it.each(['按上面的“非拼写错误版”来', '按上面的非拼写错误
   const flow = buildLumiTurnFlow({userId:'creative-version-selection',text,channel:'chat',targetIsLumi:true});
   expect(flow.selfRepairTurn).toBe(false);
   expect(isDiagnosticOrRepairRequest('客户端启动错误，请检查')).toBe(true);
+});
+
+describe('current-turn guidance boundary', () => {
+  it('answers explicit operation instructions without creating tool work from the mentioned file', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    const { hasExplicitNoToolInstruction } = await import('../server/cognition/no_tool_instruction');
+    const { buildActionContract } = await import('../server/cognition/action_contract');
+    await initDatabase();
+    const text = "如果共同验收丙.docx在其他目录，我不知道完整路径怎么找，也不知道怎么把文件发给你。请教我具体怎么操作，这一步先给操作说明。";
+    expect(hasExplicitNoToolInstruction(text)).toBe(true);
+    expect(buildActionContract(text)).toMatchObject({ applies: false, kind: 'none' });
+    const flow = buildLumiTurnFlow({ userId: 'missing-source-guidance', text, channel: 'chat', source: 'command-center-chat', operationMode: 'assistant', targetIsLumi: true });
+    expect(flow.routeText).toBe(text);
+    expect(flow.allowToolUseForTurn).toBe(false);
+    expect(flow.completionEvidenceNeeded).toBe(false);
+  });
+  it.each(['教我怎么做，随后帮我打开记事本。', '先搜索文件再解释。', '先给操作说明，然后帮我执行。'])('does not suppress a separate explicit action: %s', async text => {
+    const { hasExplicitNoToolInstruction } = await import('../server/cognition/no_tool_instruction');
+    expect(hasExplicitNoToolInstruction(text)).toBe(false);
+  });
+});
+
+describe('explicit guidance keeps the latest turn as its route', () => {
+  it('does not append an old execution root when the user says continue but asks for instructions first', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+    const text = '继续这个任务，这一步先给操作说明。';
+    const flow = buildLumiTurnFlow({ userId: 'guidance-before-resume', text, channel: 'chat', source: 'command-center-chat', operationMode: 'assistant', targetIsLumi: true, continuationContext: '先前任务：合并两份本地文件并返回成品，缺少第二份。', actionFollowupIntent: 'execute' });
+    expect(flow.routeText).toBe(text);
+    expect(flow.allowToolUseForTurn).toBe(false);
+    expect(flow.completionEvidenceNeeded).toBe(false);
+  });
+});
+
+it('keeps a natural how-to follow-up out of prior-task execution and verification', async () => {
+  const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+  const text = '这个文件在其他文件夹，我怎么找到它并发给你';
+  const flow = buildLumiTurnFlow({ userId: 'natural-howto-boundary', text, channel: 'chat', source: 'command-center-chat', operationMode: 'assistant', targetIsLumi: true, continuationContext: '原任务：合并桌面两份文件并发回，第二份文件缺少。', actionFollowupIntent: 'status' });
+  expect(flow.routeText).toBe(text);
+  expect(flow.completionEvidenceNeeded).toBe(false);
 });

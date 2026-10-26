@@ -101,20 +101,20 @@ describe('document functionality regressions', () => {
     expect(await registry.execute('read_xlsx', { filePath: created.path, sheetName: 'Long', startRow: Infinity, maxRows: NaN }, context)).toContain('Rows 1-');
   });
 
-  it('warns when one oversized row cannot fit model context and offers a complete CSV export', async () => {
+  it('preserves an oversized row before provider capacity allocation and supports complete CSV export', async () => {
     const largeValue = `row-start-${'x'.repeat(20000)}-row-end`;
     const created = await run('create_xlsx', { sheets: [{ name: 'Oversized', data: [[largeValue], ['later-record']] }] });
     const record = await executeToolCall({ registry, name: 'read_xlsx', arguments: { filePath: created.path, sheetName: 'Oversized' }, context });
     expect(record.error).toBeUndefined();
     expect(record.result).toContain(largeValue);
     const text = formatToolRecordForModel(record);
-    expect(text).toContain('[Incomplete spreadsheet content:');
-    expect(text).toContain('not fully included in model context');
-    expect(text).toContain('xlsx_to_csv');
+    expect(text).not.toContain('[Incomplete spreadsheet content:');
+    expect(text).not.toContain('compacted for model context');
+    expect(text).toContain(largeValue);
     expect(text).toContain('Continue with startRow=2');
     expect(text).toContain('row-start-');
     expect(text).toContain('-row-end');
-    expect(text).not.toContain(largeValue);
+    expect(text).toContain(largeValue);
     const exported = await run('xlsx_to_csv', { filePath: created.path, sheetName: 'Oversized' });
     const csv = fs.readFileSync(exported.path, 'utf8');
     expect(csv).toContain(largeValue);

@@ -131,20 +131,13 @@ const DIRECT_STATUS_QUERY = /(?:完成了吗|成功了吗|是否成功|弄好了
 // Durable continuation resolves it against an actual unfinished task before
 // execution recovery sees it; the guard must not invent a new status task.
 const BARE_AMBIGUOUS_REACTION = /^(?:(?:你|lumi)[，,\s]*)?(?:怎么回事|什么情况|搞什么|什么鬼|干嘛呢|怎么了)[啊呀吧嘛呢，,。！？?!\s]*$/iu; // i18n-allow: reviewed conversational-reaction recognition; not user-visible copy.
-const STATUS_SUBJECT_ANCHOR = /(?:当前|这次|本次|这轮|刚才|刚刚|之前|上次|那个|任务|操作|执行|处理|工作|回执)|\b(?:current|this|that|previous|last|earlier|task|operation|execution|run|receipt)\b/iu; // i18n-allow: reviewed status-query recognition; not user-visible copy.
-const STATUS_ASPECT = /(?:状态|进度|结果|证据|回执|完成|成功|失败|受阻)|\b(?:status|progress|result|evidence|receipt|completed?|finished?|succeeded?|failed?|blocked)\b/iu; // i18n-allow: reviewed execution-status input recognition.
+const TASK_STATUS_QUESTION = /^(?:请\s*)?(?:(?:告诉我|说说|报告|说明)\s*)?(?:(?:当前|这次|本次|刚才|刚刚|之前|上次|那个)(?:的|那次)?\s*)?(?:任务|操作|执行|处理|工作)(?:的)?(?:(?:状态|进度|结果|证据|回执)(?:是|有)?(?:什么|哪些|怎么样(?:了)?|如何|呢)|(?:有什么|有哪些)(?:结果|证据|回执))[？?。.!！\s]*$|^(?:please\s+)?what(?:'s|\s+is|\s+are)\s+(?:the\s+)?(?:(?:current|this|that|previous|last|earlier)\s+)?(?:task|operation|execution|run)(?:'s)?\s+(?:status|progress|results?|evidence|receipts?)[?.!\s]*$/iu; // i18n-allow: Direct status questions bind their subject and question within one clause.
 const CONCEPTUAL_STATUS_DISCUSSION = /(?:什么是|什么意思|概念|定义|标准|原则|应该|应当|如何|怎么判断|依据什么|怎样才算|请只解释|仅解释|不要执行|不执行任何操作)|\b(?:what (?:is|does)|meaning|concept|definition|criteria|standard|principle|should|how (?:to|should)|explain only|do not (?:execute|run|perform))\b/iu; // i18n-allow: reviewed conceptual-question input recognition.
 const UNVERIFIED_TERMINAL_ACTION_ANSWER = /(?:我|文件|消息|任务|操作|提醒|应用|网页)?[^。！？!?\n]{0,12}(?:已|已经|成功)[^。！？!?\n]{0,12}(?:保存|写入|发送|提交|发布|创建|打开|启动|执行|完成)|(?:保存|写入|发送|提交|发布|创建|打开|启动|执行|完成)成功(?:了)?[。！？!?\s]*$|\b(?:I\s+(?:have\s+)?|the\s+(?:file|message|task)\s+(?:has\s+)?)?(?:saved|sent|submitted|published|created|opened|launched|executed|completed)\s+(?:it|successfully)?[.!?\s]*$/iu; // i18n-allow: reviewed unverified terminal-action claim recognition.
 
 function isExecutionStatusQuery(text: string): boolean {
-  if (!text) return false;
-  // A quoted execution phrase can be the subject of a conceptual question.
-  // Terms such as “evidence” and “result” are not task pointers by themselves.
-  if (DIRECT_STATUS_QUERY.test(text)) return true;
-  if (CONCEPTUAL_STATUS_DISCUSSION.test(text)) return false;
-  return (
-    STATUS_SUBJECT_ANCHOR.test(text) && STATUS_ASPECT.test(text)
-  );
+  return affirmativeActionClauses(text).some(clause =>
+    DIRECT_STATUS_QUERY.test(clause) || TASK_STATUS_QUESTION.test(clause.trim()));
 }
 // i18n-allow -- deterministic conversational intent recognition; not user-visible copy.
 const CONVERSATION_ONLY = /^(?:hi|hello|hey|thanks|thank you|who are you|what can you do|tell me about yourself|how are you)[\s!?.]*$|^(?:\u4f60\u597d|\u55e8|\u8c22\u8c22|\u4f60\u662f\u8c01|\u4f60\u80fd\u505a\u4ec0\u4e48|\u4ecb\u7ecd\u4e00\u4e0b\u81ea\u5df1|\u804a\u804a)[\s\uff01\uff1f\u3002]*$/iu;
@@ -223,8 +216,9 @@ export function classifyExecutionGuardIntent(
     && normalizedIntent.operation !== 'status'
   ) return 'action_execution';
   if (hasMixedStatusExecutionIntent(clean)) return 'action_execution';
+  if (normalizedIntent.kind === 'status_query') return 'status_query';
   if (buildClientDiagnosticPlan(clean).length) return 'action_execution';
-  if (CONCEPTUAL_STATUS_DISCUSSION.test(clean) && !DIRECT_STATUS_QUERY.test(clean)) return 'conversation';
+  if (CONCEPTUAL_STATUS_DISCUSSION.test(clean) && !isExecutionStatusQuery(clean)) return 'conversation';
   if (BARE_AMBIGUOUS_REACTION.test(clean) && records.length === 0) return 'conversation';
   // A fresh imperative lookup stays execution; later conditional failure/status words are scope fences.
   const lookupInstruction = affirmativeActionClauses(clean).find(clause =>

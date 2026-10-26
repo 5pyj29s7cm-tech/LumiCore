@@ -107,7 +107,7 @@ export function pageHarness(withOldAttachment = false, transport?: (url: string,
     constructor(options: ConstructorParameters<typeof ChatExecutionWatch>[0]) { super(options, { setTimeout: deps.setTimeout, clearTimeout: deps.clearTimeout }); }
   };
   for (const name of ['createChatStreamReceivers', 'dropRequestStream', 'resumeForegroundRequest', 'settleTrackedChatRequest', 'appendPendingAttachments', 'acceptImportedChatFiles', 'rememberAttachmentContext',
-    'attachChatExecutionWatch', 'sendText', 'handleSendMessage', 'runChatAttachmentUpload', 'uploadChatAttachments', 'importChatAttachmentPaths']) {
+    'attachChatExecutionWatch', 'sendText', 'handleSendMessage', 'runChatAttachmentUpload', 'uploadChatAttachments']) {
     deps[name] = extract(pagePath, name, deps);
   }
   return { deps, response, registry, emitted, upload: deps.uploadChatAttachments, send: () => deps.handleSendMessage({ preventDefault: noop }) };

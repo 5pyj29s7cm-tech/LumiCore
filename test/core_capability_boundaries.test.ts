@@ -42,11 +42,4 @@ describe('core capability boundaries', () => {
     expect(cadSkill).not.toContain('cad_generate_simple_dxf');
   });
 
-  it('keeps the operating kernel explicit about skill and adapter reuse', () => {
-    const kernel = readRepoFile('server/cognition/operating_kernel.ts');
-
-    expect(kernel).toContain('Industry work stays in reusable skills, adapters, task records, and learned routes');
-    expect(kernel).toContain('Do not bake one-off demo scripts into the chat/voice/task core');
-    expect(kernel).toContain('never treat a generated local coordination artifact as proof of external completion');
-  });
 });

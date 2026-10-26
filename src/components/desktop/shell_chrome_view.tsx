@@ -190,8 +190,8 @@ export function renderShellChrome({ viewMode, isWallpaperMode, handleTopbarPoint
         </AnimatePresence>
 
         {/* Bottom Taskbar / Dock */}
+        {viewMode !== 'world' && (
         <div
-          data-theme-scope={viewMode === 'world' ? 'dark' : undefined}
           className={`lumi-dock absolute bottom-6 ${dockPositionClassName} z-50 h-16 max-w-[calc(100vw-2rem)] overflow-x-auto overflow-y-hidden px-4 glass-dark rounded-[2.5rem] border border-white/10 flex items-center gap-2 shadow-2xl backdrop-blur-2xl transition-all duration-1000 ${
             isWallpaperMode || chatOpen || knowledgeOpen || activeTab === 'org'
               ? 'opacity-0 pointer-events-none'
@@ -264,6 +264,7 @@ export function renderShellChrome({ viewMode, isWallpaperMode, handleTopbarPoint
             </button>
           )}
         </div>
+        )}
       </div>
   );
 }

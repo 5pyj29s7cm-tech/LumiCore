@@ -40,5 +40,5 @@ export async function runWithToolsInternal(
     // recovery warning.
     return state.finish('');
   }
-  return state.finish(buildIterationLimitSummary(state.executionLog, getPrimaryUserText(state.messages)));
+  return state.finish(buildIterationLimitSummary(state.executionLog, getPrimaryUserText(state.messages), state.toolExecutionContext));
 }

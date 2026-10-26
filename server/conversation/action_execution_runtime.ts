@@ -539,7 +539,7 @@ export function finalizeConversationActionRequestInDb(
     );
     const requestWasRunning = conversationTaskStatusOwnsExecutionLease(previous.status);
     const authoritativeDisposition = Boolean(
-      (options.terminalDisposition?.outcome === 'blocked' || options.terminalDisposition?.outcome === 'cancelled')
+      (options.terminalDisposition?.outcome === 'blocked' || options.terminalDisposition?.outcome === 'cancelled' || options.terminalDisposition?.outcome === 'completed')
       && options.terminalDisposition.requestId === normalizedRequestId
       && options.terminalDisposition.taskId === previous.taskId,
     );

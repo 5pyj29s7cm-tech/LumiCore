@@ -1,4 +1,6 @@
 import { mediaAuthoringMutationScope } from '../../cognition/media_creation_intent';
+import { affirmativeActionClauses, hasAffirmativeArtifactMutationAction } from '../../cognition/normalized_action_intent';
+import { withoutLocationLiterals } from '../../cognition/location_literals';
 
 
 export interface ChatIncomingAttachment {
@@ -130,5 +132,7 @@ export function shouldAllowLocalFileWriteForTurn(userText: string, attachments: 
   const directEnglishRequest =
     /\b(?:create|generate|write|save|export|turn|make|draw|draft)\b.{0,64}\b(?:file|document|docx|word|pdf|txt|markdown|transcript|notes|minutes|report|cad|dxf|dwg|drawing|floor\s*plan|blueprint)\b/i.test(clean);
 
-  return explicitDeliverable || attachedArtifactRequest || directEnglishRequest;
+  const mergeDeliverable = affirmativeActionClauses(clean).some(clause => hasAffirmativeArtifactMutationAction(clause)
+    && /(?:合并(?:成|为)|\b(?:merge|combine)\b).{0,100}(?:文件|文档|DOCX|Word|PDF|TXT|MD|PPTX?|XLSX?)/iu.test(withoutLocationLiterals(clause, true)));
+  return explicitDeliverable || attachedArtifactRequest || directEnglishRequest || mergeDeliverable;
 }

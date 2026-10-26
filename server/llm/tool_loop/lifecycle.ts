@@ -97,7 +97,8 @@ export async function waitForToolLifecycleObserver(input: ToolLifecycleObserverI
   }
 }
 
-export function toolLifecycleCallKey(call: { id?: string; name?: string }): string {
+export function toolLifecycleCallKey(call: { id?: string; idempotencyKey?: string; name?: string }): string {
+  if (call.idempotencyKey) return `execution:${call.idempotencyKey}`;
   const id = String(call.id || '').trim();
   if (id) return `id:${id}`;
   return `name:${String(call.name || '').trim()}`;

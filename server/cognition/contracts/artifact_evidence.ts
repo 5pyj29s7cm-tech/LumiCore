@@ -15,6 +15,7 @@ import { isPreparationOnlyTool } from './receipt_evidence';
 export function getArtifactTaskProgress(task: string, records: ToolExecutionRecord[], turn: { requestId?: string; taskId?: string } = {}, analysis?: ActionIntentAnalysis) {
   const current = expandSuccessfulRecords(records).filter(record => artifactRecordMatchesTurn(record, turn));
   return projectArtifactProgress(task, current, {
+    turn,
     readbackRequired: requiresArtifactPostWriteReadback(task),
     openRequired: requiresArtifactOpen(task),
     openVerified: file => hasRequestedDesktopOpenEvidence(current, task, file, analysis),

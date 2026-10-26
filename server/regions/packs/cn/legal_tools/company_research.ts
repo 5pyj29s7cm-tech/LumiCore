@@ -190,7 +190,8 @@ export async function searchExternalAuthoritiesHandler(args: Record<string, any>
   ];
   const type = normalizeExternalLegalKind(textArg(args, 'type') || textArg(args, 'kind'));
   const limit = Math.max(1, Math.min(Number(args.limit) || 5, 20));
-  const includeOfficialWeb = args.includeOfficialWeb === true;
+  const includeOfficialWeb = args.includeOfficialWeb !== false && type !== 'case'
+    && context?.dataRoutingPolicy !== 'local_only';
 
   const results = await searchLegalAuthorityDatabase({
     query,
@@ -204,23 +205,12 @@ export async function searchExternalAuthoritiesHandler(args: Record<string, any>
     const bRank = courtLevelRank([b.court, b.title, b.summary].filter(Boolean).join(' '));
     return aRank - bRank;
   });
-  const capabilities = listLegalSourceCapabilities()
-    .filter(source => ['pkulaw', 'farui', 'people-court-case-library', 'china-judgments-online'].includes(source.id));
-
-  const resultRows = orderedResults.length
-    ? orderedResults.map((item, index) =>
-      `| ${index + 1} | ${mdCell(item.sourceName)} | ${mdCell(item.title)} | ${mdCell(item.caseNumber || item.effectiveStatus)} | ${mdCell(item.publishDate || item.court)} | ${mdCell(item.url || item.summary)} | 律师复核 |`,
-    ).join('\n')
-    : '| 1 | 未命中 | 未通过已配置 API 返回结果 | 待补充 | 待补充 | 请配置授权 API 或使用网页登录协作 | 律师复核 |';
-
-  const statusRows = capabilities.map(source =>
-    `| ${mdCell(source.label)} | ${source.accessMode} | ${source.configured ? '已配置（以本次回执为准）' : '未配置或网页登录'} | ${source.canAutoQuery ? '可以' : '不承诺'} | ${mdCell(source.nextAction)} |`,
-  ).join('\n');
+  const sourceOriginals = orderedResults.filter(item => item.sourceText).map(item => ({ ...item, text: item.sourceText }));
   const sourceRegisterRows = orderedResults.length
     ? orderedResults.map((item, index) =>
-      `| ${index + 1} | ${mdCell(item.sourceName)} | ${mdCell(query)} | ${mdCell(item.title)} | ${mdCell(item.caseNumber || item.effectiveStatus)} | ${mdCell(item.court || item.publishDate)} | ${mdCell(item.url)} | ${mdCell(item.summary || '待摘录')} | 律师复核 |`,
+      `| ${index + 1} | ${mdCell(item.sourceName)} | ${mdCell(query)} | ${mdCell(item.title)} | ${mdCell(item.caseNumber || item.effectiveStatus)} | ${mdCell([item.court, item.publishDate].filter(Boolean).join('；'))} | ${mdCell(item.url)} | ${mdCell(item.summary || '待摘录')} |`,
     ).join('\n')
-    : '| 1 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待摘录 | 律师复核 |';
+    : '| 1 | 未取得来源 | 待登记 | 未取得可核验来源 | 待补充 | 待补充 | 待补充 | 未配置、查询失败与无命中不能据此区分 |';
 
   const report = `# ${caseName} 外部法律数据库检索
 
@@ -231,27 +221,17 @@ export async function searchExternalAuthoritiesHandler(args: Record<string, any>
 - 官方网页兜底：${includeOfficialWeb ? '启用' : '未启用'}
 - 类案排序：${LEGAL_CASE_SEARCH_ORDER.join(' > ')}；无法识别法院层级的结果列后。
 
-## 二、API 查询结果
-| 序号 | 数据源 | 标题 | 案号/效力 | 日期/法院 | 链接或摘要 | 复核状态 |
-| --- | --- | --- | --- | --- | --- | --- |
-${resultRows}
+## 二、来源登记回填
+${sourceOriginals.map(source => '### 原始来源回执（本次返回数据）\n- 来源记录：' + (source.title || '未返回') + '；数据库查询时效力：' + (source.effectiveStatus || '未返回') + '\n- 来源链接：' + (source.url || '未返回') + '\n- 查询端点：' + (source.sourceEndpoint || '未返回') + '\n- 查询时间：' + (source.queriedAt || '未返回') + '\n- 读取范围：以下仅列出实际返回内容；目录、摘要或元数据不能代替正文，原文提取范围以来源内容为准。\n\n' + source.text).join('\n\n')}
 
-## 三、来源登记回填
-| 序号 | 来源 | 检索词 | 标题 | 案号/效力 | 法院/发布日期 | 链接 | 关键摘录 | 复核状态 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 序号 | 来源 | 检索词 | 标题 | 案号/效力 | 法院/发布日期 | 链接 | 关键摘录 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
 ${sourceRegisterRows}
 
-## 四、接入状态
-| 数据源 | 模式 | 状态 | 自动查询 | 下一步 |
-| --- | --- | --- | --- | --- |
-${statusRows}
+## 三、查询范围
+- 仅调用已配置且授权的 API/网关；未配置的数据源不承诺自动查询。`;
 
-## 五、边界
-- 仅调用已配置且授权的 API/网关；未配置的数据源不承诺自动查询。
-- 人民法院案例库、裁判文书网、法蝉、Alpha 默认仍按授权网页登录协作和材料导入处理。
-- 所有法条效力、案例适用性和引用表述必须由律师最终复核。`;
-
-  let kbLine = '- 知识库：未导入。律师确认来源和授权范围后，可设置 confirmedForKb=true 入库。';
+  let kbLine = '- 知识库：未导入。';
   if (args.confirmedForKb === true && orderedResults.length > 0) {
     const article = legalWrite(() => createLegalArticle(orgId, userId, {
       title: `${caseName} 外部法律数据库检索`,
@@ -281,7 +261,9 @@ ${statusRows}
     cause: textArg(args, 'caseType') || query,
   });
 
-  return `${report}\n\n## 六、入库与案件归档\n${kbLine}\n${caseLine}`;
+  return encodeToolResult(`${report}\n\n## 四、入库与案件归档\n${kbLine}\n${caseLine}`, { ok: orderedResults.length > 0, status: orderedResults.length ? 'observed' : 'partial',
+    statuteSources: orderedResults.flatMap(item => item.statuteSource ? [item.statuteSource] : []),
+  });
 }
 
 export async function companyDatabaseLookupHandler(args: Record<string, any>, context?: any): Promise<string> {

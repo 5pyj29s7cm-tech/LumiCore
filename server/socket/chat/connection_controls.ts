@@ -1,3 +1,4 @@
+import { reconcileCompletedChatReplay } from './phases/completed_terminal_replay';
 import type { Server, Socket } from 'socket.io';
 import { resolveAuthorizedSocketScope } from '../scope';
 import { getChatExecution, markChatExecutionCancelling, type ChatExecutionScope } from '../chat_execution_registry';
@@ -6,7 +7,7 @@ import { getConversationExecution } from '../../cognition/conversation_execution
 /** Connection recovery and abort signals share the durable foreground registry. */
 export function registerChatExecutionControls(socket: Socket, userIdFn: (socket: Socket) => string, io: Server) {
 
-  socket.on("agent:execution_resume", (
+  socket.on("agent:execution_resume", async (
     data: { requestId?: string; source?: string; domain?: string; orgId?: string | null; conversationId?: string } = {},
     ack?: (payload: { ok: boolean; snapshot?: ReturnType<typeof getChatExecution>; code?: string; error?: string }) => void,
   ) => {
@@ -23,7 +24,20 @@ export function registerChatExecutionControls(socket: Socket, userIdFn: (socket:
       source: data.source || 'chat',
       conversationId: data.conversationId,
     };
-    const snapshot = getChatExecution(scope, data.requestId);
+    let snapshot = getChatExecution(scope, data.requestId);
+    if (snapshot?.terminalEvent) {
+      try { await reconcileCompletedChatReplay(scope, snapshot.requestId); } catch (error) {
+        console.error('[ChatExecution] Cached terminal reconciliation failed:', error);
+        try { ack?.({ ok: false, error: 'Execution recovery is unavailable.' }); } catch {}
+        return;
+      }
+    }
+    snapshot = getChatExecution(scope, data.requestId);
+    const replayScope = resolveAuthorizedSocketScope(socket, uid);
+    if (!replayScope || replayScope.domain !== scope.domain || String(replayScope.orgId || '') !== String(scope.orgId || '')) {
+      try { ack?.({ ok: false, error: 'Workspace access is unavailable.' }); } catch {}
+      return;
+    }
     try {
       ack?.(snapshot
         ? { ok: true, snapshot }

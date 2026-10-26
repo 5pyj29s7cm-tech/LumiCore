@@ -59,4 +59,44 @@ describe('result finalizer preserves layout while correcting operation-mode clai
     expect(result.blocked).toBe(false);
     expect(result.text).toBe('商品明细：\n- 水杯：24 元\n\n\n\n说明：金额按数量乘单价计算。');
   });
+
+  it.each([
+    '3. 回到当前聊天，按 Ctrl+V 粘贴 '+String.fromCharCode(96)+'C:\\材料\\案卷.docx'+String.fromCharCode(96)+' 的完整路径，然后发送。',
+    '这是会议记录，不是模式声明。回到当前聊天窗口，点击附件选择文件。',
+    '需要先进入会议室，再打开会议记录。',
+    '需要先进入聊天窗口，再粘贴文件路径。',
+  ])('preserves file-sharing instructions rather than mistaking them for a mode claim: %s', text => {
+    const result = finalize(text);
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(text);
+  });
+});
+
+
+it('shows only the PDF readback body and preserves unwrapped document text', async () => {
+  const fs = (await import('node:fs')).default;
+  const path = (await import('node:path')).default;
+  const { vi } = await import('vitest');
+  const { formatGroundedArtifactResult } = await import('../server/cognition/result_artifact_presenter');
+  const { actualDocumentReadContent } = await import('../server/cognition/action_desktop_evidence');
+  const file = path.resolve('C:/synthetic/pdf-body-presentation-only.pdf');
+  const body = '共同验收修订\n蓝色纸盒，共3个\n橙色书签，共9个';
+  const wrapper = 'Pages: 1\nInfo: {"PDFFormatVersion":"1.7","Producer":"synthetic-pdf-producer","Title":"synthetic"}\n\n' + body + '\n\n-- 1 of 1 --\n';
+  const identity = { taskId: 'pdf-body-task', requestId: 'pdf-body-request' };
+  const records = [{ ...identity, name: 'create_pdf', arguments: { outputPath: file, content: body },
+    result: JSON.stringify({ ok: true, status: 'created', path: file, size: 128 }),
+    terminalVerification: { status: 'verified' as const, strategy: 'artifact' as const, reason: 'Synthetic presentation receipt' } },
+    { ...identity, name: 'read_pdf', arguments: { filePath: file }, result: wrapper,
+      terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'Synthetic presentation readback' } }];
+  const originalStat = fs.statSync;
+  const stat = vi.spyOn(fs, 'statSync').mockImplementation(((target: any, options: any) =>
+    path.resolve(String(target)) === file ? { isFile: () => true, size: 128 } : originalStat(target, options)) as any);
+  try {
+    const result = formatGroundedArtifactResult({ ...identity, taskText: '创建 ' + file + '，写完后回读并展示完整正文。', responseText: '',
+      source: 'chat', toolRecords: records });
+    expect(result?.blocked).toBe(false);
+    for (const line of body.split('\n')) expect(result?.text).toContain(line);
+    expect(result?.text).not.toMatch(/Pages:|Info:|PDFFormatVersion|Producer|synthetic-pdf-producer|--\s*1\s+of\s+1\s*--/u);
+    expect(actualDocumentReadContent({ ...records[1], result: body + '\n-- 1 of 1 --' })).toBe(body + '\n-- 1 of 1 --');
+  } finally { stat.mockRestore(); }
 });

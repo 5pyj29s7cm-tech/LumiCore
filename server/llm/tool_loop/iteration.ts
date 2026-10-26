@@ -3,12 +3,14 @@ import { GENERIC_TOOL_REPLAN_PROMPT, hasRelevantEvidenceTool, normalizePlannedTo
 import { buildDeterministicExplicitToolRecoveryCall } from "../../cognition/deterministic_tool_recovery";
 import type { ToolLoopState } from './loop_setup';
 import type { LLMResult } from './contracts';
-import { desktopControlPauseReason, hasCompletedCoreAction, buildDesktopControlPausedSummary, guardToolResponseIfNeeded } from './projection';
+import { desktopControlPauseReason, hasCompletedCoreAction, buildDesktopControlPausedSummary } from './projection';
 import { recordWorkflowIfToolsUsed } from './workflow';
 import { prepareToolLoopModelResponse } from './model_response';
 import { toolCallSignature, buildMissingVerificationObligationPrompt, MAX_VERIFICATION_OBLIGATION_REPLANS, hasUnverifiedToolOutcome, MAX_TOOL_RECOVERY_REPLANS, buildToolRecoveryReplanPrompt, isVerifiedToolSuccess, isRetryableToolOutcome, MAX_IDENTICAL_RECOVERY_RETRIES, shouldSuppressConfirmedReplay } from './recovery';
 import { getPrimaryUserText, buildIterationLimitSummary } from './summaries';
 import { executePlannedToolBatch } from './tool_batch';
+import { missingTaskInputResult } from '../../cognition/missing_task_input';
+
 
 export async function executeToolLoopIteration(state: ToolLoopState, iteration: number): Promise<LLMResult | undefined> {
 
@@ -22,7 +24,8 @@ export async function executeToolLoopIteration(state: ToolLoopState, iteration: 
           ? ''
           : buildDesktopControlPausedSummary(state.primaryTask));
     }
-    const { response, runtimeRecovery, runtimeRecoveryAlreadyRecorded, directStructuredMediaRecovery, noNewExecutionRecord, exposedToolNames } = await prepareToolLoopModelResponse(state, iteration);
+    const { response: modelResponse, runtimeRecovery, runtimeRecoveryAlreadyRecorded, directStructuredMediaRecovery, noNewExecutionRecord, exposedToolNames } = await prepareToolLoopModelResponse(state, iteration);
+    const response = modelResponse;
 
     // A provider may ignore AbortSignal and resolve after the caller has
     // cancelled or timed out. Re-check before interpreting a late response so
@@ -54,6 +57,10 @@ export async function executeToolLoopIteration(state: ToolLoopState, iteration: 
       });
     }
 
+    if (!response.toolCalls?.length && (response.streamIncomplete === true || response.finishReason === 'length' || response.finishReason === 'content_filter')) {
+      const text = response.text || '';
+      return state.finish(text, { text, blocked: true, reason: 'reply_response_incomplete' });
+    }
     let plannedToolCalls = response.toolCalls || [];
     if (runtimeRecovery) {
       // The accepted correction has one server-owned exact action. Model tool
@@ -114,17 +121,7 @@ export async function executeToolLoopIteration(state: ToolLoopState, iteration: 
       const coreActionCompleted = hasCompletedCoreAction(state.primaryTask, state.executionLog, state.toolExecutionContext);
       if (coreActionCompleted) {
         recordWorkflowIfToolsUsed(state.executionLog, state.messages, state.config);
-        const guarded = guardToolResponseIfNeeded({
-          task: state.primaryTask,
-          response: response.text || '',
-          toolCalls: state.executionLog,
-          source: state.context?.source,
-          requestId: state.toolExecutionContext?.requestId,
-          taskId: state.toolExecutionContext?.taskId,
-          acceptedTaskTarget: state.toolExecutionContext?.acceptedTaskTarget,
-        acceptedActionContract: state.toolExecutionContext?.acceptedActionContract,
-        });
-        return state.finish(guarded.text, guarded);
+        return state.finish(response.text || '');
       }
       const missingVerification = buildMissingVerificationObligationPrompt(
         state.primaryTask,
@@ -155,6 +152,7 @@ export async function executeToolLoopIteration(state: ToolLoopState, iteration: 
       }
       if (
         !coreActionCompleted
+        && !missingTaskInputResult(state.primaryTask, state.executionLog)
         && hasUnverifiedToolOutcome(state.executionLog)
         && exposedToolNames.size > 0
         && state.recoveryReplans < MAX_TOOL_RECOVERY_REPLANS
@@ -173,17 +171,8 @@ export async function executeToolLoopIteration(state: ToolLoopState, iteration: 
         return undefined;
       }
       recordWorkflowIfToolsUsed(state.executionLog, state.messages, state.config);
-      const guarded = guardToolResponseIfNeeded({
-        task: state.primaryTask,
-        response: response.text || 'No response.',
-        toolCalls: state.executionLog,
-        source: state.context?.source,
-        requestId: state.toolExecutionContext?.requestId,
-        taskId: state.toolExecutionContext?.taskId,
-        acceptedTaskTarget: state.toolExecutionContext?.acceptedTaskTarget,
-          acceptedActionContract: state.toolExecutionContext?.acceptedActionContract,
-      });
-      return state.finish(guarded.text, guarded);
+      // The shared turn finalizer owns the complete model candidate and its receipts.
+      return state.finish(response.text || '');
     }
 
     const rawToolCalls = plannedToolCalls.map((tc, index) => ({
@@ -251,7 +240,7 @@ export async function executeToolLoopIteration(state: ToolLoopState, iteration: 
             return undefined;
           }
           recordWorkflowIfToolsUsed(state.executionLog, state.messages, state.config);
-          return state.finish(buildIterationLimitSummary(state.executionLog, getPrimaryUserText(state.messages)));
+          return state.finish(buildIterationLimitSummary(state.executionLog, getPrimaryUserText(state.messages), state.toolExecutionContext));
         }
       }
     }

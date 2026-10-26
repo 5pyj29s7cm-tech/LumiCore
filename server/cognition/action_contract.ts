@@ -2,7 +2,7 @@ import { requestedArtifactInstructions, artifactInstructionClauses } from './art
 import { affirmativeActionInstructionClauses } from './action_instruction_clauses';
 import { buildMediaGenerationContract } from './contracts/media_contract';
 import { isExplicitArtifactCreationText, isExternalCommitConfirmationOnlyRequest, normalizeActionIntent } from "./normalized_action_intent";
-import { isLegalEntryTurn, isRemoteLegalMessageTurn } from "./legal_entry";
+import { isLegalEntryTurn } from "./legal_entry";
 import type { ActionIntentAnalysis } from "./normalized_action_intent";
 import { hasExplicitNoToolInstruction, isInformationOnlyQuestion, hasRequestedArtifactMutation } from "./tool_intent";
 import { withoutNegatedLookupClauses, compositeNavigationInstructions, independentActionClauses, genericExternalCommit } from "./normalized_action_intent";
@@ -92,7 +92,7 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
   // Preserve a narrow local-file inspection candidate across the generic
   // question/status guards below. Domain-specific contracts still get first
   // refusal, and the candidate is materialized only near the artifact branch.
-  const readOnlyArtifactInspection = requestsExactReadOnlyArtifactInspection(text);
+  const readOnlyArtifactInspection = requestsExactReadOnlyArtifactInspection(rawInput);
   const desktopObservationPlan = buildDesktopObservationPlan(text);
   if (normalizedIntent.kind === 'client_navigation' && normalizedIntent.clientAction) {
     return withDefaults({
@@ -215,19 +215,19 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
   const appInventoryInspection = /\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
   const desktopObservationInspection = desktopObservationPlan.length > 0;
   const currentAuthoringDocumentInspection = requiresCurrentAuthoringDocumentInspection(rawInput);
+  const messagingActionText = affirmativeActionInstructionClauses(rawInput)
+    .filter(clause => !isInformationOnlyQuestion(clause.probe, analysis))
+    .map(clause => clause.probe).join('\n');
   const directedMessageSend = normalizedIntent.kind === 'messaging_send' || (
     normalizedIntent.kind !== 'messaging_read'
     && (
-      matches(text, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[^,\uFF0C\u3002\uFF01\uFF1F!?;\uFF1B\u3001\n]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u)
-      || matches(text, /\b(?:send\s+(?:a\s+)?(?:message|note|reply)\s+to|send\s+(?:him|her|them|the\s+(?:client|customer|contact|group))|message\s+(?:him|her|them|the\s+(?:client|customer|contact|group)|@?(?!(?:has|have|had|is|was|were|contains?|includes?|body|content|attachment|file|text)\b)[\p{L}\p{N}_.'-]{1,40})|reply\s+to)\b/iu)
+      matches(messagingActionText, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[^,\uFF0C\u3002\uFF01\uFF1F!?;\uFF1B\u3001\n]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u)
+      || matches(messagingActionText, /\b(?:send\s+(?:a\s+)?(?:message|note|reply)\s+to|send\s+(?:him|her|them|the\s+(?:client|customer|contact|group))|message\s+(?:him|her|them|the\s+(?:client|customer|contact|group)|@?(?!(?:has|have|had|is|was|were|contains?|includes?|body|content|attachment|file|text)\b)[\p{L}\p{N}_.'-]{1,40})|reply\s+to)\b/iu)
     )
   );
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  const directedMessagingInquiry = /(?:问(?:一下|问)?|询问)\s*[^\s，。！？,.!?:：;；、]{1,24}?(?:在干嘛|在做什么|干嘛|做什么|忙什么|现在怎么样|有没有空)/u.test(text);
+  const directedMessagingInquiry = /(?:问(?:一下|问)?|询问)\s*[^\s，。！？,.!?:：;；、]{1,24}?(?:在干嘛|在做什么|干嘛|做什么|忙什么|现在怎么样|有没有空)/u.test(messagingActionText);
 
-  if (isRemoteLegalMessageTurn(text)) {
-    return buildLegalDocumentContract();
-  }
   const externalHistory = buildExternalHistoryActionContract(text);
   if (externalHistory) return externalHistory;
 
@@ -283,12 +283,12 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
       directedMessageSend ||
       directedMessagingInquiry ||
       (
-        matches(text, /wechat|weixin|\u5fae\u4fe1|\u6d88\u606f|\u8054\u7cfb\u4eba|\u7fa4|message|messaging\s+app|chat\s+app/i) &&
-        matches(text, /\u53d1\u9001|\u53d1\u7ed9|\u53d1\u4e00\u6761|\u53d1\u4e00\u4e0b|\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u665a\u5b89|\bsend\b|\breply\b/i)
+        matches(messagingActionText, /wechat|weixin|\u5fae\u4fe1|\u6d88\u606f|\u8054\u7cfb\u4eba|\u7fa4|message|messaging\s+app|chat\s+app/i) &&
+        matches(messagingActionText, /\u53d1\u9001|\u53d1\u7ed9|\u53d1\u4e00\u6761|\u53d1\u4e00\u4e0b|\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u665a\u5b89|\bsend\b|\breply\b/i)
       )
     ) &&
     !negatedMessagingSend &&
-    (!matches(text, /\u8349\u7a3f|\u5148\u5199|\u4e0d\u8981\u53d1|\bdraft\b/i) || confirmationOnlyExternalCommit)
+    (!matches(messagingActionText, /\u8349\u7a3f|\u5148\u5199|\u4e0d\u8981\u53d1|\bdraft\b/i) || confirmationOnlyExternalCommit)
   ) {
     return withDefaults({
       kind: 'messaging_send',
@@ -525,7 +525,10 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
     return buildArtifactWorkContract();
   }
 
-  if (appInventoryInspection || matches(text, /\u684c\u9762|\u6253\u5f00|\u805a\u7126|\u70b9\u51fb|\u8f93\u5165|\u5e94\u7528|\u8f6f\u4ef6|\b(?:desktop|open|click|type|app|application)\b/i)) {
+  if (appInventoryInspection || normalizedIntent.rule === 'explicit-local-desktop-operation'
+    || affirmativeActionInstructionClauses(rawInput).some(({ probe }) =>
+      // i18n-allow: Direct UI predicates; descriptive application/link words are not operations.
+      /^(?:(?:请你?|帮我|麻烦你?|现在|先|再|然后|直接)\s*)*(?:(?:在|向|往)[^，,。；;\n]{1,80}(?:中|里|内)\s*)?(?:(?:操作|控制)(?:当前|本机)?桌面\s*(?:打开|启动|运行|切换到|最大化|最小化|还原|关闭)|点击|输入|聚焦|(?:查看|检查|看看)\s*(?:当前)?桌面)|^(?:(?:please|now|then|first|next)\s+)*(?:click|type|focus)\b/iu.test(withoutLocationLiterals(probe).trim()))) {
     return buildDesktopOperationContract();
   }
 
@@ -541,6 +544,8 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
  */
 export function buildActionEvidenceContract(input: string, analysis?: ActionIntentAnalysis,
   accepted?: { readonly taskText: string; readonly contract: LumiActionContract }): LumiActionContract {
+  // Known server context is evidence, not additional current-turn obligations.
+  if (accepted && accepted.taskText === extractPrimaryTaskText(input)) input = accepted.taskText;
   const contract = accepted?.taskText === input ? accepted.contract : buildActionContract(input, undefined, analysis);
   if (!contract.components?.length && contract.kind === 'artifact_work' && !hasExplicitNoToolInstruction(input) && !isInformationOnlyQuestion(input, analysis)) {
     const artifacts = requestedArtifactInstructions(input);
@@ -550,12 +555,23 @@ export function buildActionEvidenceContract(input: string, analysis?: ActionInte
       start: clauses.find(item => output.text.startsWith(item.text.trim()))?.start ?? Infinity,
       probes: new Set(artifactInstructionClauses(output.text).map(item => item.probe.trim())),
     }));
-    const sources = clauses.filter(item => requestsExactReadOnlyArtifactInspection(item.probe)
+    const sourceClauses = clauses.filter(item => requestsExactReadOnlyArtifactInspection(item.probe)
       && independentActionClauses(withoutLocationLiterals(item.probe), true).some(text => affirmative.has(text))
-      && !outputSteps.some(output => item.start >= output.start && output.probes.has(item.probe.trim())))
-      .map(({ text }) => ({ text: text.trim(), contract: buildActionContract(text, undefined, analysis) }));
-    if (artifacts.length > 1 || sources.length) return combineActionContracts(contract, [...sources,
-      ...artifacts.map(({ text }) => ({ text, contract: buildActionContract(text, undefined, analysis) }))]);
+      && !outputSteps.some(output => item.start >= output.start && output.probes.has(item.probe.trim())));
+    const sources = sourceClauses.map(({ text }) => ({ text: text.trim(), contract: buildActionContract(text, undefined, analysis) }));
+    const additional = (artifacts.length ? affirmativeActionInstructionClauses(input) : [])
+      .filter(item => !sourceClauses.some(source => source.start === item.start)
+        && !outputSteps.some(output => output.start === item.start)
+        && !(requestsExactReadOnlyArtifactInspection(item.probe)
+          && outputSteps.some(output => item.start >= output.start && output.probes.has(item.probe.trim())))
+        && independentActionClauses(withoutLocationLiterals(item.probe), true).length > 0)
+      .map(({ text, probe }) => ({ text: text.trim(), contract: buildActionContract(probe, undefined, analysis) }))
+      .filter(item => item.contract.applies);
+    if (artifacts.length > 1 || sources.length || additional.length) return combineActionContracts(contract, [...sources,
+      ...artifacts.map(({ text }) => {
+        const outputText = additional.reduce((value, item) => value.replace(item.text, ''), text).trim();
+        return { text: outputText, contract: buildActionContract(outputText, undefined, analysis) };
+      }), ...additional]);
   }
   // Reuse direct read intents: a path mentioned as a query value is not another source.
   if (!contract.components?.length && requestsExactReadOnlyArtifactInspection(input)) {

@@ -1,7 +1,6 @@
 import './helpers';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { initDatabase } from '../db_layer';
-import { buildModelSelfAwareness } from '../server/cognition/vision_routing';
 import { dispatchLLMCall, dispatchLLMCallStreaming, type LLMGetters } from '../server/llm/dispatch';
 import { runLumiTurn } from '../server/llm/lumi_turn';
 import { resetCircuit } from '../server/cloud/circuit_breaker';
@@ -42,7 +41,7 @@ function clients(streaming: boolean) {
 }
 
 function messages(): NormalizedMessage[] {
-  return [{ role: 'system', content: 'You are Lumi.' + buildModelSelfAwareness(primary.provider, primary.model, 'synthetic-identity-user') },
+  return [{ role: 'system', content: 'You are Lumi.' },
     { role: 'user', content: 'Which model is answering this message?', sourceMessageId: 'synthetic-identity-question' }];
 }
 

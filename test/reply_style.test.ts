@@ -1,22 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildTextReplyStyleOverlay,
   formatUserVisibleReplyForReadability,
   formatVerifiedTaskResultForReadability,
 } from '../server/cognition/reply_style';
 
 describe('shared text reply style', () => {
-  it('keeps task updates readable without exposing internal execution plumbing', () => {
-    const overlay = buildTextReplyStyleOverlay('task');
-
-    expect(overlay).toContain('blank line between paragraphs');
-    expect(overlay).toContain('verified outcome');
-    expect(overlay).toContain('exact blocker');
-    expect(overlay).toContain('Do not dump tool names, task ids, receipt schemas');
-    expect(overlay).toContain('Do not produce a single dense wall of text');
-    expect(overlay).toContain('list marker must start on its own line');
-  });
-
   it('places unmistakable adjacent Markdown task-result bullets on their own lines', () => {
     expect(formatVerifiedTaskResultForReadability(
       '根据读取内容：- 项目 name：lumi-core  - 项目 version：3.1.0',

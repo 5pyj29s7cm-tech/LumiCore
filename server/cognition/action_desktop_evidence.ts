@@ -3,15 +3,18 @@ import { toolRecordSucceeded } from '../tools/receipt_payload';
 import type { ToolExecutionRecord } from '../tools/types';
 import { sameArtifactPath } from '../tools/artifact_evidence';
 import { toolRecordHasTerminalPayload, toolRecordTerminalPayload } from '../tools/receipt_payload';
-import type { ActionIntentAnalysis } from './normalized_action_intent';
+import { normalizeActionIntent, type ActionIntentAnalysis } from './normalized_action_intent';
 import type { TaskCapsuleV1 } from '../conversation/task_capsule';
 import { hasRequestedArtifactMutation } from './tool_intent';
 import type { AcceptedTaskTarget } from '../conversation/task_target_anchor';
 import { sourceDocumentInstruction } from '../conversation/task_target_anchor';
-import { preservedSourceOutputScope } from './artifact_write_scope';
+import { preservedSourceOutputScope, resolveExplicitUserArtifactPath } from './artifact_write_scope';
+import { affirmativeActionInstructionClauses } from './action_instruction_clauses';
+import { withoutLocationLiterals } from './location_literals';
+import { FILE_NAME_RE } from '../conversation/targets/recognition';
 import { parseRecordJson, compact, recordText, expandSuccessfulRecords } from "./action_contract_support";
 import { requestedDesktopTargetAliases, matchesRequestedDesktopTarget, collectStructuredDesktopTargets, normalizeDesktopTarget, requestedBrowserTargetAliases } from "./desktop_action_target";
-import { extractDesktopLaunchTarget, extractSimpleDesktopOpenTarget, requestedMediaPlayerTarget, currentAppMutationRequirements, extractPrimaryTaskText, requiresCurrentAuthoringDocumentInspection } from "./action_request";
+import { extractDesktopLaunchTarget, extractSimpleDesktopOpenTarget, requestedMediaPlayerTarget, currentAppMutationRequirements, extractPrimaryTaskText, requiresCurrentAuthoringDocumentInspection, requiresArtifactPostWriteReadback } from "./action_request";
 
 export function hasVisibleAutoCadExecutionEvidence(
   records: ToolExecutionRecord[] = [],
@@ -926,7 +929,8 @@ export function actualDocumentReadContent(record: ToolExecutionRecord): string {
       .replace(/^Pages:\s*\d+\s*$/gimu, '')
       .replace(/^Info:\s*\{[^\r\n]*\}\s*$/gimu, '')
       .trim();
-    return withoutMetadata;
+    return /^Pages:\s*\d+\s*\r?\nInfo:\s*\{/u.test(rawResult)
+      ? withoutMetadata.replace(/\n--\s*\d+\s+of\s+\d+\s*--\s*$/u, '').trim() : withoutMetadata;
   }
   return rawResult;
 }
@@ -1033,17 +1037,65 @@ function explicitDocumentTargets(taskText: string): string[] {
 export function requestsExactReadOnlyArtifactInspection(taskText: string): boolean {
   const primary = compact(extractPrimaryTaskText(taskText));
   if (!primary) return false;
+  // A comparison of text already present in this chat is not a new source read.
+  // Use the shared quote/hypothesis projection; filenames are operands, never verbs.
+  const clauses = affirmativeActionInstructionClauses(primary);
+  const instructions = clauses.map(({ probe }) => withoutLocationLiterals(probe).trim());
+  // i18n-allow: explicit prior-source anchors and analytical instructions, not visible copy.
+  const priorSource = instructions.some(text => /^(?:(?:请|现在|直接|只|仅)\s*)*(?:根据|基于|依据|利用|用)[^，,。！？!?；;\n]{0,48}(?:刚才|刚刚|前面|之前|此前|先前|已经|已)[^，,。！？!?；;\n]{0,24}(?:读出|读取|读过|阅读|提取|展示|返回|提供)[^，,。！？!?；;\n]{0,24}(?:正文|文字|内容)/u.test(text)
+    || /^(?:please\s+)?(?:based\s+on|using|from)\b[^.!?;\n]{0,100}\b(?:already|previously|earlier)\b[^.!?;\n]{0,24}\b(?:read|extracted|shown|provided)\b/iu.test(text)
+      && /\b(?:text|contents?|body)\b/iu.test(text));
+  const contextAnalysis = instructions.some(text => /(?:比较|对比|总结|概括|归纳|计算|核算|汇总|回答|说明)|\b(?:compare|summari[sz]e|calculate|compute|answer|explain|report)\b/iu.test(text)); // i18n-allow: existing-context analysis.
+  const freshAction = instructions.some(text => /^(?:(?:请|麻烦你?|帮我|现在|直接|先|再|然后|接着|完整|只|重新|再次)\s*)*(?:读取|阅读|补读|读|查看|检查|审查)|^(?:(?:please|now|then|first|next|also)\s+)*(?:read|re-?read|inspect|check|review)\b|(?:重新\s*读取|再次\s*读取|再\s*读(?:取)?|重读)|\bre-?read(?:ing)?\b/iu.test(text)
+    || normalizeActionIntent(text).sideEffectClass !== 'none'); // i18n-allow: independent reads and side effects retain their evidence contracts.
+  if (priorSource && contextAnalysis && !freshAction) return false;
   // Keep this branch deliberately narrower than generic artifact work. A
   // create/write/edit request may inspect the source first, but that read is
   // preparation rather than completion of the requested mutation.
-  // i18n-allow: file analysis includes calculations over the accepted source.
-  const wantsSemanticRead = /(?:计算|核算|汇总|算出|口算|重新算|列出|金额|数量|\u8bfb\u53d6|\u9605\u8bfb|\u67e5\u770b|\u68c0\u67e5|\u68c0\u89c6|\u5206\u6790|\u603b\u7ed3|\u5ba1\u9605|\u5185\u5bb9|\u91cc\u9762|\u6587\u4ef6\u4e2d)|\b(?:read|calculate|recalculate|compute|inspect|examine|analy[sz]e|review|summari[sz]e|contents?|inside|marker|amount|quantity)\b/iu.test(primary);
+  // i18n-allow: Direct source-read predicates include calculations over the accepted source.
+  const hasSourceReadInstruction = (text: string) => /^(?:(?:请|麻烦你?|帮我|现在|直接|先|再|然后|接着|并|也|完整|只|仅|重新|再次)\s*)*(?:读取|阅读|补读|读|查看|检查|检视|分析|总结|审阅|审查|计算|核算|汇总|算出|口算)\s*|^(?:(?:please|now|directly|then|first|next|also)\s+)*(?:read|re-?read|calculate|recalculate|compute|inspect|examine|analy[sz]e|review|summari[sz]e)\b/iu.test(text);
+  // i18n-allow: File/attachment subject recognition in affirmative instructions only.
+  const hasFileSubject = (text: string) => /(?:附件|已有资料|提供的资料|\u6587\u4ef6|\u6587\u6863|\u8def\u5f84)|\b(?:attachment|file|document|filepath|path)\b|\b(?:read|inspect)\s+(?:the\s+)?(?:available|provided|attached)\s+source\b/iu.test(text) || explicitDocumentTargets(text).length > 0 || DOCUMENT_TARGET_MENTION_RE.test(text);
+  // A named source and a directed referential read may occupy separate clauses.
+  // Descriptions of a read or file contents are not commands.
+  // i18n-allow: Source-reference grammar, not domain-specific answer matching.
+  const refersToSource = (text: string) => /(?:其中|里面|其(?:主要|完整|全部)?(?:正文|文字|内容|金额|数量)|这(?:份|个)(?:文件|文档|附件|材料)?|该(?:份|文件|文档|附件|材料))|\b(?:its|their|it|them|in\s+(?:it|them)|(?:this|that|the)\s+(?:file|document|attachment|source))\b/iu.test(text);
+  const affirmative = clauses.map(({ probe }) => probe).join('\n');
+  const wantsSemanticRead = normalizeActionIntent(affirmative).rule === 'explicit-local-artifact-read'
+    || clauses.some(({ probe }, index) => hasSourceReadInstruction(instructions[index]) && hasFileSubject(probe))
+    || clauses.some(({ probe }) => hasFileSubject(probe)) && instructions.some(text => hasSourceReadInstruction(text) && refersToSource(text));
   if (!wantsSemanticRead) return false;
-  // i18n-allow: File/attachment subject recognition.
-  const hasFileSubject = /(?:附件|已有资料|提供的资料|\u6587\u4ef6|\u6587\u6863|\u6587\u672c|\u8def\u5f84)|\b(?:attachment|file|document|filepath|path)\b|\b(?:read|inspect)\s+(?:the\s+)?(?:available|provided|attached)\s+source\b/iu.test(primary) || explicitDocumentTargets(primary).length > 0 || DOCUMENT_TARGET_MENTION_RE.test(primary);
-  if (!hasFileSubject) return false;
-  const wantsMutation = hasRequestedArtifactMutation(primary);
+  const wantsMutation = hasRequestedArtifactMutation(affirmative) || requiresArtifactPostWriteReadback(affirmative);
   return !wantsMutation;
+}
+
+/** Project only the contiguous file operands of an existing affirmative read clause. */
+function explicitReadOnlyDocumentSources(taskText: string): Array<{ reference: string; path: string }> {
+  const sources: Array<{ reference: string; path: string }> = [];
+  for (const { probe } of affirmativeActionInstructionClauses(taskText)) {
+    const references = explicitDocumentTargets(probe).map(value => ({ value, start: probe.indexOf(value), end: probe.indexOf(value) + value.length }));
+    for (const match of probe.matchAll(new RegExp(FILE_NAME_RE.source, 'giu'))) {
+      const start = match.index!, end = start + match[0].length;
+      if (!references.some(reference => start < reference.end && end > reference.start)) references.push({ value: match[1], start, end });
+    }
+    references.sort((left, right) => left.start - right.start);
+    if (!references.length) continue;
+    const prefix = probe.slice(0, references[0].start).replace(/["'“”‘’`「」『』]/gu, '').trim();
+    // i18n-allow: Existing direct read predicate and explicit standard-folder operands.
+    if (!/^(?:(?:请|麻烦你?|帮我|现在|直接|先|再|然后|接着|完整|只)\s*)*(?:读取|阅读|查看|检查|分析|审查|总结)(?:一下)?\s*(?:(?:桌面|文档(?:目录|文件夹)|下载(?:目录|文件夹)?)(?:上|中|里|内|下|的)*\s*)?(?:(?:文件|文档|两份|两|这两份|以下|下面|源文件|已有资料)\s*)*$|^(?:(?:please|now|then|first|next)\s+)*(?:read|inspect|check|review|analy[sz]e|summari[sz]e)(?:\s+(?:the|both|all|desktop|downloads?|documents?|files?|source|available|provided|attached|complete|existing))*\s*$/iu.test(prefix)) continue;
+    let previous = references[0];
+    for (const reference of references) {
+      if (reference !== references[0]) {
+        const join = probe.slice(previous.end, reference.start).replace(/["'“”‘’`「」『』\s]/gu, '');
+        // i18n-allow: A coordinated operand list, not filenames mentioned in requested field values or document prose.
+        if (!/^(?:和|与|及|以及|、|and(?:the)?|&)$/iu.test(join)) break;
+      }
+      sources.push({ reference: reference.value, path: resolveExplicitUserArtifactPath('"' + reference.value + '"', probe.slice(0, references[0].start)) });
+      previous = reference;
+    }
+  }
+  return sources.filter((source, index) => sources.findIndex(other => (source.path && other.path)
+    ? sameExactDocumentTarget(source.path, other.path) : source.reference === other.reference) === index);
 }
 
 /**
@@ -1081,15 +1133,23 @@ export function documentReadMatchesRequestedTarget(
   const primaryTask = sourceDocumentInstruction(preservedSourceOutputScope(requestedTask)?.sourceText || requestedTask);
   if (!target || !primaryTask) return false;
 
+  const explicitSources = explicitReadOnlyDocumentSources(primaryTask);
+  if (explicitSources.length) return explicitSources.some(source => source.path
+    ? sameExactDocumentTarget(source.path, target)
+    : sameDocumentBasename(source.reference, target)
+      && (!acceptedTaskTarget?.target.path || acceptedTaskTarget.target.status !== 'rejected'
+        && sameExactDocumentTarget(acceptedTaskTarget.target.path, target)));
+  const affirmativeTask = affirmativeActionInstructionClauses(primaryTask).map(({ probe }) => probe).join('\n');
+
   // When the user supplied an absolute document path, basename equality is
   // insufficient: two directories may legitimately contain the same name.
-  const absoluteTargets = explicitDocumentTargets(primaryTask);
+  const absoluteTargets = explicitDocumentTargets(affirmativeTask);
   if (absoluteTargets.length > 0) {
     return absoluteTargets.some(candidate => sameExactDocumentTarget(candidate, target));
   }
 
   // i18n-allow: Current-upload reference recognition.
-  if (/(?:附件|这个文件|该文件|这张图|这个图|\b(?:this\s+)?attachment\b)/iu.test(primaryTask) && currentAttachmentPaths.length) {
+  if (/(?:附件|这个文件|该文件|这张图|这个图|\b(?:this\s+)?attachment\b)/iu.test(affirmativeTask) && currentAttachmentPaths.length) {
     return currentAttachmentPaths.some(candidate => sameExactDocumentTarget(candidate, target));
   }
 
@@ -1100,7 +1160,7 @@ export function documentReadMatchesRequestedTarget(
 
   const targetName = documentBasename(target, record.name === 'ocr_image_file' ? /\.(?:png|jpe?g|webp|bmp|gif|tiff?)$/i : DOCUMENT_TARGET_EXTENSION_RE);
   if (targetName) {
-    const normalizedTask = primaryTask.normalize('NFKC').toLocaleLowerCase('en-US');
+    const normalizedTask = affirmativeTask.normalize('NFKC').toLocaleLowerCase('en-US');
     if (normalizedTask.includes(targetName.normalize('NFKC').toLocaleLowerCase('en-US'))) {
       return true;
     }
@@ -1120,7 +1180,7 @@ export function documentReadMatchesRequestedTarget(
     normalizedTask.includes(identity.normalize('NFKC').toLocaleLowerCase('en-US'))
   ))) return true;
   const envelopeTarget = compact(record.envelope?.targetIdentity);
-  const refersToAttachment = /(?:附件|这个文件|该文件|这张图|这个图|\b(?:this\s+)?attachment\b)/iu.test(primaryTask); // i18n-allow: reviewed attachment-reference intent.
+  const refersToAttachment = /(?:附件|这个文件|该文件|这张图|这个图|\b(?:this\s+)?attachment\b)/iu.test(affirmativeTask); // i18n-allow: reviewed attachment-reference intent.
   return refersToAttachment
     && envelopeTarget.length >= 4
     && explicitAttachmentIdentities.some(identity => identity === envelopeTarget);
@@ -1132,11 +1192,10 @@ export function hasVerifiedExactReadOnlyArtifactEvidence(
   acceptedTaskTarget?: AcceptedTaskTarget,
 ): boolean {
   if (!requestsExactReadOnlyArtifactInspection(taskText)) return false;
-  return records.some(record => {
-    if (
-      record.terminalVerification?.status !== 'verified'
-      || !isSuccessfulExactDocumentRead(record)
-    ) return false;
-    return documentReadMatchesRequestedTarget(record, taskText, acceptedTaskTarget);
-  });
+  const successful = records.filter(record => record.terminalVerification?.status === 'verified'
+    && isSuccessfulExactDocumentRead(record));
+  const sources = explicitReadOnlyDocumentSources(sourceDocumentInstruction(taskText));
+  if (sources.length > 1) return sources.every(source => Boolean(source.path)
+    && successful.some(record => sameExactDocumentTarget(source.path, exactDocumentReadTarget(record))));
+  return successful.some(record => documentReadMatchesRequestedTarget(record, taskText, acceptedTaskTarget));
 }

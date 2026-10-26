@@ -45,27 +45,33 @@ export function OrgPortal({
   useEffect(() => {
     if (!user) { setLoading(false); return; }
     let cancelled = false;
+    const controller = new AbortController();
+    const activateExistingOrg = async (connection: OrgStatus) => {
+      if (cancelled) return;
+      if (connection.sessionConnected && workDomain === 'work' && orgConnection?.orgId === connection.orgId) {
+        setStatus(connection);
+        return;
+      }
+      const result = await switchDomain('work', {
+        orgId: connection.orgId!, orgName: connection.orgName, signal: controller.signal,
+      });
+      if (cancelled) return;
+      setStatus(result.success ? { ...connection, ...result.connection, sessionConnected: true } : { ...connection, sessionConnected: false });
+      if (!result.success) setSwitchMsg(result.message || uiMessage('org-portal.failed-to-switch-to-work.2aa0470780'));
+    };
     const discoverExistingOrg = async (): Promise<boolean> => {
       try {
-        const orgsRes = await apiFetch('/api/auth/orgs');
+        const orgsRes = await apiFetch('/api/auth/orgs', { signal: controller.signal });
         if (!orgsRes.ok) return false;
         const data = await orgsRes.json().catch(() => ({}));
         const orgs = Array.isArray(data?.orgs) ? data.orgs : (Array.isArray(data) ? data : []);
         const org = orgs[0];
         const orgId = org?.id || org?.orgId;
-        if (!orgId) return false;
+        if (cancelled || !orgId) return false;
 
         const orgRole = org?.role || org?.orgRole || (org?.ownerUid === (user as any)?.uid ? 'owner' : 'member');
         const orgName = org?.name || org?.orgName || '';
-        localStorage.setItem('lumi_org_connection', JSON.stringify({
-          orgId,
-          orgRole,
-          orgName,
-          connected: true,
-        }));
-        if (!cancelled) {
-          setStatus({ connected: true, orgId, orgRole, orgName, sessionConnected: false });
-        }
+        await activateExistingOrg({ connected: true, orgId, orgRole, orgName, sessionConnected: false });
         return true;
       } catch {
         return false;
@@ -74,10 +80,10 @@ export function OrgPortal({
     const checkStatus = async (retries = 2) => {
       for (let i = 0; i <= retries; i++) {
         try {
-          const s = await apiFetch('/api/org/status').then(r => r.json());
+          const s = await apiFetch('/api/org/status', { signal: controller.signal }).then(r => r.json());
           if (!cancelled) {
             if (s.orgId) {
-              setStatus({
+              await activateExistingOrg({
                 connected: true,
                 orgId: s.orgId,
                 orgRole: s.orgRole,
@@ -89,6 +95,7 @@ export function OrgPortal({
             }
 
             const discovered = await discoverExistingOrg();
+            if (cancelled) return;
             if (!discovered) {
               setStatus({ connected: false, orgId: null, orgRole: null, sessionConnected: false });
               localStorage.removeItem('lumi_org_connection');
@@ -105,7 +112,7 @@ export function OrgPortal({
       if (!cancelled) setLoading(false);
     };
     checkStatus();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
   }, [user]);
 
   const handleCreateOrg = async () => {
@@ -183,16 +190,13 @@ export function OrgPortal({
           </div>
           <div>
             <h2 className="text-xl font-bold text-white">{t.orgWorkSpace || 'Organization Workspace'}</h2>
-            <p className="text-white/45 text-sm mt-2">
-              {uiMessage('org-portal.you-have-joined-an-organization.ea1042968a')}
-            </p>
           </div>
           {switchMsg && <p className="text-red-400 text-sm">{switchMsg}</p>}
           <button
             onClick={async () => {
               setSwitchMsg('');
               setSwitchingWork(true);
-              const result = await switchDomain('work');
+              const result = await switchDomain('work', { orgId: status?.orgId || orgConnection?.orgId, orgName: status?.orgName || orgConnection?.orgName });
               if (result.success) {
                 setStatus({
                   connected: true,
@@ -210,7 +214,7 @@ export function OrgPortal({
             className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl font-medium transition-colors"
           >
             {switchingWork ? <Loader2 size={18} className="animate-spin" /> : <Briefcase size={18} />}
-            {switchingWork ? uiMessage('org-portal.switching.c197a0b742') : uiMessage('org-portal.switch-to-work-domain.ac0a56b956')}
+            {switchingWork ? uiMessage('org-portal.switching.c197a0b742') : t.retry}
           </button>
           {onBack && (
             <button onClick={onBack} className="text-white/50 text-sm hover:text-white/70">

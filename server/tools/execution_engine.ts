@@ -1,4 +1,4 @@
-import { toolExecutionIdentity } from './execution_identity';
+import { defaultLocalToolExecutionKey, toolExecutionIdentity } from './execution_identity';
 import { brandCanonicalToolExecutionRecord, isCanonicalToolExecutionRecord, type ToolExecutionInputDigests } from './canonical_execution_record';
 export { isCanonicalToolExecutionRecord, getCanonicalToolExecutionInputDigests } from './canonical_execution_record';
 export type { ToolExecutionInputDigests } from './canonical_execution_record';
@@ -501,6 +501,8 @@ export async function executeToolCall(
   const targetPolicy = callerPreflight.allowed && (isFileTargetTask(targetPolicyTaskText) || input.context?.acceptedTaskTarget)
     ? guardTaskTargetToolCall({
         taskText: targetPolicyTaskText,
+        requestId: input.context?.requestId,
+        taskId: input.context?.taskId,
         toolName: semanticToolName,
         arguments: callerArguments,
         toolRecords: serverTargetPolicyEvidence(input.context, targetPolicyTaskText),
@@ -602,7 +604,7 @@ export async function executeToolCall(
   const canonicalLocalCallKey = !resolvedIdempotencyKey && record.id && record.requestId && capability
     && !capability.sideEffects.some((effect: { type: string }) => (
       effect.type === 'external_state_change' || effect.type === 'external_communication'
-    )) ? createHash('sha256').update(JSON.stringify([record.taskId || '', record.requestId, record.name, record.id])).digest('hex') : undefined;
+    )) ? defaultLocalToolExecutionKey(record) : undefined;
   record.idempotencyKey = resolvedIdempotencyKey || canonicalLocalCallKey || toolRecordIdempotencyKey(record);
   let finishMetric: ReturnType<typeof beginToolMetric> | undefined;
   const finalizeRecord = (): ToolExecutionRecord => {

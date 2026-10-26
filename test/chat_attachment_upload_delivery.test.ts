@@ -101,16 +101,7 @@ describe('chat sends wait for selected attachments', () => {
     oldBatch.finish(newer!);
   });
 
-  it('applies the same send barrier to native path imports', async () => {
-    const h = pageHarness();
-    const uploading = h.deps.importChatAttachmentPaths(['C:/synthetic/current-budget.txt']);
-    h.send();
-    expect(h.emitted).toHaveLength(0);
-    h.response.resolve(newFileReply());
-    await uploading;
-    h.send();
-    expect(buildBackendAttachmentContext(h.emitted[0].payload.attachments)).toContain('NEW_DOCUMENT_ONLY');
-  });
+
 
 });
 

@@ -1,11 +1,12 @@
 import type { ProviderGetters } from "./provider_getters";
 import { createModelTurnState } from "./model_turn_state";
+import { isModelDeadlineError, isModelContextCapacityError } from './model_routing_receipts';
 import { CN_MODEL_FAILURE_BEFORE_EXECUTION } from "../regions/messages/voice_fast_path_messages";
 import type { ToolRegistry } from "../tools/registry";
 import type { ToolExecutionRecord, ToolContext } from "../tools/types";
 import { type NormalizedMessage, makeLLMCall, resolveModelAttemptTimeouts, type StreamCallback, type ModelAttemptTimeouts } from "./providers";
 import type { LLMConfig, LLMResult, LLMUsageRecord } from './tool_loop/contracts';
-import { positiveBudget, DEFAULT_TOOL_LOOP_MODEL_WAIT_BUDGET_MS, ToolLoopModelBudget } from './tool_loop/model_budget';
+import { positiveBudget, ToolLoopModelBudget } from './tool_loop/model_budget';
 import { DEFAULT_TOOL_LIFECYCLE_OBSERVER_TIMEOUT_MS, ToolLifecyclePersistenceError, toolLifecycleCallKey, waitForToolLifecycleObserver, isToolLifecyclePersistenceError } from './tool_loop/lifecycle';
 import { resolveToolInvocationBudget } from './tool_loop/invocation_budget';
 import { isCallerCancellation, buildVerifiedToolCheckpoint } from './tool_loop/checkpoints';
@@ -29,12 +30,10 @@ export { DEFAULT_TOOL_LIFECYCLE_OBSERVER_TIMEOUT_MS } from './tool_loop/lifecycl
 export { resolveRequiredToolNamesForModel } from './tool_loop/runtime_activation';
 export { isUntrustedToolOutput } from './tool_loop/receipts';
 export { wrapToolOutputForModel } from './tool_loop/receipts';
-export { compactToolResultForModel } from './tool_loop/receipts';
 export { formatToolRecordForModel } from './tool_loop/receipts';
 export { buildConfirmedStepContinuationMessages } from './tool_loop/recovery';
 export { buildArtifactProgressPrompt } from './tool_loop/artifacts';
 export { resolveArtifactReadbackCall } from './tool_loop/artifacts';
-export { compactToolLoopMessagesForModel } from './tool_loop/context_budget';
 export { localizeInternalStatusLeak } from './tool_loop/summaries';
 export { isForbiddenLocalCadImageFallback } from './tool_loop/artifacts';
 export { ToolLoopModelBudgetError } from './tool_loop/model_budget';
@@ -75,7 +74,7 @@ export async function runWithTools(
   };
   const modelWaitBudgetMs = positiveBudget(
     config.modelWaitBudgetMs ?? context?.toolPolicy?.modelWaitBudgetMs,
-    DEFAULT_TOOL_LOOP_MODEL_WAIT_BUDGET_MS,
+    Infinity,
   );
   const lifecycleObserverTimeoutMs = positiveBudget(
     config.toolLifecycleObserverTimeoutMs,
@@ -85,7 +84,7 @@ export async function runWithTools(
   const toolInvocationBudget = resolveToolInvocationBudget(context);
   const observedRecords: ToolExecutionRecord[] = [];
   const observedUsageRecords: LLMUsageRecord[] = [];
-  let activeToolCall: { id?: string; name: string; arguments: Record<string, any> } | undefined;
+  let activeToolCall: { id?: string; idempotencyKey?: string; name: string; arguments: Record<string, any> } | undefined;
   const durablyStartedToolCalls = new Set<string>();
   const adapterStartPersistenceErrors = new Map<string, ToolLifecyclePersistenceError>();
   const claimedTerminalToolCalls = new Set<string>();
@@ -142,6 +141,7 @@ export async function runWithTools(
         onToolStart: call => {
           activeToolCall = {
             id: call.id,
+            idempotencyKey: call.idempotencyKey,
             name: call.name,
             arguments: { ...(call.arguments || {}) },
           };
@@ -216,16 +216,22 @@ export async function runWithTools(
     return await operation;
   } catch (error) {
     if (isToolLifecyclePersistenceError(error)) throw error;
-    if (isCallerCancellation(config.signal, context?.isCancelled)) {
+    if (isCallerCancellation(config.signal, context?.isCancelled)
+      && !isModelDeadlineError(error) && !isModelDeadlineError(config.signal?.reason)) {
       return {
         text: 'Task was cancelled by the user.',
         toolCalls: [...priorToolRecords, ...observedRecords],
         usageRecords: observedUsageRecords,
       };
     }
+    let checkpointFailure = error;
     const checkpointRecords = [...priorToolRecords, ...observedRecords];
+    if (isModelContextCapacityError(error)) {
+      const guarded = buildVerifiedToolCheckpoint(checkpointRecords, getPrimaryUserText(messages), context, error);
+      return { text: guarded.text, completionGuard: guarded, toolCalls: checkpointRecords, usageRecords: observedUsageRecords };
+    }
     if (priorToolRecords.length > 0 && observedRecords.length === 0
-      && priorToolRecords.every(record => Boolean(record.error))) {
+      && priorToolRecords.every(record => Boolean(record.error)) && !isModelDeadlineError(error)) {
       // Prior failures cannot prove that this model attempt reached a tool.
       // i18n-allow: Current model failure, distinct from historical tool failures.
       const text = /[\u3400-\u9fff]/u.test(getPrimaryUserText(messages))
@@ -282,6 +288,7 @@ export async function runWithTools(
           );
         }
       } catch (continuationError) {
+        checkpointFailure = continuationError;
         if (isToolLifecyclePersistenceError(continuationError)) {
           throw continuationError;
         }
@@ -291,7 +298,7 @@ export async function runWithTools(
     }
     if (checkpointRecords.length > 0) {
       recordWorkflowIfToolsUsed(checkpointRecords, messages, config);
-      const guarded = buildVerifiedToolCheckpoint(checkpointRecords, getPrimaryUserText(messages), context);
+      const guarded = buildVerifiedToolCheckpoint(checkpointRecords, getPrimaryUserText(messages), context, checkpointFailure);
       return {
         text: guarded.text,
         completionGuard: guarded,

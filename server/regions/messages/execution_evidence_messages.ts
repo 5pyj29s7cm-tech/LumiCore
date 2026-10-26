@@ -48,17 +48,9 @@ export const CN_EXECUTION_EVIDENCE_MESSAGES = {
   playbackObservationUnavailable: '暂时无法读取播放画面，不能确认是否开始播放；我已停止后续操作。',
   playbackTargetChanged: '播放窗口发生了变化，未能确认正片已开始；我已停止后续操作。',
   playbackProgressUnconfirmed: '已保留当前进度，并停下后续操作。我还没看到可靠的播放进度，暂时无法确认已开始播放。',
-  ledgerOnlyTaskCompletion: '任务账本只证明了记账或状态写回，不证明任务步骤已实际执行。本轮没有真实动作的已验证终态回执，不能将该步骤标记为完成。',
-  unsupportedCommunicationClaim: '刚才没有取得发送成功的确认，因此不能说已经发送。',
-  unsupportedReminderClaim: '刚才没有记录到提醒或定时任务创建成功。',
-  unsupportedPlaybackClaim: '还没有确认播放器达到了你要求的状态。',
   incompleteComponent: (instruction: string) => `尚未完成：${instruction}`,
   mediaPaused: '已确认播放器暂停。',
   mediaPauseUnconfirmed: '还没有确认播放器已暂停。',
-  unsupportedFileMutationClaim: '目前没有确认文件已经写入、复制、移动或删除。',
-  unsupportedOpenClaim: '目前没有确认目标已经打开。',
-  unsupportedRuntimeConfigurationClaim: '我还没有读取当前语音或模型配置，不能确定正在使用哪个音色或服务。',
-  unsupportedRealWorldClaim: '目前没有可核实的执行结果。',
   verifiedDocumentObservation: '文件内容已成功读取。',
   verifiedDocumentReadWithoutAnalysis: '文件内容已经成功读取，但分析结论还没有生成；当前只能确认读取完成，不能把整项分析标记为完成。',
   mismatchedDocumentReadTarget: '本轮读取回执对应的不是你指定的文件，因此不能据此完成这次分析。',
@@ -71,7 +63,7 @@ export const CN_EXECUTION_EVIDENCE_MESSAGES = {
   recoveryStepUnconfirmed: (hasProgress: boolean) => (
     `还没有。现有结果还不能确认这一步已经完成；${hasProgress ? '已经完成的部分不会重做，' : ''}可以从这里继续。`
   ),
-  recoveryNoResult: '还没有。这次没有拿到可以确认的操作结果；可以先重新确认目标，再继续处理。',
+  recoveryNoResult: '这项操作还没有完成。',
   recoveryBareReaction: '抱歉，刚才没有接好你的话。你直接告诉我哪里不对，我从当前对话接着处理。',
   recoveryFailureSentence: (detail: string) => detail ? `刚才这一步没有完成：${detail}` : '刚才这一步没有完成',
   recoveryActionFailureSentence: (action: string, reason: string) => action === '当前操作'
@@ -80,7 +72,7 @@ export const CN_EXECUTION_EVIDENCE_MESSAGES = {
   recoveryRetry: (failure: string, hasProgress: boolean) => (
     `${failure}。${hasProgress ? '已经完成的部分不会重做，' : ''}可以从这里重试。`
   ),
-  recoveryNoResultRetry: '刚才这一步没有完成：这次没有拿到可以确认的操作结果。重新确认目标后，可以从这里继续。',
+  recoveryNoResultRetry: '这次操作没有完成，请重试。',
   recoveryActionDesktop: '桌面操作',
   recoveryActionBrowser: '浏览器操作',
   recoveryActionClient: '客户端操作',

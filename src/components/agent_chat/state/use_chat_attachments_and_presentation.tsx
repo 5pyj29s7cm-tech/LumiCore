@@ -306,12 +306,19 @@ export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<t
     }
   }, [openNativeFilePath, scopedFileUrl]);
 
-  const openChatFile = useCallback(async (file: Pick<ChatFilePanelItem, 'fileName' | 'fileId' | 'path' | 'openUrl' | 'saveUrl'>) => {
+  const openChatFile = useCallback(async (file: Pick<ChatFilePanelItem, 'fileName' | 'fileId' | 'path' | 'openUrl' | 'saveUrl'>, mode?: 'preview') => {
+    if (mode !== 'preview' && platform === 'tauri' && file.path && /\.(?:pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|txt|md|csv|tsv)$/iu.test(file.fileName)) {
+      try {
+        if (await openNativeFilePath(file.path)) return;
+      } catch {
+        toast.error(uiMessage('agent-chat-page.default-app-failed-opening-the.56984c4d66'));
+      }
+    }
     const url = file.openUrl || file.saveUrl || (file.fileId
       ? scopedFileUrl(`/api/files/download/${encodeURIComponent(file.fileId)}?inline=1`)
       : file.path ? makeChatArtifact(file.path, attachmentConversationIdRef.current).url : '');
     if (url) setPreviewFile({ fileName: file.fileName, path: file.path, url });
-  }, [attachmentConversationIdRef, scopedFileUrl, setPreviewFile]);
+  }, [attachmentConversationIdRef, openNativeFilePath, platform, scopedFileUrl, setPreviewFile]);
 
   const chatFileSections = useMemo(() => {
     const pending: ChatFilePanelItem[] = pendingAttachments.map(item => ({

@@ -659,8 +659,8 @@ export function sanitizeUserFacingExecutionOutput(
   value: unknown,
   options: UserFacingOutputProtectionOptions = {},
 ): string {
-  const raw = stringify(value).trim();
-  if (!raw) return '';
+  const raw = stringify(value);
+  if (!raw.trim()) return '';
   const inspected = inspectPublicExecutionReferences({ task: options.task || '', toolCalls: options.toolRecords || [], ...options }, raw);
   const projected = projectExecutionReferenceText(raw, [], inspected.verifiedText, inspected.metadataReferences);
   const redacted = sanitizePublicExecutionText(redactSensitive(projected));
@@ -668,10 +668,7 @@ export function sanitizeUserFacingExecutionOutput(
     options.trustedConfirmationRequestText || '',
   ).trim();
   if (trustedConfirmationRequestText && raw === trustedConfirmationRequestText) return redacted;
-  const unscopedOutput = inspected.verifiedText.map(text => text.trim()).sort((a, b) => b.length - a.length)
-    .reduce((text, verified) => verified ? text.replace(verified, '') : text, redacted);
-  const oversizedUnscopedOutput = unscopedOutput.length > 50_000;
-  if (!containsUnsafeToolPayload(redacted) && !oversizedUnscopedOutput) return redacted;
+  if (!containsUnsafeToolPayload(redacted)) return redacted;
   return humanSummary(redacted, options).slice(0, 1_200);
 }
 

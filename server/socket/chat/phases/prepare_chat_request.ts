@@ -19,7 +19,7 @@ import { resolveConversationForEntry } from "../../../conversation/entry_convers
 import { buildSocketNativeRequestBinding } from "../../native_request_binding";
 import type { createConversationReceiptObserver } from "../../../conversation/execution_receipt_archive";
 import { buildSocketToolSecurityContext, resolveAuthorizedSocketScope } from "../../scope";
-import { buildNaturalReplyStyleOverlay, chatDurabilityUnknownText } from './shared';
+import { chatDurabilityUnknownText } from './shared';
 
 export async function prepareChatRequest(socket: Socket, llmGetters: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen' | 'getOllama' | 'isOllamaAvailable' | 'getLmStudio' | 'isLmStudioAvailable'>>, sensoryFn: (uid: string) => any, userIdFn: (s: Socket) => string, io: Server, data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; operationMode?: string; source?: string; requestId?: string; conversationId?: string; controlTargetRequestId?: string; controlTargetTaskId?: string; controlTargetRevision?: number; mediaRequest?: unknown }, ack?: (payload: { ok: boolean; requestId?: string; receivedAt?: string; error?: string }) => void) {
 
@@ -228,7 +228,6 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
     runAuthorizedTools,
     modelTurnState,
     allowAdaptiveLearning,
-    buildNaturalReplyStyleOverlay,
     chatDurabilityUnknownText,
   } };
 }

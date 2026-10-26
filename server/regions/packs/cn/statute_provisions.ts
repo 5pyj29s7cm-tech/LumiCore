@@ -37,22 +37,129 @@ export const statuteTextCopy = {
 export function quotedStatuteText(text: string): string | undefined {
   return text.match(/^\s*(?:(?:规定|明确|指出|要求)(?:为|了|如下)?)?\s*[：:,，]?\s*[“"‘'「『]([^”"’'」』]+)[”"’'」』]/)?.[1];
 }
-const ARTICLE = `第${NUM}条(?:之${NUM})?(?:\\s*第${NUM}款)?(?:\\s*第[（(]?${NUM}[）)]?项)?`;
-export function extractStatuteReferences(text: string): Array<{ citation: string; quotedText?: string }> {
-  const result: Array<{ citation: string; quotedText?: string }> = [];
-  const pattern = new RegExp(`《([^》]+)》\\s*(?:${ARTICLE})?`, 'g');
+/** Cosmetic title matching only; callers still require an unambiguous source identity. */
+export function normalizeStatuteReferenceTitle(title: string): string {
+  return title.replace(/[《》〈〉\s]/gu, '');
+}
+
+export interface StatuteReference {
+  citation: string;
+  quotedText?: string;
+  lawName?: string;
+  articleKey?: string;
+}
+const INLINE = '[ \\t　]*';
+const ARTICLE = `第${NUM}条(?:之${NUM})?(?:${INLINE}第${NUM}款)?(?:${INLINE}第[（(]?${NUM}[）)]?项)?`;
+// Outer titles can contain an inner book title; no title is inferred from topics.
+const LAW_TITLE = '《((?:[^《》\\r\\n]|《[^《》\\r\\n]*》)+)》';
+const DISPLAY_ARTICLE = `(?:(?<plainLocator>${ARTICLE})|(?<locatorMarker>\\*\\*|__|\\*|_)(?<displayLocator>${ARTICLE})\\k<locatorMarker>)`;
+function explicitStatuteReferences(text: string, blockquote?: string): StatuteReference[] {
+  const result: StatuteReference[] = [];
+  const pattern = new RegExp(`${LAW_TITLE}${INLINE}(?:${DISPLAY_ARTICLE})?`, 'g');
+  const reference = (lawName: string, citation: string, tail = ''): StatuteReference => {
+    const article = citation.match(new RegExp(`第(${NUM})条(?:之(${NUM}))?`));
+    // Markdown may wrap the locator, while a parenthesis labels its quoted text.
+    const boundary = (value: string) => value.replace(/^[ \t　]*(?:(?:\*\*|__|\*|_)[ \t　]*)*/u, '');
+    let quoteTail = boundary(tail.split(/\r?\n/u, 1)[0]);
+    quoteTail = boundary(quoteTail.replace(/^[（(][^()（）\r\n]{0,160}[）)]/u, ''));
+    const lead = quoteTail.match(/^(?:(?:规定|明确|指出|要求)(?:为|了|如下)?)?[ \t　]*[：:,，][ \t　]*/u);
+    if (lead) quoteTail = lead[0] + boundary(quoteTail.slice(lead[0].length));
+    return { citation, lawName, ...(article ? { articleKey: `${statuteNumber(article[1])}${article[2] ? '-' + statuteNumber(article[2]) : ''}` } : {}),
+      quotedText: quotedStatuteText(quoteTail) ?? (blockquote && /^[ \t　：:,，]*$/u.test(quoteTail) ? blockquote : undefined) };
+  };
   for (const match of text.matchAll(pattern)) {
     if (/(?:合同|协议|规格书|说明书|招标文件|投标文件|采购文件|报价单|证据目录|起诉状|答辩状|授权委托书)(?:[（(][^）)]*[）)])?$/.test(match[1])) continue;
-    let citation = match[0].trim();
+    let citation = match.groups?.displayLocator ? `《${match[1]}》${match.groups.displayLocator}` : match[0].trim();
     let offset = match.index! + match[0].length;
     for (;;) {
-      const next = text.slice(offset).match(new RegExp(`^\\s*[、，,及和至到]\\s*(${ARTICLE})`));
+      const next = text.slice(offset).match(new RegExp(`^${INLINE}[、，,及和至到]${INLINE}${DISPLAY_ARTICLE}`));
       if (!next) break;
-      result.push({ citation });
-      citation = `《${match[1]}》${next[1]}`;
+      result.push(reference(match[1], citation));
+      citation = `《${match[1]}》${next.groups?.plainLocator || next.groups?.displayLocator}`;
       offset += next[0].length;
     }
-    result.push({ citation, quotedText: quotedStatuteText(text.slice(offset)) });
+    result.push(reference(match[1], citation, text.slice(offset)));
+  }
+  return result;
+}
+
+
+/** Only an adjacent, continuous literal block belongs to this explicit locator. */
+function adjacentStatuteBlockquote(lines: string[], index: number): string | undefined {
+  let next = index + 1;
+  while (next < lines.length && !lines[next].trim()) next += 1;
+  const literal: string[] = [];
+  for (; next < lines.length; next += 1) {
+    const quoted = lines[next].match(/^ {0,3}> ?(.*)$/u);
+    if (!quoted) break;
+    const content = quoted[1];
+    if (/^(?: {4}|\t|#{1,6}(?:\s|$)|`{3,}|~{3,})/u.test(content)
+      || new RegExp(`^(?:\\*\\*|__|\\*|_)?(?:${LAW_TITLE}|${ARTICLE})`, 'u').test(content)) break;
+    literal.push(content);
+  }
+  if (!literal.some(line => line.trim())) return undefined;
+  return literal.map(line => {
+    for (const marker of ['**', '__', '*', '_']) {
+      const char = marker[0] === '*' ? '\\*' : '_';
+      const token = marker[0] === '*' ? '\\*'.repeat(marker.length) : marker;
+      line = line.replace(new RegExp(`(?<!${char})${token}(?!${char})([^\\s${char}](?:[^${char}\\r\\n]*[^\\s${char}])?)${token}(?!${char})`, 'gu'), '$1');
+    }
+    return line;
+  }).join('\n');
+}
+
+/** A title declaration scopes only structural list locators in its section. */
+export function extractStatuteReferences(text: string): StatuteReference[] {
+  const result: StatuteReference[] = [];
+  let sectionDepth = 0;
+  let scope: { title: string; depth: number } | undefined;
+  let fence: string | undefined;
+  const lines = text.split(/\r?\n/u);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    const fenced = trimmed.match(/^(`{3,}|~{3,})/u);
+    if (fenced) {
+      if (!fence) fence = fenced[1][0];
+      else if (fenced[1][0] === fence) fence = undefined;
+      scope = undefined;
+      continue;
+    }
+    if (fence) { result.push(...explicitStatuteReferences(line)); continue; }
+    if (!trimmed) continue;
+    // A quoted example, code block or table is not a declaration or list scope.
+    if (/^(?:>|\|| {4}|\t)/u.test(line)) { scope = undefined; result.push(...explicitStatuteReferences(line)); continue; }
+    const heading = trimmed.match(/^(#{1,6})[ \t　]+(.*?)(?:[ \t]+#+)?$/u);
+    if (heading) {
+      sectionDepth = heading[1].length;
+      if (scope && (scope.depth === 0 || sectionDepth <= scope.depth)) scope = undefined;
+    }
+    const body = (heading?.[2] || trimmed).replace(/^(?:\*\*|__)(.*)(?:\*\*|__)$/u, '$1');
+    const declaration = body.match(new RegExp(`^${LAW_TITLE}${INLINE}(?:[（(][^()（）\\r\\n]*[）)]${INLINE})*$`, 'u'));
+    const quotePrefix = trimmed.slice(0, trimmed.indexOf('《'));
+    const blockquote = /^(?:(?:#{1,6}|[-*+]|\d+[.)])[ \t　]+)?(?:(?:\*\*|__|\*|_)[ \t　]*)?$/u.test(quotePrefix)
+      || /^(?:[-*+]|\d+[.)])[ \t　]+/u.test(trimmed) ? adjacentStatuteBlockquote(lines, index) : undefined;
+    let explicit = explicitStatuteReferences(trimmed);
+    if (blockquote && explicit.filter(ref => ref.articleKey).length === 1) explicit = explicitStatuteReferences(trimmed, blockquote);
+    if (declaration && explicit.length === 1 && !explicit[0].articleKey) {
+      scope = { title: declaration[1], depth: sectionDepth };
+      result.push(...explicit);
+      continue;
+    }
+    if (explicit.length) {
+      if (scope && explicit.some(ref => ref.lawName !== scope!.title)) scope = undefined;
+      result.push(...explicit);
+      if (!heading && !/^(?:[-*+] |\d+[.)] )/u.test(trimmed)) scope = undefined;
+      continue;
+    }
+    const list = trimmed.match(/^(?:[-*+]|\d+[.)])[ \t　]+(.+)$/u);
+    const locator = list?.[1].replace(/^(?:\*\*|__)(.+?)(?:\*\*|__)/u, '$1');
+    if (scope && locator && new RegExp(`^${ARTICLE}(?=$|[ \\t　：:,，（(“"‘'「『])`, 'u').test(locator)) {
+      result.push(...explicitStatuteReferences(`《${scope.title}》${locator}`));
+    } else if (!heading) {
+      // Free prose or an unrelated list item cannot carry an implicit law title.
+      scope = undefined;
+    }
   }
   return result;
 }

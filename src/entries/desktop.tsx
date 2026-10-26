@@ -3,7 +3,6 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { ProactiveNotifications } from '../components/ProactiveNotifications';
 import { LoginModal } from '../core/components/Auth';
 import { Toaster } from 'sonner';
-import { motion } from 'motion/react';
 import { installApiBridge } from '../services/apiBridge';
 import '@fontsource-variable/geist';
 import '../index.css';
@@ -29,18 +28,12 @@ export function DesktopApp() {
   const shell = useAppShell();
   const { resolvedAppearanceMode } = useApp();
   const [activeTab, setActiveTab] = useState('home');
-  const [startupVisible, setStartupVisible] = useState(true);
 
   useEffect(() => { document.body.classList.add('overflow-hidden'); return () => document.body.classList.remove('overflow-hidden'); }, []);
   useEffect(() => installExternalNavigationGuards(), []);
   useEffect(() => { window.scrollTo(0, 0); }, [activeTab]);
-  useEffect(() => {
-    if (shell.loading) return;
-    const timer = window.setTimeout(() => setStartupVisible(false), 320);
-    return () => window.clearTimeout(timer);
-  }, [shell.loading]);
 
-  if (shell.loading || startupVisible) return <StartupSequence ready={!shell.loading} />;
+  if (shell.loading) return <StartupSequence />;
 
   const renderTabContent = (tab: string) => {
     switch (tab) {
@@ -62,10 +55,8 @@ export function DesktopApp() {
     <div className="lumi-desktop-root h-screen w-full bg-transparent overflow-hidden">
       <ProactiveNotifications />
       <Toaster position="top-right" theme={resolvedAppearanceMode} />
-      <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: 0.5 }} className="h-full w-full">
         <DesktopUI t={shell.t} user={shell.user} lang={shell.lang} setLang={shell.setLang} activeTab={activeTab} setActiveTab={setActiveTab}
           onLogin={shell.handleLogin} renderTabContent={renderTabContent} />
-      </motion.div>
       <LoginModal t={shell.t} isOpen={shell.isLoginModalOpen} onClose={() => shell.setIsLoginModalOpen(false)} onLoginSuccess={() => shell.refreshUser()} onGoogleLogin={shell.handleLogin} />
     </div>
   );

@@ -202,6 +202,8 @@ export interface CurrentAppToolCallGuardResult extends TaskTargetToolCallGuardRe
 
 export function guardCurrentAppToolCall(input: {
   taskText: string;
+  requestId?: string;
+  taskId?: string;
   toolName: string;
   arguments?: Record<string, unknown>;
   toolRecords?: ToolExecutionRecord[];
@@ -212,6 +214,8 @@ export function guardCurrentAppToolCall(input: {
 }): CurrentAppToolCallGuardResult {
   const targetGuard = guardTaskTargetToolCall({
     taskText: input.taskText,
+    requestId: input.requestId,
+    taskId: input.taskId,
     toolName: input.toolName,
     arguments: input.arguments,
     toolRecords: input.toolRecords,

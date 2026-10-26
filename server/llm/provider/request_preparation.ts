@@ -6,6 +6,8 @@ import { assertRegisteredProviderModel, getRegisteredOpenAIClient, isRegisteredP
 import type { NormalizedMessage, ToolDeclaration, LLMCallConfig } from './contracts';
 import { localPrivacyFetch } from "../../config/privacy";
 import { prepareModelRequestContext } from '../request_context_budget';
+import { getCachedOfficialApiModelDescriptor } from '../official_api';
+import { documentedModelContextLimits, type ModelContextLimits } from '../../../shared/model_provider_capabilities';
 import { messagesNeedVision } from './content';
 import { formatQwenRequest, formatDeepSeekRequest, formatOpenAIRequest, isReasoningModel } from './openai_compatible';
 
@@ -38,11 +40,27 @@ export async function prepareCompatibleModelRequest(
   if (!client) throw new Error(config.provider === 'openai' && !streaming
     ? 'OpenAI not configured (OPENAI_API_KEY missing)' : `${config.provider} not configured`);
 
+  const deepseekProtocol = config.provider === 'deepseek'
+    || (config.provider === 'relay' && /(?:^|\/)deepseek-/i.test(config.model));
+  const kimiToolProtocol = (config.provider === 'relay'
+    && (config.model === 'aliyun/kimi-k3' || config.model === 'tencent_cloud/kimi-k3'))
+    || (config.provider === 'kimi' && /^kimi-k3$/i.test(config.model));
+  const preserveAssistantReasoning = (deepseekProtocol || kimiToolProtocol) && toolDeclarations.length > 0;
   const fmt = config.provider === 'qwen'
     ? formatQwenRequest
-    : config.provider === 'deepseek'
+    : config.provider === 'deepseek' || preserveAssistantReasoning
       ? formatDeepSeekRequest
       : formatOpenAIRequest;
+  const catalogModel = config.provider === 'relay' ? getCachedOfficialApiModelDescriptor(config.model) : undefined;
+  const documentedLimits = documentedModelContextLimits(config.provider, config.model, catalogModel?.upstreamModel);
+  const modelLimits: ModelContextLimits = extensionProvider
+    ? assertRegisteredProviderModel(config.provider, config.model, { userId: config.userId })
+    : { ...documentedLimits,
+        ...(catalogModel?.contextWindow !== undefined ? { contextWindow: catalogModel.contextWindow } : {}),
+        ...(catalogModel?.maxInputTokens !== undefined ? { maxInputTokens: catalogModel.maxInputTokens } : {}),
+        ...(catalogModel?.maxOutputTokens !== undefined ? { maxOutputTokens: catalogModel.maxOutputTokens } : {}) };
+  const candidateInputCapacity = Math.min(modelLimits.maxInputTokens ?? Infinity,
+    modelLimits.contextWindow !== undefined ? Math.max(0, modelLimits.contextWindow - (maxTokens ?? 0)) : Infinity);
   const localRequest = isLocal
     ? prepareLocalModelRequest({
         messages,
@@ -54,7 +72,8 @@ export async function prepareCompatibleModelRequest(
         contextTokens: await loadedLocalContextTokens(config.provider, client, config.model, config.signal),
       })
     : null;
-  const preparedContext = localRequest || prepareModelRequestContext({ messages, toolDeclarations, inputTokenBudget: config.inputTokenBudget, protectedToolNames: config.protectedToolNames });
+  const preparedContext = localRequest || prepareModelRequestContext({ messages, toolDeclarations, inputTokenBudget: config.inputTokenBudget,
+    maxInputTokens: candidateInputCapacity, protectedToolNames: config.protectedToolNames, preserveAssistantReasoning });
   if (extensionProvider) {
     assertRegisteredProviderModel(config.provider, config.model, {
       userId: config.userId,
@@ -80,8 +99,7 @@ export async function prepareCompatibleModelRequest(
   }
   if (config.thinkingMode === 'disabled') {
     if (config.provider === 'qwen' || (config.provider === 'relay' && /(?:^|\/)qwen/i.test(config.model))) params.enable_thinking = false;
-    if (config.provider === 'deepseek'
-      || (config.provider === 'relay' && /(?:^|\/)deepseek-/i.test(config.model))) params.thinking = { type: 'disabled' };
+    if (deepseekProtocol) params.thinking = { type: 'disabled' };
   }
 
   if (config.reasoningEffort && config.thinkingMode !== 'disabled'

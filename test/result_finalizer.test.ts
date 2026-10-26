@@ -1634,7 +1634,7 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toBe('\u521a\u624d\u6ca1\u80fd\u5f00\u59cb\u8fd9\u9879\u64cd\u4f5c\u3002\u8fd9\u9879\u8981\u6c42\u4ecd\u7136\u4fdd\u7559\uff0c\u53ef\u4ee5\u4ece\u8fd9\u91cc\u91cd\u8bd5\u3002');
+    expect(result.text).toBe('这次操作没有完成，请重试。');
     expect(result.text).not.toMatch(/\u72b6\u6001\s*[:\uff1a]|\u8bc1\u636e\s*[:\uff1a]|\u56de\u6267|target_mismatch|undefined/iu);
   });
 
@@ -3288,7 +3288,7 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(result.text).toBe('文件内容已成功读取。');
+    expect(result.text).toBe('项目交付边界与双方责任');
   });
 
   it('keeps socket entrypoints on the shared finalizer path', () => {
@@ -3398,4 +3398,195 @@ it.each([false, true])('rejects DOCX output as a video completion (structured=%s
   expect(sanitizeUserFacingExecutionOutput(toolRecords[0].result, { task: '生成文件', toolRecords: toolRecords.map(record => ({ ...record, terminalVerification: undefined })) })).not.toContain('已保存文件');
   expect(finalizeLumiResponse({ ...input, requestId: 'another-request' }).reason).not.toBe('media_output_type_mismatch');
   expect(finalizeLumiResponse({ ...input, taskText: '只生成视频脚本Word文档', flow: undefined }).reason).not.toBe('media_output_type_mismatch');
+});
+
+
+describe('bounded artifact completion after an unrequested actual readback', () => {
+  async function withFixture(check: (fixture: any) => void | Promise<void>, names = ['清点源稿', '清点改稿']) {
+    const { vi } = await import('vitest');
+    const { mkdirSync } = await import('node:fs');
+    const { artifactReadbackMetadata } = await import('../server/tools/artifact_evidence');
+    const root = mkdtempSync(path.join(os.tmpdir(), 'lumi-active-readback-'));
+    const desktop = path.join(root, 'Desktop');
+    mkdirSync(desktop);
+    const home = vi.spyOn(os, 'homedir').mockReturnValue(root);
+    const sourcePath = path.join(desktop, names[0] + '.docx');
+    const outputPath = path.join(desktop, names[1] + '.docx');
+    const sourceText = '配件清单\n\n蓝色卡片，共4张\n\n';
+    const outputText = '配件清单\n\n蓝色卡片，共6张\n\n';
+    // The finalizer consumes current verified receipts, not an Office parser.
+    // Keep synthetic carriers and observation text confined to this temp root.
+    writeFileSync(sourcePath, 'synthetic source carrier', 'utf8');
+    writeFileSync(outputPath, 'synthetic revised carrier', 'utf8');
+    const turn = { requestId: 'active-readback-request', taskId: 'active-readback-task' };
+    const read = (id: string, filePath: string, text: string) => {
+      const record = { id, name: 'read_docx', arguments: { filePath }, result: text, ...turn,
+        terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'Complete text returned by the current reader.' } };
+      return { ...record, receipt: artifactReadbackMetadata(record) };
+    };
+    const producer = { id: 'revised-producer', name: 'create_docx', ...turn,
+      arguments: { outputPath, blocks: [{ type: 'heading', level: 1, text: '配件清单' }, { type: 'paragraph', text: '蓝色卡片，共6张' }] },
+      result: JSON.stringify({ ok: true, status: 'created', path: outputPath, size: readFileSync(outputPath).length }),
+      terminalVerification: { status: 'verified' as const, strategy: 'artifact' as const, reason: 'The declared artifact exists and is non-empty.' } };
+    const records = [read('source-reader', sourcePath, sourceText), producer, read('revised-reader', outputPath, outputText)];
+    const taskText = '请读取桌面的“' + names[0] + '.docx”，把“蓝色卡片，共4张”改成“蓝色卡片，共6张”，其余内容不变。不修改原文件，保存为桌面的“' + names[1] + '.docx”，完成后把新文件发到当前聊天。';
+    const input = { ...turn, taskText, responseText: '', source: 'chat', toolRecords: records };
+    try {
+      await check({ input, records, producer, sourcePath, outputPath, desktop, outputText });
+    } finally {
+      home.mockRestore();
+      if (!path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)) throw new Error('Fixture cleanup escaped its temp directory.');
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it.each([
+    ['清点源稿', '清点改稿'],
+    ['仓储备忘', '仓储更正'],
+  ])('finishes the verified output without an extra model call: %s to %s', async (sourceName, outputName) => {
+    const { tryFinalizeVerifiedBoundedAction } = await import('../server/cognition/result_finalizer');
+    const { requiresArtifactPostWriteReadback } = await import('../server/cognition/action_request');
+    const { extractExplicitArtifactTextRequirements, buildActionEvidenceContract, hasCoreActionEvidence } = await import('../server/cognition/action_contract');
+    await withFixture(({ input, outputPath }: any) => {
+      expect(requiresArtifactPostWriteReadback(input.taskText)).toBe(false);
+      expect(extractExplicitArtifactTextRequirements(input.taskText)).toEqual([]);
+      const contract = buildActionEvidenceContract(input.taskText);
+      expect(contract.components).toHaveLength(2);
+      expect(hasCoreActionEvidence(contract, input.toolRecords, input.taskText, undefined, input)).toBe(true);
+      const result = tryFinalizeVerifiedBoundedAction(input);
+      expect(result?.blocked).toBe(false);
+      expect(result?.text).toContain(outputPath);
+    }, [sourceName, outputName]);
+  });
+
+  it.each(['wrong-path', 'stale-request', 'stale-task', 'prewrite', 'read-then-rewrite', 'explicit-required-missing'])('does not replace the required current output receipt: %s', async variant => {
+    const { tryFinalizeVerifiedBoundedAction } = await import('../server/cognition/result_finalizer');
+    await withFixture(({ input, records, producer, sourcePath }: any) => {
+      let toolRecords = records;
+      let taskText = input.taskText;
+      if (variant === 'wrong-path') toolRecords = [records[0], producer, { ...records[2], arguments: { filePath: sourcePath } }];
+      if (variant === 'stale-request') toolRecords = [records[0], producer, { ...records[2], requestId: 'previous-request' }];
+      if (variant === 'stale-task') toolRecords = [records[0], producer, { ...records[2], taskId: 'previous-task' }];
+      if (variant === 'prewrite') toolRecords = [records[0], records[2], producer];
+      if (variant === 'read-then-rewrite') toolRecords = [...records, { ...producer, id: 'later-write' }];
+      if (variant === 'explicit-required-missing') {
+        toolRecords = records.slice(0, 2);
+        taskText += '保存完后回读。';
+      }
+      expect(tryFinalizeVerifiedBoundedAction({ ...input, taskText, toolRecords })).toBeNull();
+    });
+  });
+
+  it('keeps an unperformed external handoff pending after the local output is read back', async () => {
+    const { tryFinalizeVerifiedBoundedAction } = await import('../server/cognition/result_finalizer');
+    await withFixture(({ input }: any) => {
+      const taskText = input.taskText + '另外通过微信把新文件发送给王经理。';
+      expect(tryFinalizeVerifiedBoundedAction({ ...input, taskText })).toBeNull();
+    });
+  });
+
+  it('keeps a second requested output pending when only the first has been written and read', async () => {
+    const { tryFinalizeVerifiedBoundedAction } = await import('../server/cognition/result_finalizer');
+    const { buildActionEvidenceContract } = await import('../server/cognition/action_contract');
+    await withFixture(({ input, outputPath, desktop }: any) => {
+      const second = path.join(desktop, '另份交付.docx');
+      const taskText = '创建 ' + outputPath + '，保存完后回读；创建 ' + second + '，保存完后回读。';
+      expect(buildActionEvidenceContract(taskText).components).toHaveLength(2);
+      expect(tryFinalizeVerifiedBoundedAction({ ...input, taskText })).toBeNull();
+    });
+  });
+});
+
+
+describe('corrected file read continuation returns the existing complete body', () => {
+  const scope = { taskId: 'corrected-source-task', requestId: 'corrected-source-turn' };
+  const sourceName = '追加资料.docx';
+  const sourcePath = path.join(os.homedir(), 'Desktop', sourceName);
+  const body = '追加资料\n\n青色文件夹，共15个\n\n';
+  const taskText = '第二份文件名写错了，实际是桌面的“' + sourceName + '”。请只补读这份，把完整正文发到当前聊天，上一份不需要再读。';
+  const reader = (override: Record<string, unknown> = {}) => ({ ...scope, name: 'read_docx', arguments: { filePath: sourcePath }, result: body,
+    adapterStarted: true, ...verifiedDesktopReceipt, ...override });
+  const failedPlainRead = { ...scope, name: 'read_file', arguments: { path: sourcePath }, result: '', adapterStarted: true,
+    error: 'read_file reads UTF-8 text only. Use read_docx, read_xlsx, read_pdf, or extract_document_text for this structured document.',
+    terminalVerification: { status: 'failed', strategy: 'terminal_receipt', reason: 'Wrong reader for the source format' } };
+  const flow = { acceptedTaskTarget: { taskId: scope.taskId, target: { path: sourcePath, status: 'confirmed', label: sourceName } } } as any;
+  it.each(['', '文件已读取成功。', '这次还没完成。请求的操作：这份文件需要按文档格式提取正文，纯文本读取未能完成。。'])('delivers the actual source once instead of a stale failed attempt or empty acknowledgment: %s', async responseText => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const { buildActionEvidenceContract, hasCoreActionEvidence } = await import('../server/cognition/action_contract');
+    const records = [failedPlainRead, reader(), reader()];
+    const contract = buildActionEvidenceContract(taskText);
+    expect(contract.label).toBe('Exact read-only file inspection');
+    expect(hasCoreActionEvidence(contract, records as any, taskText, undefined, scope, flow.acceptedTaskTarget)).toBe(true);
+    const input = { ...scope, taskText, responseText, toolRecords: records as any, source: 'chat', flow };
+    const result = finalizeLumiResponse(input);
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(body.trim());
+    expect(finalizeLumiResponse({ ...input, responseText: result.text }).text).toBe(result.text);
+  });
+  it.each([
+    { requestId: 'previous-turn' },
+    { taskId: 'another-task' },
+    { arguments: { filePath: path.join(os.tmpdir(), sourceName) } },
+    { error: 'Permission denied' },
+    { terminalVerification: undefined },
+    { result: JSON.stringify({ path: sourcePath, size: 20 }) },
+  ])('cannot deliver the requested body from a stale, wrong, failed or metadata-only read: %j', async override => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({ ...scope, taskText, responseText: '', toolRecords: [reader(override)] as any, source: 'chat', flow });
+    expect(result.blocked).toBe(true);
+    expect(result.text).not.toContain('青色文件夹，共15个');
+  });
+  it('retains an independent blocked delivery requirement after a source was read', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({ ...scope, taskText, responseText: '', toolRecords: [reader()] as any, source: 'chat', flow,
+      completionGuard: { text: 'The separate delivery remains pending.', blocked: true, reason: 'unverified independent delivery' } });
+    expect(result.blocked).toBe(true);
+  });
+  it('does not replace an unperformed analysis with raw source text', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({ ...scope, taskText: '请分析文件“' + sourcePath + '”并给出总结。', responseText: '', toolRecords: [reader()] as any, source: 'chat', flow });
+    expect(result.blocked).toBe(true);
+  });
+});
+
+describe('independent inline results alongside missing input', () => {
+  const scope = { requestId: 'partial-calculation-turn', taskId: 'partial-calculation-task' };
+  const taskText = '先根据聊天里已经读出的数量计算紫色夹子的合计；再读取桌面的“pending-detail.docx”，把完整正文发到聊天。分别说明两件事的结果。不要重读前两份文件，不创建或修改文件。';
+  const toolRecords = [{ ...scope, name: 'read_docx', arguments: { filePath: 'C:/Users/Administrator/Desktop/pending-detail.docx' }, result: '', adapterStarted: true, error: 'DOCX file not found: C:/Users/Administrator/Desktop/pending-detail.docx', terminalVerification: { status: 'failed' as const, strategy: 'terminal_receipt' as const, reason: 'Required source does not exist.' } },
+    { ...scope, name: 'list_directory', arguments: { path: 'C:/Users/Administrator/Desktop' }, result: '[]', terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'Requested directory observed.' } }];
+  it.each([
+    '按已读正文计算：11 + 4 = 15，紫色夹子合计15个。没有在桌面找到“pending-detail.docx”，不能读取正文。请上传文件或提供正确路径。',
+    '合计计算已完成：11 + 4 = 15。没有在桌面找到“pending-detail.docx”，这一步未完成。请上传文件或提供正确路径。',
+  ])('preserves an independent completed calculation while the missing source keeps the request blocked: %s', async responseText => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({ ...scope, taskText, responseText, toolRecords, source: 'chat' });
+    expect(result).toMatchObject({ text: responseText, blocked: true, reason: 'required_input_file_missing' });
+  });
+});
+
+describe('missing-input result claims retain execution truth', () => {
+  const scope = { requestId: 'partial-claim-turn', taskId: 'partial-claim-task' };
+  const taskText = '根据聊天中已有的11个与4个紫色夹子计算合计，再读取桌面“pending-detail.docx”全文。分别报告结果，不创建或修改任何文件。';
+  const failed = { ...scope, name: 'read_docx', arguments: { filePath: 'C:/Users/Administrator/Desktop/pending-detail.docx' }, result: '', adapterStarted: true, error: 'DOCX file not found: C:/Users/Administrator/Desktop/pending-detail.docx', terminalVerification: { status: 'failed' as const, strategy: 'terminal_receipt' as const, reason: 'Missing exact source.' } };
+  it.each([
+    '任务全部完成。没有在桌面找到“pending-detail.docx”。',
+    '我已经读取“pending-detail.docx”，合计15个。没有在桌面找到“pending-detail.docx”。',
+    '已经生成并保存“summary.docx”。没有在桌面找到“pending-detail.docx”。',
+    '我已经发送微信消息。没有在桌面找到“pending-detail.docx”。',
+  ])('does not preserve fabricated completion beside a true missing-file fact: %s', async responseText => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({ ...scope, taskText, responseText, toolRecords: [failed], source: 'chat' });
+    expect(result).toMatchObject({ blocked: true, reason: 'required_input_file_missing' });
+    expect(result.text).toContain('pending-detail.docx');
+    expect(result.text).not.toBe(responseText);
+    expect(result.text).not.toContain('summary.docx');
+    expect(result.text).not.toContain('发送微信');
+    expect(result.text).not.toContain('合计15');
+  });
+  it('does not invent an independent calculation when no usable model result exists', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({ ...scope, taskText, responseText: '', toolRecords: [failed], source: 'chat' });
+    expect(result).toMatchObject({ blocked: true, reason: 'required_input_file_missing' });
+    expect(result.text).not.toContain('15');
+  });
 });

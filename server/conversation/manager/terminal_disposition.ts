@@ -3,6 +3,36 @@ import { normalizeConversationActionState } from "../../cognition/action_continu
 import { parseStoredObject as parsePersistedObject } from "../../tools/receipt_payload";
 import type { ConversationActionTerminalDisposition } from "../ledger/contracts";
 import { isTerminalConversationTaskStatus } from "../../cognition/task_execution_ledger";
+import { needsCompletionEvidence, guardCompletionClaims } from "../../work_product/completion_guard";
+import { classifyToolRecordTaskDurability } from "../../cognition/continuation/tool_receipts";
+import type { ToolExecutionRecord } from "../../tools/types";
+
+/** The final response, rather than optional observations, delivers inline analysis. */
+export function isCompletedObservationOnlyDelivery(input: {
+  taskText: string;
+  currentInstruction?: string;
+  taskCapsule?: { goal?: string; currentInstruction?: string } | null;
+  assistantText?: string;
+  completionFeedback?: unknown;
+  toolRecords?: ToolExecutionRecord[];
+  requestId?: string;
+  taskId?: string;
+}): boolean {
+  const feedback = parsePersistedObject(input.completionFeedback);
+  const response = String(input.assistantText || '');
+  return feedback.status === 'completed'
+    && (!Array.isArray(feedback.incomplete) || feedback.incomplete.length === 0)
+    && (!Array.isArray(feedback.blockers) || feedback.blockers.length === 0)
+    && Boolean(String(input.assistantText || '').trim())
+    && [input.taskText, input.currentInstruction, input.taskCapsule?.goal, input.taskCapsule?.currentInstruction]
+      .filter((text): text is string => Boolean(text?.trim()))
+      .every(text => !needsCompletionEvidence(text))
+    && (input.toolRecords || []).every(record => classifyToolRecordTaskDurability(record) === 'observation_only')
+    && !guardCompletionClaims({
+      task: input.taskText, response,
+      toolCalls: input.toolRecords || [], requestId: input.requestId, taskId: input.taskId,
+    }).blocked;
+}
 
 function normalizeConversationActionTerminalDisposition(
   value: unknown,
@@ -31,12 +61,24 @@ export function resolveConversationActionTerminalDisposition(input: {
   requestId?: string;
   skipActionContinuation?: boolean;
   terminalDisposition?: unknown;
+  assistantText?: string;
+  completionFeedback?: unknown;
+  toolRecords?: ToolExecutionRecord[];
 }): ConversationActionTerminalDisposition | null {
   if (input.role !== 'assistant' || input.skipActionContinuation) return null;
-  const disposition = normalizeConversationActionTerminalDisposition(input.terminalDisposition);
-  if (!disposition || disposition.requestId !== String(input.requestId || '').trim()) return null;
   const pending = input.conversation.pendingActionContinuation;
   const state = normalizeConversationActionState(input.conversation.actionContinuationState);
+  const disposition = normalizeConversationActionTerminalDisposition(input.terminalDisposition)
+    || (state?.taskId && isCompletedObservationOnlyDelivery({
+      taskText: state.goal, currentInstruction: state.latestInstruction, taskCapsule: state.taskCapsule,
+      assistantText: input.assistantText,
+      completionFeedback: input.completionFeedback, toolRecords: input.toolRecords,
+      requestId: input.requestId, taskId: state.taskId,
+    }) ? {
+      outcome: 'completed' as const, taskId: state.taskId,
+      requestId: String(input.requestId || '').trim(), reason: 'finalized_response_completed',
+    } : null);
+  if (!disposition || disposition.requestId !== String(input.requestId || '').trim()) return null;
   if (
     !pending
     || pending.requestId !== disposition.requestId

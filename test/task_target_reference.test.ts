@@ -145,3 +145,97 @@ describe('referential targets stay tied to the intended input', () => {
     expect(normalized(resolveAcceptedTaskTarget({ text: '数量改成4，其他不变。', persistedHistory: newerInput })?.target.path)).toBe(other);
   });
 });
+
+
+describe('explicit multiple sources bind each read independently', () => {
+  const desktop = process.env.USERPROFILE ? process.env.USERPROFILE.replaceAll('\\', '/') + '/Desktop' : '/tmp/Desktop';
+  const first = desktop + '/MERGE-SOURCE-A.docx';
+  const second = desktop + '/MERGE-SOURCE-B.docx';
+  const out = desktop + '/MERGE-OUTPUT.docx';
+  const text = '把桌面的“MERGE-SOURCE-A.docx”和“MERGE-SOURCE-B.docx”合并成“MERGE-OUTPUT.docx”，保留两份文件全部正文。';
+  const requestId = 'current-multi-source', taskId = 'multi-source-task';
+  const discovered = { name: 'search_files', arguments: { directory: desktop, pattern: 'MERGE-*.docx' }, result: JSON.stringify([first, second]), requestId, taskId, terminalVerification: { status: 'verified' } };
+  const accepted = resolveAcceptedTaskTarget({ text });
+  const unscopedText = text.replace('桌面的', '');
+  const check = (path: string, toolRecords: any[] = [discovered], taskText = text) => guardTaskTargetToolCall({ taskText, toolName: 'read_docx', arguments: { filePath: path }, acceptedTaskTarget: accepted, toolRecords, requestId, taskId });
+  const pathCheck = (file: string, patch: any = {}) => ({ name: 'desktop_path_info', arguments: { target: file }, result: JSON.stringify({ exists: true, is_directory: false, path: file }), requestId, taskId, terminalVerification: { status: 'verified' }, ...patch });
+  it('accepts each named source after fresh exact path verification without a directory search', () => {
+    for (const file of [first, second]) expect(check(file, [pathCheck(first), pathCheck(second)], unscopedText).allowed).toBe(true);
+  });
+  it.each(['missing', 'directory', 'mismatched-path', 'stale-request', 'stale-task', 'unverified'] as const)('rejects invalid exact-path evidence: %s', variant => {
+    const evidence = pathCheck(second, variant === 'missing' ? { result: JSON.stringify({ exists: false, is_directory: false, path: second }) }
+      : variant === 'directory' ? { result: JSON.stringify({ exists: true, is_directory: true, path: second }) }
+        : variant === 'mismatched-path' ? { result: JSON.stringify({ exists: true, is_directory: false, path: out }) }
+          : variant === 'stale-request' ? { requestId: 'previous-request' }
+            : variant === 'stale-task' ? { taskId: 'previous-task' } : { terminalVerification: { status: 'unverified' } });
+    expect(check(second, [evidence], unscopedText).allowed).toBe(false);
+  });
+  it('does not authorize another folder or a not-yet-produced output from path checks', () => {
+    const other = desktop.replace(/Desktop$/u, 'Documents') + '/MERGE-SOURCE-B.docx';
+    expect(check(other, [pathCheck(other)]).allowed).toBe(false);
+    expect(check(second, [pathCheck(second), pathCheck(other)], unscopedText).allowed).toBe(false);
+    expect(check(out, [pathCheck(out)]).allowed).toBe(false);
+  });
+  it('does not demand a discovery tool before reading each explicitly named source in the stated folder', () => {
+    expect(check(first, []).allowed).toBe(true);
+    expect(check(second, []).allowed).toBe(true);
+    expect(check(out, []).allowed).toBe(false);
+  });
+  it('keeps a plural overall target unresolved while allowing both specifically named sources', () => {
+    expect(accepted?.target.status).toBe('unresolved');
+    for (const path of [first, second]) {
+      const result = check(path);
+      expect(result.allowed).toBe(true);
+      expect(normalized(result.normalizedArguments?.filePath as string)).toBe(path);
+    }
+  });
+  it.each(['missing', 'failed', 'stale-request', 'stale-task', 'unverified'] as const)('requires current verified discovery: %s', variant => {
+    const record = { ...discovered, ...(variant === 'failed' ? { error: 'failed' } : {}), ...(variant === 'stale-request' ? { requestId: 'old-request' } : {}), ...(variant === 'stale-task' ? { taskId: 'old-task' } : {}), ...(variant === 'unverified' ? { terminalVerification: { status: 'unverified' } } : {}) };
+    expect(check(second, variant === 'missing' ? [] : [record], unscopedText).allowed).toBe(false);
+  });
+  it.each(['requestId', 'taskId'] as const)('does not use the new multi-source exception without the current %s', missing => {
+    const context = { taskText: unscopedText, toolName: 'read_docx', arguments: { filePath: second }, acceptedTaskTarget: accepted, toolRecords: [discovered], requestId, taskId, [missing]: undefined };
+    expect(guardTaskTargetToolCall(context).allowed).toBe(false);
+  });
+  it('rejects an unproduced output or a different document even when listed', () => {
+    const extra = { ...discovered, result: JSON.stringify([first, second, out, desktop + '/UNRELATED.docx']) };
+    expect(check(out, [extra]).allowed).toBe(false);
+    expect(check(desktop + '/UNRELATED.docx', [extra]).allowed).toBe(false);
+  });
+  it('does not choose from two same-name paths or widen a stated desktop location', () => {
+    const alternate = desktop.replace(/Desktop$/u, 'Documents') + '/MERGE-SOURCE-B.docx';
+    const other = { ...discovered, arguments: { directory: desktop.replace(/Desktop$/u, 'Documents'), pattern: 'MERGE-*.docx' }, result: JSON.stringify([alternate]) };
+    expect(check(second, [discovered, other], unscopedText).allowed).toBe(false);
+    expect(check(alternate, [other]).allowed).toBe(false);
+  });
+});
+
+
+it('allows one exact current source in a stated standard directory without accepting neighboring files', async () => {
+  const os = (await import('node:os')).default;
+  const path = (await import('node:path')).default;
+  const { vi } = await import('vitest');
+  const home = path.join(String(process.env.LUMI_DATA_DIR), 'single-explicit-source-home');
+  const homedir = vi.spyOn(os, 'homedir').mockReturnValue(home);
+  try {
+    const desktop = path.join(home, 'Desktop'); fs.mkdirSync(desktop, { recursive: true });
+    const source = path.join(desktop, 'SINGLE-SOURCE.docx');
+    const text = '读取桌面的“SINGLE-SOURCE.docx”，将全部文字制作成桌面的“SINGLE-SOURCE.pdf”，保留标题和两条内容，不修改原Word。';
+    const accepted = resolveAcceptedTaskTarget({ text }) || resolveAcceptedTaskTarget({ text: '读取这些文件。' });
+    expect(accepted?.target).toMatchObject({ status: 'unresolved', path: '' });
+    const check = (candidate: string, taskText = text, toolRecords: any[] = []) => guardTaskTargetToolCall({
+      taskText, toolName: 'read_docx', arguments: { filePath: candidate }, acceptedTaskTarget: accepted,
+      requestId: 'single-current-request', taskId: 'single-current-task', toolRecords,
+    });
+    expect(check(source).allowed).toBe(true);
+    for (const candidate of [path.join(home, 'Documents', 'SINGLE-SOURCE.docx'), path.join(desktop, 'NEIGHBOR.docx'), path.join(desktop, 'SINGLE-SOURCE.pdf')]) {
+      expect(check(candidate).allowed).toBe(false);
+    }
+    const unscoped = text.replaceAll('桌面的', '');
+    expect(check(source, unscoped).allowed).toBe(false);
+    const oldDiscovery = { name: 'search_files', arguments: { directory: desktop, pattern: '*.docx' }, result: JSON.stringify([source]),
+      requestId: 'old-request', taskId: 'old-task', terminalVerification: { status: 'verified' } };
+    expect(check(source, unscoped, [oldDiscovery]).allowed, JSON.stringify({accepted,unscoped,result:check(source, unscoped, [oldDiscovery])})).toBe(false);
+    expect(check(source, '不要读取桌面的“SINGLE-SOURCE.docx”，只说明如何制作PDF。').allowed).toBe(false);
+  } finally { homedir.mockRestore(); }
+});

@@ -324,4 +324,42 @@ describe('local model context budget', () => {
       contextTokens: 4_096,
     })).toThrow(ModelRequestSourceProvenanceError);
   });
+  it('rejects an oversized unannotated current instruction with the local capacity error before inference', () => {
+    let providerCalls = 0;
+    const infer = () => {
+      const prepared = prepareLocalModelRequest({
+        messages: [{ role: 'user', content: 'Do not remove the unknown dates or exclusions. '.repeat(500) }],
+        toolDeclarations: [], contextTokens: 4_096,
+      });
+      providerCalls += 1;
+      return prepared;
+    };
+    expect(infer).toThrow(LocalModelContextBudgetError);
+    expect(providerCalls).toBe(0);
+  });
+
+  it.each([
+    ['invalid id', [{ role: 'user', content: 'task', sourceMessageId: ' invalid-id ' }]],
+    ['multiple sources', [
+      { role: 'user', content: 'first', sourceMessageId: 'first' },
+      { role: 'user', content: 'second', sourceMessageId: 'second' },
+    ]],
+    ['non-user source', [{ role: 'system', content: 'policy', sourceMessageId: 'not-a-user' }]],
+    ['incomplete tool protocol', [
+      { role: 'user', content: 'task', sourceMessageId: 'accepted' },
+      { role: 'assistant', content: null, toolCalls: [{ id: 'missing-result', name: 'read_file', arguments: {} }] },
+    ]],
+  ])('keeps %s as a provenance error rather than a local capacity error', (_label, messages) => {
+    let failure: any;
+    let providerCalls = 0;
+    try {
+      prepareLocalModelRequest({ messages: messages as any[], toolDeclarations: [], contextTokens: 4_096 });
+      providerCalls += 1;
+    } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(ModelRequestSourceProvenanceError);
+    expect(failure).not.toBeInstanceOf(LocalModelContextBudgetError);
+    expect(failure.capacityExceeded).toBe(false);
+    expect(providerCalls).toBe(0);
+  });
+
 });

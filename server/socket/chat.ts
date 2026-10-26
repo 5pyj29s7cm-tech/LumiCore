@@ -1,4 +1,5 @@
 import { registerChatExecutionControls } from "./chat/connection_controls";
+import { isModelDeadlineError } from "../llm/model_routing_receipts";
 import type { ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import type { Server, Socket } from "socket.io";
 import { buildForegroundTaskCompletionFeedback } from "../cognition/acceptance_evidence";
@@ -76,7 +77,8 @@ async function processChatTurn(socket: Socket, llmGetters: SharedProviderGetters
     deliver: async result => { await executeChatModelAndDelivery(modelContext!, result); },
     onFailure: async (error: any) => {
       if (!started && context.abortController.signal.aborted) { await completeQueuedChatFailure(context); return; }
-      if (context.isChatCancelled() || error?.name === 'AbortError') {
+      if (context.isChatCancelled() && !isModelDeadlineError(error)
+        && !isModelDeadlineError(context.abortController.signal.reason)) {
         const cancelledText = CN_TASK_EXECUTION_MESSAGES.cancelled;
         const cancelledRecords = context.collectRequestTerminalRecords();
         const cancelledFeedback = context.requestTaskId ? buildForegroundTaskCompletionFeedback({
@@ -117,6 +119,8 @@ async function processChatTurn(socket: Socket, llmGetters: SharedProviderGetters
       });
       const failureText = publicError.code === 'CHAT_PRIVACY_RESTRICTED'
         ? CN_VOICE_WORK_MESSAGES.privacyRestricted
+        : publicError.code === 'CHAT_MODEL_TIMEOUT'
+        ? CN_VOICE_WORK_MESSAGES.processingTimedOut
         : publicError.code === 'CHAT_MODEL_ROUTES_UNAVAILABLE'
         ? CN_VOICE_WORK_MESSAGES.modelRoutesUnavailable
         : CN_VOICE_WORK_MESSAGES.processingFailed;

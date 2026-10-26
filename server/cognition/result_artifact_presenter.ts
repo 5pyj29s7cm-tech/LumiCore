@@ -1,3 +1,4 @@
+import { actualDocumentReadContent } from './action_desktop_evidence';
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
 import { artifactRecordMatchesTurn, artifactPathFromRecord, isArtifactProducerRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
@@ -174,7 +175,7 @@ export function formatGroundedArtifactResult(
     if (readbackRequired && !readback) return null;
     return {
       text: [formatArtifactCreatedAndOpened(actionText, path, verified),
-        ...(requestsComputedAnswer && calculationEvidence ? [calculationEvidence] : readbackRequired && readback ? [String(readback.result || '').slice(0, 12_000)] : [])].join('\n'),
+        ...(requestsComputedAnswer && calculationEvidence ? [calculationEvidence] : readbackRequired && readback ? [(readback.name === 'read_pdf' ? actualDocumentReadContent(readback) : String(readback.result || '')).slice(0, 12_000)] : [])].join('\n'),
       blocked: false,
       reason: 'Grounded artifact creation and open result from current-turn receipts.',
     };
@@ -290,7 +291,7 @@ export function formatGroundedArtifactResult(
           };
         }
         if (readbackRequired && readback) {
-          const readbackText = String(readback.result || '').trim();
+          const readbackText = (readback.name === 'read_pdf' ? actualDocumentReadContent(readback) : String(readback.result || '')).trim();
           const limit = 12_000;
           const excerpt = readbackText.slice(0, limit);
           return {

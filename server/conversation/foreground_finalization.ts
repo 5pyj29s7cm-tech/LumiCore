@@ -125,7 +125,18 @@ function applyForegroundActionTurnOutcomeInDb(
   if (
     turn.status === input.status
     && (input.status !== 'terminal' || turn.terminalMessageId === input.assistantMessageId)
-  ) return false;
+  ) {
+    // The exact completed reply can settle an earlier optional-observation blocker.
+    // Preserve its immutable assistant identity and original terminal timestamp.
+    if (input.status === 'terminal' && turn.terminalReason === 'task_outcome:blocked'
+      && input.reason === 'task_outcome:completed') {
+      turn.terminalReason = input.reason;
+      turn.updatedAt = input.now;
+      turn.revision = Math.max(0, Number(turn.revision) || 0) + 1;
+      return true;
+    }
+    return false;
+  }
 
   turn.status = input.status;
   turn.terminalMessageId = input.status === 'terminal' ? input.assistantMessageId : '';

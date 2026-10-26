@@ -1,9 +1,11 @@
 import './helpers';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase } from '../db_layer';
 import { preservedSourceOutputScope, requestedSingleArtifact } from '../server/cognition/artifact_write_scope';
+import { requestedArtifactInstructions } from '../server/cognition/artifact_progress';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { buildActionContract, hasCoreActionEvidence } from '../server/cognition/action_contract';
 import { executeToolCall } from '../server/tools/execution_engine';
@@ -133,5 +135,94 @@ describe('preserved input and separate output through the real executor', () => 
     'Do not modify the source file. Do not export to C:/test/copy.csv',
   ])('does not authorize a prohibited or unscoped mutation: %s', text => {
     expect(preservedSourceOutputScope(text)).toBeNull();
+  });
+});
+
+
+describe('named merge output roles', () => {
+  it('binds only the merged document in an explicitly named Desktop folder', () => {
+    const task = '请把桌面的“共同验收甲.docx”和“共同验收乙.docx”合并成“共同验收合并.docx”，保留两份文件的全部正文，完成后把合并文件发到当前聊天。';
+    const expected = path.join(os.homedir(), 'Desktop', '共同验收合并.docx');
+    expect(requestedSingleArtifact(task)).toEqual({ path: expected, producer: 'create_docx', reader: 'read_docx' });
+    expect(requestedArtifactInstructions(task).map(item => item.path)).toEqual([expected]);
+  });
+  it('prefers an explicit output folder over the source folder', () => {
+    const task = '请把桌面的“alpha.docx”和“beta.docx”合并成下载文件夹中的“merged.docx”。';
+    expect(requestedSingleArtifact(task)?.path).toBe(path.join(os.homedir(), 'Downloads', 'merged.docx'));
+  });
+  it('keeps an absolute merge destination separate from both sources', () => {
+    const task = '请把 D:/fictional/alpha.docx 和 D:/fictional/beta.docx 合并成 D:/fictional/merged.docx，保留源文件。';
+    expect(requestedSingleArtifact(task)?.path).toBe('D:/fictional/merged.docx');
+    expect(requestedArtifactInstructions(task).map(item => item.path)).toEqual(['D:/fictional/merged.docx']);
+  });
+  it.each([
+    '把“alpha.docx”和“beta.docx”合并成“merged.docx”。',
+    '请把其他文件夹的“alpha.docx”和“beta.docx”合并成“merged.docx”。',
+    '请把 D:/Desktop/alpha.docx 和 D:/Desktop/beta.docx 合并成“merged.docx”。',
+    '请把“desktop.docx”和“beta.docx”合并成“merged.docx”。',
+    '我怎么把桌面的“alpha.docx”和“beta.docx”合并成“merged.docx”？',
+    '不要把桌面的“alpha.docx”和“beta.docx”合并成“merged.docx”。',
+  ])('does not guess or grant a merge output: %s', task => {
+    expect(requestedSingleArtifact(task)).toBeNull();
+    expect(requestedArtifactInstructions(task)).toEqual([]);
+  });
+  it('does not collapse two requested merge outputs into one', () => {
+    const task = '请把桌面的“alpha.docx”和“beta.docx”合并成“merged.docx”，再另存为“copy.docx”。';
+    expect(requestedSingleArtifact(task)).toBeNull();
+    const explicit = '请把 D:/fictional/alpha.docx 和 D:/fictional/beta.docx 合并成 D:/fictional/merged.docx，再另存为 D:/fictional/copy.docx。';
+    expect(requestedSingleArtifact(explicit)).toBeNull();
+    expect(requestedArtifactInstructions(explicit).map(item => item.path)).toEqual(['D:/fictional/merged.docx', 'D:/fictional/copy.docx']);
+  });
+});
+
+
+describe('explicit standard-folder document outputs', () => {
+  it('keeps the source Word separate from a PDF made from all its text', async () => {
+    const { sourceDocumentInstruction, outputDocumentInstruction } = await import('../server/conversation/task_target_anchor');
+    const { resolveExplicitUserArtifactPath, requestedArtifactSaveAsPath } = await import('../server/cognition/artifact_write_scope');
+    const task = '读取桌面的“共同验收修订.docx”，将全部文字制作成桌面的“共同验收修订.pdf”，保留标题和两条内容，不修改原Word。核对PDF文字后，把原Word和PDF两个文件都发到当前聊天。';
+    const output = path.join(os.homedir(), 'Desktop', '共同验收修订.pdf');
+    expect(outputDocumentInstruction(task)).toBe('桌面的“共同验收修订.pdf”');
+    expect(sourceDocumentInstruction(task)).not.toContain('共同验收修订.pdf');
+    expect(resolveExplicitUserArtifactPath(sourceDocumentInstruction(task))).toBe(path.join(os.homedir(), 'Desktop', '共同验收修订.docx'));
+    expect(requestedSingleArtifact(task)).toEqual({ path: output, producer: 'create_pdf', reader: 'read_pdf' });
+    expect(requestedArtifactSaveAsPath(task)).toBe(output);
+    expect(requestedArtifactInstructions(task).map(item => item.path)).toEqual([output]);
+  });
+  it.each([
+    ['保存为桌面的“清点副本.docx”', 'Desktop', '清点副本.docx'],
+    ['将全部文字制作成下载文件夹中的“仓储报告.pdf”', 'Downloads', '仓储报告.pdf'],
+  ])('resolves a single explicit output clause: %s', (task, folder, name) => {
+    const output = path.join(os.homedir(), folder, name);
+    expect(requestedSingleArtifact(task)?.path).toBe(output);
+    expect(requestedArtifactInstructions(task).map(item => item.path)).toEqual([output]);
+  });
+  it('does not invent a source directory from a filename or a different absolute path', async () => {
+    const { resolveExplicitUserArtifactPath } = await import('../server/cognition/artifact_write_scope');
+    expect(resolveExplicitUserArtifactPath('读取“desktop.docx”')).toBe('');
+    expect(resolveExplicitUserArtifactPath('读取“source.docx”')).toBe('');
+    expect(resolveExplicitUserArtifactPath('读取 D:/Desktop/source.docx')).toBe('D:/Desktop/source.docx');
+    expect(resolveExplicitUserArtifactPath('读取桌面的“one.docx”和“two.docx”')).toBe('');
+  });
+  it('checks create_pdf actual outputPath against the requested destination', async () => {
+    const { requestedArtifactFormatBlockReason, preservedSourceWriteBlockReason } = await import('../server/cognition/artifact_write_scope');
+    const task = '创建桌面的“清点报告.pdf”';
+    const output = path.join(os.homedir(), 'Desktop', '清点报告.pdf');
+    expect(requestedArtifactFormatBlockReason(task, 'create_pdf', { outputPath: output })).toBeNull();
+    expect(requestedArtifactFormatBlockReason(task, 'create_pdf', {})).toContain(output);
+    expect(requestedArtifactFormatBlockReason(task, 'create_pdf', { outputPath: path.join(os.homedir(), 'Downloads', '清点报告.pdf') })).toContain(output);
+    const protectedTask = '读取 C:/fixtures/source.docx，不修改原文件，另存为 C:/fixtures/result.pdf。';
+    expect(preservedSourceWriteBlockReason({ text: protectedTask, toolName: 'create_pdf', arguments: { outputPath: 'C:/fixtures/result.pdf' } })).toBeNull();
+    expect(preservedSourceWriteBlockReason({ text: protectedTask, toolName: 'create_pdf', arguments: { outputPath: 'C:/fixtures/source.docx' } })).toContain('original file');
+  });
+  it.each([
+    ['读取桌面的“源稿.docx”，将全部文字制作成桌面的“报告.pdf”。核对PDF文字后，把PDF发到当前聊天。', true],
+    ['核对PDF文字后，创建桌面的“报告.pdf”。', false],
+    ['先读取桌面的“源稿.docx”，再创建桌面的“报告.pdf”。', false],
+    ['创建桌面的“报告.pdf”，不要核对PDF文字。', false],
+    ['创建桌面的“报告.pdf”，内容为“核对PDF文字后”。', false],
+  ])('requires a read only for an affirmative post-create text check: %s', async (task, expected) => {
+    const { requiresArtifactPostWriteReadback } = await import('../server/cognition/action_request');
+    expect(requiresArtifactPostWriteReadback(task)).toBe(expected);
   });
 });

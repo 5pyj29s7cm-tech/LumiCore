@@ -1,5 +1,6 @@
 import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
+import { encodeToolResult } from '../result_envelope';
 
 async function fetchText(url: string, timeoutMs: number, parent?: AbortSignal, headers?: Record<string, string>) {
   const controller = new AbortController();
@@ -41,94 +42,107 @@ async function fetchText(url: string, timeoutMs: number, parent?: AbortSignal, h
   }
 }
 
-async function tryBingSearch(query: string, maxResults: number, signal?: AbortSignal): Promise<string | null> {
+type SearchResult = { title: string; snippet: string; url: string };
+
+function searchText(value: string): string {
+  return value.replace(/<[^>]+>/g, ' ').replace(/&#(x[0-9a-f]+|[0-9]+);/gi, (_all, code: string) => {
+    const point = code[0].toLowerCase() === 'x' ? parseInt(code.slice(1), 16) : Number(code);
+    return Number.isInteger(point) && point >= 0 && point <= 0x10ffff ? String.fromCodePoint(point) : '';
+  }).replace(/&(amp|quot|apos|lt|gt|nbsp);/g, (_all, name: string) =>
+    ({ amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: ' ' }[name] || ''))
+    .replace(/\s+/g, ' ').trim();
+}
+
+function searchTarget(href: string, base: string): string | null {
   try {
-    const { response, text: html } = await fetchText(
-      `https://cn.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults}&mkt=zh-CN`,
-      8000, signal, { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-    );
-    if (!response.ok) return null;
-
-    const results: string[] = [];
-
-    // Bing 2024+ HTML: <li class="b_algo"> blocks
-    const blockRe = /<li class="b_algo"[^>]*>([\s\S]*?)<\/li>/gi;
-    let blockMatch;
-    while ((blockMatch = blockRe.exec(html)) !== null && results.length < maxResults) {
-      const block = blockMatch[1];
-      const urlMatch = block.match(/<a[^>]*href="(https?:\/\/[^"]*)"[^>]*>/i);
-      const h2Match = block.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
-      const title = h2Match ? h2Match[1].replace(/<[^>]+>/g, '').trim() : (urlMatch ? urlMatch[1] : '');
-      const snippetMatch = block.match(/<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/i)
-        || block.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
-      const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]+>/g, '').trim() : '';
-      if (urlMatch) {
-        results.push(`${title}\n${snippet}\n${urlMatch[1]}`);
-      }
+    let target = new URL(searchText(href), base);
+    if ((target.hostname === 'bing.com' || target.hostname.endsWith('.bing.com')) && target.pathname === '/ck/a') {
+      const encoded = target.searchParams.get('u') || '';
+      if (!encoded.startsWith('a1')) return null;
+      target = new URL(Buffer.from(encoded.slice(2), 'base64url').toString('utf8'));
+    } else if ((target.hostname === 'duckduckgo.com' || target.hostname.endsWith('.duckduckgo.com')) && target.pathname === '/l/') {
+      target = new URL(target.searchParams.get('uddg') || '');
     }
+    return ['http:', 'https:'].includes(target.protocol) && !target.username && !target.password ? target.href : null;
+  } catch { return null; }
+}
 
-    // Fallback: broader extraction if b_algo blocks not found
-    if (results.length === 0) {
-      const broadRe = /<a[^>]*href="(https?:\/\/[^"]*)"[^>]*>\s*<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi;
-      let m;
-      while ((m = broadRe.exec(html)) !== null && results.length < maxResults) {
-        results.push(`${m[2].replace(/<[^>]+>/g, '').trim()}\n${m[1]}`);
-      }
+function matchingSearchResults(results: SearchResult[], query: string): SearchResult[] {
+  const sites = [...query.matchAll(/(?:^|\s)site:([^\s]+)/gi)].map(match => match[1].replace(/^https?:\/\//i, '').replace(/\/$/, '').toLowerCase());
+  const seen = new Set<string>();
+  return results.filter(result => {
+    const url = new URL(result.url);
+    const matches = !sites.length || sites.some(site => {
+      const slash = site.indexOf('/'), host = slash < 0 ? site : site.slice(0, slash);
+      return (url.hostname === host || url.hostname.endsWith('.' + host)) && (slash < 0 || url.pathname.startsWith(site.slice(slash)));
+    });
+    if (!matches || seen.has(result.url)) return false;
+    seen.add(result.url); return true;
+  });
+}
+
+async function fetchSearchPage(url: string, query: string, timeoutMs: number, signal?: AbortSignal): Promise<string> {
+  const { response, text } = await fetchText(url, timeoutMs, signal, { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' });
+  if (response.status !== 200) throw new Error('HTTP ' + response.status + ' did not return completed search results');
+  if (response.url) {
+    const final = new URL(response.url), expected = new URL(url);
+    const providerDomain = expected.hostname.split('.').slice(-2).join('.');
+    if (!(final.hostname === providerDomain || final.hostname.endsWith('.' + providerDomain)) || final.pathname.replace(/\/$/, '') !== expected.pathname.replace(/\/$/, '')
+      || final.searchParams.get('q') !== query) {
+      throw new Error('Response redirected away from the requested search page');
     }
-    return results.length > 0 ? results.join('\n\n') : null;
-  } catch {
-    signal?.throwIfAborted();
-    return null;
   }
+  return text;
+}
+
+async function tryBingSearch(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  const html = await fetchSearchPage(`https://cn.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults}&mkt=zh-CN`, query, 8000, signal);
+  const rows: SearchResult[] = [];
+  for (const match of html.matchAll(/<li\b[^>]*class=["'][^"']*\bb_algo\b[^"']*["'][^>]*>([\s\S]*?)<\/li>/gi)) {
+    const block = match[1], heading = block.match(/<h2\b[^>]*>([\s\S]*?)<\/h2>/i);
+    const link = heading?.[1].match(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+    const url = link && searchTarget(link[1], 'https://www.bing.com');
+    if (url && link) rows.push({ title: searchText(link[2]), snippet: searchText(block.match(/<p\b[^>]*>([\s\S]*?)<\/p>/i)?.[1] || ''), url });
+  }
+  const results = matchingSearchResults(rows, query).slice(0, maxResults);
+  if (results.length || /class=["'][^"']*\bb_no\b/i.test(html)) return results;
+  throw new Error('Search results unavailable: homepage, challenge, or unsupported page structure');
+}
+
+async function tryDuckDuckGoSearch(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  const html = await fetchSearchPage(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, query, 5000, signal);
+  const matches = [...html.matchAll(/<a\b[^>]*class=["'][^"']*\bresult__a\b[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi)];
+  const rows: SearchResult[] = [];
+  for (let index = 0; index < matches.length; index++) {
+    const anchor = matches[index], href = anchor[0].match(/\bhref=["']([^"']+)["']/i)?.[1];
+    const url = href && searchTarget(href, 'https://html.duckduckgo.com');
+    const body = html.slice((anchor.index || 0) + anchor[0].length, matches[index + 1]?.index);
+    if (url) rows.push({ title: searchText(anchor[1]), snippet: searchText(body.match(/<(?:a|div|span)\b[^>]*class=["'][^"']*\bresult__snippet\b[^"']*["'][^>]*>([\s\S]*?)<\/(?:a|div|span)>/i)?.[1] || ''), url });
+  }
+  const results = matchingSearchResults(rows, query).slice(0, maxResults);
+  if (results.length || /class=["'][^"']*\bno-results\b/i.test(html)) return results;
+  throw new Error('Search results unavailable: challenge or unsupported page structure');
 }
 
 async function webSearchHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {
-  const query = String(args.query || '');
-  if (!query.trim()) throw new Error('Search query is required.');
-
+  const query = String(args.query || '').trim();
+  if (!query) throw new Error('Search query is required.');
   const maxResults = Math.min(Math.max(Number(args.maxResults) || 5, 1), 10);
-
-  // Bing first — works in China, returns real search results
-  const bingResults = await tryBingSearch(query, maxResults, context?.executionSignal);
-  if (bingResults) return bingResults;
-
-  // Fallback: DuckDuckGo Instant Answers (useful for definitions/facts)
-  try {
-    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-    const { response, text } = await fetchText(url, 5000, context?.executionSignal);
-
-    if (response.ok) {
-      const data = JSON.parse(text);
-      const results: string[] = [];
-
-      if (data.AbstractText) {
-        results.push(`${data.AbstractText}${data.AbstractURL ? ` (${data.AbstractURL})` : ''}`);
-      }
-
-      if (data.RelatedTopics && Array.isArray(data.RelatedTopics)) {
-        for (const topic of data.RelatedTopics.slice(0, maxResults)) {
-          if (topic.Text && topic.FirstURL) {
-            results.push(`${topic.Text}\n${topic.FirstURL}`);
-          }
-        }
-      }
-
-      if (data.Results && Array.isArray(data.Results)) {
-        for (const r of data.Results.slice(0, maxResults)) {
-          if (r.Text && r.FirstURL) {
-            results.push(`${r.Text}\n${r.FirstURL}`);
-          }
-        }
-      }
-
-      if (results.length > 0) return results.join('\n\n');
-    }
-  } catch {
+  const failures: string[] = [];
+  for (const [provider, search] of [['Bing', tryBingSearch], ['DuckDuckGo', tryDuckDuckGoSearch]] as const) {
     context?.executionSignal?.throwIfAborted();
-    // DDG unavailable
+    try {
+      const results = await search(query, maxResults, context?.executionSignal);
+      if (results.length) return encodeToolResult(results.map(row => `${row.title}\n${row.snippet}\n${row.url}`).join('\n\n'),
+        { ok: true, status: 'observed', resultCount: results.length, provider });
+    } catch (error) {
+      context?.executionSignal?.throwIfAborted();
+      failures.push(provider + ': ' + (error instanceof Error ? error.message : String(error)));
+    }
   }
-
-  return `No search results found for "${query}". Try different search terms or use url_fetch on a known news site.`;
+  return encodeToolResult(failures.length ? 'Web search unavailable: ' + failures.join('; ')
+    : `Both search pages explicitly returned no matching results for "${query}". No source was retrieved.`,
+    { ok: false, status: 'partial', reason: failures.length ? 'search_unavailable' : 'no_results', resultCount: 0 });
 }
 
 async function urlFetchHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {
@@ -195,7 +209,7 @@ function looksLikeLoginWall(text: string): boolean {
 export function registerWebOpsTools(registry: ToolRegistry): void {
   registry.register({
     name: 'web_search',
-    description: 'Search the web via Bing (cn.bing.com). Returns formatted results with titles, snippets, and URLs. For Chinese news, use specific terms like "AI 人工智能 最新进展 2025". If results are poor, try url_fetch on known news sites like techcrunch.com, theverge.com, or 36kr.com.',
+    description: 'Search public web pages through the existing Bing and DuckDuckGo providers. Returns retrieved titles, snippets, and original source URLs. Search snippets are candidates; use url_fetch to verify source content. Unavailable search pages and zero results are reported without claiming retrieved evidence.',
     parameters: {
       type: 'object',
       properties: {

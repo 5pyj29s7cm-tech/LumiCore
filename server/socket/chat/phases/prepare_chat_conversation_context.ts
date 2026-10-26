@@ -21,7 +21,7 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
 
       if (await answerPriorTaskStatus(context)) { return { terminal: true as const, context: undefined, planning: undefined, resume: undefined }; }
 
-      let { relevantMemories, ragChunks, emotionalState, personalityConfig, kbContext, isNovel, himState, emotionKey } = await retrieveChatContext(context);
+      let { emotionalState, personalityConfig, himState, emotionKey } = await retrieveChatContext(context);
 
       // ── Conversation mode: get/create conversation, apply mode from payload ──
       const conversationId = context.selectedConversationId;
@@ -146,10 +146,6 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
         return 'assistant';
       })();
       const preparedPrompt = await prepareChatPromptContext(extendTurnBindings(context, {
-    get relevantMemories(): typeof relevantMemories { return relevantMemories; },
-    set relevantMemories(value: typeof relevantMemories) { relevantMemories = value; },
-    get ragChunks(): typeof ragChunks { return ragChunks; },
-    set ragChunks(value: typeof ragChunks) { ragChunks = value; },
     get emotionalState(): typeof emotionalState { return emotionalState; },
     set emotionalState(value: typeof emotionalState) { emotionalState = value; },
     get personalityConfig(): typeof personalityConfig { return personalityConfig; },
@@ -158,18 +154,15 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
     conversationMode,
     operationMode,
     persistedConversationHistory,
-    get kbContext(): typeof kbContext { return kbContext; },
-    set kbContext(value: typeof kbContext) { kbContext = value; },
   }));
   return { terminal: false as const, context: undefined, planning: preparedPrompt.planning, resume: async (resolvedExecution: LumiExecutionPipeline) => {
-      let { turnFlow, executionPipeline, personality, effectiveSystemPrompt, executionTaskText, completionTaskText, knowledgeContext } = await preparedPrompt.assemble(resolvedExecution);
+      let { turnFlow, executionPipeline, personality, effectiveSystemPrompt, executionTaskText, completionTaskText } = await preparedPrompt.assemble(resolvedExecution);
   return { terminal: false as const, context: extendTurnBindings(context, {
     get turnFlow(): typeof turnFlow { return turnFlow; },
     set turnFlow(value: typeof turnFlow) { turnFlow = value; },
     get executionPipeline(): typeof executionPipeline { return executionPipeline; },
     set executionPipeline(value: typeof executionPipeline) { executionPipeline = value; },
     conversationId,
-    knowledgeContext,
     get personality(): typeof personality { return personality; },
     set personality(value: typeof personality) { personality = value; },
     persistedConversationHistory,
@@ -182,8 +175,6 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
     set completionTaskText(value: typeof completionTaskText) { completionTaskText = value; },
     get emotionalState(): typeof emotionalState { return emotionalState; },
     set emotionalState(value: typeof emotionalState) { emotionalState = value; },
-    get isNovel(): typeof isNovel { return isNovel; },
-    set isNovel(value: typeof isNovel) { isNovel = value; },
     get himState(): typeof himState { return himState; },
     set himState(value: typeof himState) { himState = value; },
     get emotionKey(): typeof emotionKey { return emotionKey; },

@@ -1,4 +1,5 @@
 import { hasExplicitNoToolInstruction } from './no_tool_instruction';
+import { actionInstructionClauses } from './action_instruction_clauses';
 export { hasExplicitNoToolInstruction } from './no_tool_instruction';
 import type { ActionIntentAnalysis } from './normalized_action_intent';
 import { CLIENT_STATE_INSPECTION_REQUEST, withoutNegatedLookupClauses, isStoredMemoryRecallQuestion, hasAffirmativeArtifactMutationAction } from './normalized_action_intent';
@@ -395,6 +396,18 @@ export function isInformationOnlyQuestion(text: string, analysis?: ActionIntentA
   if (/^(?:为什么|为何|怎么).{0,80}(?:没有|没|未能|不能).{0,40}(?:打开|启动|运行|执行|发送)/u.test(text)) return true; // i18n-allow: input recognition
   if (isUserCorrectionOrExplanationQuestion(text, analysis)) return true;
   if (CLIENT_STATE_INSPECTION_REQUEST.test(text) || isDiagnosticOrRepairRequest(text, analysis)) return false;
+  // A user asking how to perform an operation does not request that operation.
+  // Keep a separate affirmative instruction executable, including after a question mark.
+  // i18n-allow: procedural-question grammar; not a fixed user-facing reply.
+  const methodQuestion = /^(?:(?:请问|请教|那|那么)\s*)?(?:(?:我|我们)(?:自己)?\s*)?(?:应该|该|要|需要)?\s*(?:怎么|如何|怎样)|^(?:请)?(?:教我|告诉我|说明)(?:具体)?\s*(?:怎么|如何|怎样)|^how\s+(?:do|can|should|would)\s+(?:I|we)\b/iu;
+  const clauses = actionInstructionClauses(text).map(clause => clause.probe.trim()).filter(Boolean);
+  if (clauses.some(clause => methodQuestion.test(clause)) && !clauses.some(clause => {
+    if (methodQuestion.test(clause)) return false;
+    const instruction = clause.replace(/^(?:然后|接着|随后|之后|同时|并且|再)\s*/u, '');
+    return hasExplicitActionRequest(instruction) || normalizeActionIntent(instruction, analysis).kind !== 'none'
+      || matchesIntentGrammar(instruction, STRUCTURED_TOOL_INTENT_RULES)
+      || TOOL_INTENT_PATTERNS.some(pattern => pattern.test(instruction));
+  })) return true;
   if (hasExplicitActionRequest(text)) return false;
   if (
     CLIENT_NAVIGATION_VERBS.test(text) &&

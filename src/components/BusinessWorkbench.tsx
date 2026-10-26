@@ -12,13 +12,14 @@ import { ChatFilePreview, type ChatPreviewFile } from './ChatFilePreview';
 const Commerce = lazy(() => import('./EcommerceAutomationWorkspace').then(m => ({ default: m.EcommerceAutomationWorkspace })));
 const Finance = lazy(() => import('./FinanceWorkbench').then(m => ({ default: m.FinanceWorkbench })));
 type Line = 'ecommerce' | 'finance';
+export type BusinessSection = Line | 'social' | 'archive';
 type Subject = { id: string; productLine: Line; scopeId: string; name: string; attributes: Record<string, string> };
 const isTask = (item: any) => item && typeof item.id === 'string' && typeof item.title === 'string'
   && ['result', 'summary', 'status'].every(key => item[key] == null || typeof item[key] === 'string')
   && (item.artifacts == null || (Array.isArray(item.artifacts) && item.artifacts.every((file: any) => file && (file.path == null || typeof file.path === 'string'))));
 const isLegacy = (item: any) => item && ['ecommerce', 'finance'].includes(item.line) && Number.isFinite(item.tasks);
 type Props = {
-  lang: string; domain: 'personal' | 'work'; onOpenSettings: () => void; onOpenKnowledge: () => void; onOpenSkills: () => void;
+  section?: BusinessSection; lang: string; domain: 'personal' | 'work'; onOpenSettings: () => void; onOpenKnowledge: () => void; onOpenSkills: () => void;
   onOpenCreation: () => void; onOpenDigitalHuman: () => void;
 };
 export function BusinessWorkbench(props: Props) {
@@ -26,10 +27,11 @@ export function BusinessWorkbench(props: Props) {
   const scopeId = props.domain === 'work' ? 'work:' + (orgConnection?.orgId || '') : 'personal:' + user?.uid;
   return user ? <Workbench key={JSON.stringify([user.uid, user.role, scopeId, orgConnection?.orgRole])} {...props} scopeId={scopeId} userId={user.uid} /> : null;
 }
-function Workbench({ lang, domain, onOpenSettings, onOpenKnowledge, onOpenSkills, onOpenCreation, onOpenDigitalHuman, scopeId, userId }: Props & { scopeId: string; userId: string }) {
+function Workbench({ section = 'social', lang, domain, onOpenSettings, onOpenKnowledge, onOpenSkills, onOpenCreation, onOpenDigitalHuman, scopeId, userId }: Props & { scopeId: string; userId: string }) {
   const { workbenchDrafts } = useApp();
   const locale = lang === 'en' ? 'en' : 'zh'; const c = businessWorkbenchCopy[locale];
-  const [tab, setTab] = useState<Line | 'social' | 'archive'>('social');
+  const tab = section;
+  const title = tab === 'social' ? c.social : tab === 'ecommerce' ? c.commerce : tab === 'finance' ? c.finance : c.archive;
   const [commerceEntry, setCommerceEntry] = useState<EcommerceOutcomeId>('store-data');
   const [commerceReportKind, setCommerceReportKind] = useState<EcommerceReportKind>('orders');
   const [financeEntry, setFinanceEntry] = useState('business-dashboard');
@@ -90,8 +92,7 @@ function Workbench({ lang, domain, onOpenSettings, onOpenKnowledge, onOpenSkills
   }, 60_000);
   return <div className="flex h-full min-h-0 flex-col bg-[#0b1318] text-white" data-business-workbench>
     <header className="shrink-0 border-b border-white/10 px-5 py-4">
-      <div className="flex items-center gap-3"><BriefcaseBusiness size={22} className="text-emerald-300" /><div><h2 className="text-lg font-semibold">{c.title}</h2><p className="text-xs text-white/50">{c.subtitle}</p></div></div>
-      <nav className="mt-4 flex flex-wrap gap-2" aria-label={c.title}>{(['social', 'ecommerce', 'finance', 'archive'] as const).map(id => <button type="button" key={id} onClick={() => setTab(id)} aria-pressed={tab === id} className={`rounded-xl px-4 py-2 text-sm ${tab === id ? 'bg-emerald-300 text-slate-950' : 'bg-white/5 text-white/70 hover:bg-white/10'}`}>{id === 'social' ? c.social : id === 'ecommerce' ? c.commerce : id === 'finance' ? c.finance : c.archive}</button>)}</nav>
+      <div className="flex items-center gap-3"><BriefcaseBusiness size={22} className="text-emerald-300" /><div><h2 className="text-lg font-semibold">{title}</h2><p className="text-xs text-white/50">{c.scope}</p></div></div>
       {(tab === 'ecommerce' || tab === 'finance') && <div className="mt-3 space-y-2">
         <div className="flex flex-wrap items-center gap-2"><label className="text-xs text-white/60" htmlFor="business-subject">{c.subject}</label><select id="business-subject" value={active[tab]?.id || ''} onChange={e => void bind(e.target.value)} disabled={saving || !data} className="rounded-lg bg-slate-800 p-2 text-xs"><option value="" disabled>{c.emptySubject}</option>{subjects.filter(s => s.productLine === tab).map(s => <option key={s.id} value={s.id}>{s.name} · {s.attributes.accountingPeriod || s.attributes.reportingPeriod || ''}</option>)}</select></div>
         <form onSubmit={e => { e.preventDefault(); void bind(); }}><fieldset disabled={saving || !data} className="flex min-w-0 flex-wrap gap-2">

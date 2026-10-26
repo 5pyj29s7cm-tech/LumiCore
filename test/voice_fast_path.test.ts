@@ -5,6 +5,11 @@ import { isNamedPersistentWorkTaskStatusQuery } from '../server/cognition/action
 import { extractRequestedCurrentAppText } from '../server/cognition/action_contract';
 
 describe('shared foreground planning after shortcut retirement', () => {
+  it.each(['chat', 'voice'] as const)('routes Breath Realm through the same native action on %s', channel => {
+    const plan = foregroundPipeline('进入灵息之境', channel);
+    expect(plan.normalizedIntent).toMatchObject({ kind: 'client_navigation', target: 'nexus', clientAction: 'open_nexus' });
+    expect(plan.modelToolProjection.toolNames).toContain('client_action');
+  });
   it.each(['chat', 'voice'] as const)('retains the actual tools for each %s request', channel => {
     for (const [text, tools] of [
       ['打开AutoCAD。', ['desktop_open']],

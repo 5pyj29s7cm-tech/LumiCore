@@ -7,7 +7,8 @@ import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import { classifyExternalCliIntent, requestedCliProviders } from './external_cli_intent';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
 import { withoutLocationLiterals } from './location_literals';
-import { affirmativeActionClauses } from './action_instruction_clauses';
+import { explicitFile } from '../conversation/targets/instruction_targets';
+import { affirmativeActionClauses, affirmativeActionInstructionClauses, actionInstructionClauses, negatedActionInstructions } from './action_instruction_clauses';
 export { affirmativeActionClauses } from './action_instruction_clauses';
 import { matchesCnTaskReceiptQuestion } from "../regions/input/zh_action_continuation";
 
@@ -215,7 +216,7 @@ function relativeArtifactPath(text: string, includeJson = true): string {
     let start = extensionStart;
     while (
       start > lowerBound
-      && !/[\s\\/:*?"<>|\r\n]/u.test(text[start - 1] || '')
+      && !/[\s\\/:*?"`“”‘’「」『』<>|\r\n]/u.test(text[start - 1] || '')
     ) start -= 1;
     if (start === extensionStart) continue;
     const candidate = trimSlot(text.slice(start, extensionStart + match[0].length));
@@ -250,7 +251,7 @@ function affirmativeArtifactAction(text: string, only?: 'create' | 'mutate'): bo
   // i18n-allow: Existing mutation operations in imperative rather than noun/status position.
   const create = /^(?:创建|新建|生成|写入|保存|另存|导出|起草|撰写|制作|整理成|做一份|给我一份)|^(?:creat(?:e|ing)|write|writ(?:e|ing)|generate|save|export|draft)\b/iu;
   // i18n-allow: Editing a bound document or field is an operation, not a mention of a revised draft.
-  const mutate = /^(?:编辑|修改|修订|调整|更新|追加|替换|删除|重命名|移动|复制|覆盖|改成|改为|换成)|^(?:edit|modify|revise|update|append|replace|delete|remove|rename|move|copy|overwrite)\b/iu;
+  const mutate = /^(?:编辑|修改|修订|调整|更新|追加|替换|删除|重命名|移动|复制|覆盖|合并|改成|改为|换成)|^(?:edit|modify|revise|update|append|replace|delete|remove|rename|move|copy|overwrite|merge|combine)\b/iu;
   for (const clause of affirmativeActionClauses(currentTurnText(text))) {
     const value = withoutLocationLiterals(clause).trim()
       .replace(/^(?:\[[^\]\r\n]*\]\s*)+/u, '')
@@ -258,7 +259,10 @@ function affirmativeArtifactAction(text: string, only?: 'create' | 'mutate'): bo
     // i18n-allow: Retrospective/capability questions have no affirmative mutation predicate.
     if (/^(?:是否|有没有|有没|能否)|(?:创建|新建|生成|写入|保存|修改|修订)(?:了|过)?(?:吗|没有|没|了没)/u.test(value)) continue;
     // i18n-allow: Multilingual imperative prefixes and object-before-predicate grammar.
-    const head = value.replace(/^(?:(?:请你?|麻烦你?|帮我|给我(?!一份)|现在|直接|立即|务必|先|再|继续|然后|接着|同时|并且|并|也|本次|这次|(?:我)?(?:需要|要求|希望)你?|我想让你|你必须|你需要)\s*)+/u, '')
+    const head = value
+      // i18n-allow: A continuation discourse prefix leaves the existing imperative predicate unchanged.
+      .replace(/^(?:(?:请你?|麻烦你?|帮我)\s*)?(?:继续|接着)(?:同一|这个|该|当前|原)?任务\s*[:：,，]\s*|^(?:please\s+)?(?:continue|resume)\s+(?:(?:the\s+)?same|this|that|current|original|the)?\s*task\s*[:：,]\s*/iu, '')
+      .replace(/^(?:(?:请你?|麻烦你?|帮我|给我(?!一份)|现在|直接|立即|务必|先|再|继续|然后|接着|同时|并且|并|也|本次|这次|(?:我)?(?:需要|要求|希望)你?|我想让你|你必须|你需要)\s*)+/u, '')
       .replace(/^(?:(?:please|now|then|next|you\s+must|you\s+should|must|should|need\s+to|required\s+to|i\s+(?:need|want)\s+you\s+to|(?:can|could|would)\s+you)\s+)+/iu, '');
     // A replacement read predicate changes the selected action/target, not file contents.
     if (mutate.test(head) && explicitLocalArtifactReadIntent(clause)) continue;
@@ -272,7 +276,7 @@ function affirmativeArtifactAction(text: string, only?: 'create' | 'mutate'): bo
         // A post-object edit needs a predicate complement or a terminal verb.
         // This leaves an adjective inside the object (rather than an edit command) alone.
         // i18n-allow: Disposal/object-predicate complements, not an artifact-name blacklist.
-        const boundEdit = /^(?:编辑|修改|修订|调整|更新|追加|替换|删除|重命名|移动|复制|覆盖)(?=为|成|到|一下|一次|掉|好|完成|并|然后|再|[，,。；;！？!?\s]*$)/u.test(candidate);
+        const boundEdit = /^(?:编辑|修改|修订|调整|更新|追加|替换|删除|重命名|移动|复制|覆盖|合并)(?=为|成|到|一下|一次|掉|好|完成|并|然后|再|[，,。；;！？!?\s]*$)/u.test(candidate);
         if (create.test(candidate) || boundEdit) predicates.push(candidate);
       }
     }
@@ -323,18 +327,32 @@ function explicitArtifactEditIntent(text: string): NormalizedActionIntent | null
 }
 
 function explicitLocalArtifactReadIntent(text: string): NormalizedActionIntent | null {
-  const instruction = affirmativeActionClauses(text).find(probe => {
+  const clauses = affirmativeActionClauses(text);
+  let instruction = clauses.find(probe => {
     const target = explicitArtifactPath(probe);
     if (!target) return false;
     const targetIndex = probe.indexOf(target);
-    const actionPrefix = targetIndex >= 0 ? probe.slice(0, targetIndex).trim() : '';
+    const actionPrefix = targetIndex >= 0 ? probe.slice(0, targetIndex).replace(/["'“”‘’`「」『』]+$/gu, '').trim() : '';
     // This owns only an explicit fresh command. A path supplied by itself
     // remains eligible to fill the target slot of an unfinished task.
     // i18n-allow: Existing read predicate with explicit read-only/completeness and file operands.
-    return /^(?:(?:请|麻烦你|现在|直接)\s*)*(?:(?:只|完整)\s*)*(?:(?:改成|改为|换成)\s*)?(?:分析|读取|查看|审查|检查|总结)(?:一下)?\s*(?:(?:文件|文档)\s*)?$|^(?:(?:please|now|directly)\s+)*(?:analy[sz]e|read|inspect|review|check|summari[sz]e)(?:\s+the)?\s*$/iu.test(actionPrefix);
+    return /^(?:(?:请|麻烦你|现在|直接)\s*)*(?:(?:只|完整)\s*)*(?:(?:改成|改为|换成)\s*)?(?:分析|补读|读取|读|查看|审查|检查|总结)(?:一下)?\s*(?:(?:桌面|下载(?:目录|文件夹)?|文档(?:目录|文件夹))(?:上|中|里|内|下|的)*\s*)?(?:(?:文件|文档)\s*)?$|^(?:(?:please|now|directly)\s+)*(?:analy[sz]e|read|inspect|review|check|summari[sz]e)(?:\s+the)?\s*$/iu.test(actionPrefix);
   });
-  if (!instruction) return null;
-  const target = explicitArtifactPath(instruction);
+  let target = instruction ? explicitArtifactPath(instruction) : '';
+  if (!instruction) {
+    // A corrected filename and its affirmative referential read can occupy
+    // different clauses of this same user turn. Quoted payloads, negatives,
+    // hypothetical examples and unrelated named files are not target grants.
+    // i18n-allow: Direct referential read and explicit filename-correction grammar.
+    instruction = clauses.find(probe => /^(?:(?:请|麻烦你?|现在|直接|先|再|然后|接着)\s*)*(?:(?:只|完整)\s*)*(?:补读|读取|读)(?:一下)?\s*(?:这份(?:文件|文档|材料)?|该份(?:文件|文档)?|该文件|该文档|这个(?:文件|文档))(?=$|[，,。；;！!\s])/u.test(probe));
+    if (!instruction) return null;
+    const corrected = clauses.filter(probe => /^(?:实际(?:上)?(?:是|为|应为)|正确(?:的)?文件名(?:是|为)|文件名(?:应为|应该是|是|为)|应(?:该)?(?:是|为))/u.test(probe))
+      .map(probe => explicitFile(probe)).filter(Boolean);
+    const unique = [...new Set(corrected)];
+    if (unique.length !== 1) return null;
+    target = unique[0];
+  }
+  if (!target) return null;
   return {
     kind: 'desktop_operation',
     operation: 'read',
@@ -840,20 +858,22 @@ function statusQuery(text: string): NormalizedActionIntent | null {
 
 function clientNavigation(text: string): NormalizedActionIntent | null {
   text = withoutLocationLiterals(text);
-  if (!CLIENT_NAVIGATION_VERB_RE.test(text)) return null;
-  const surface = CLIENT_SURFACE_RULES.find(candidate => {
-    const match = text.match(candidate.pattern);
+  const clauses = affirmativeActionInstructionClauses(text);
+  // i18n-allow: A client surface is the direct navigation operand, with only client/determiner qualifiers between them.
+  const directPrefix = new RegExp('^(?:(?:请你?|帮我|麻烦你?|现在|直接|先|再|然后|接着|也|并|只|仅)\\s*|(?:please|now|directly|first|then|next|also|just)\\s+)*(?:' + CLIENT_NAVIGATION_VERB_RE.source + ')\\s*(?:(?:到|(?:Lumi|露米|当前客户端)(?:的)?|当前|我的)\\s*|(?:to|the|current|my|personal|lumi|client)\\s+)*$', 'iu');
+  const surface = CLIENT_SURFACE_RULES.find(candidate => clauses.some(({ text: clauseText, probe }) => {
+    if (!CLIENT_NAVIGATION_VERB_RE.test(probe)) return false;
+    const match = clauseText.match(candidate.pattern);
     if (!match || match.index == null) return false;
     // A registered English surface name must be a complete UI target, not a segment of another identifier.
-    if (/^[a-z0-9]/iu.test(match[0]) && /[a-z0-9_-]/iu.test(text[match.index - 1] || '')
-      || /[a-z0-9]$/iu.test(match[0]) && /[a-z0-9_-]/iu.test(text[match.index + match[0].length] || '')) return false;
-    // The navigation verb must govern the client-surface noun. A capability
-    // phrase such as "use desktop tools to open Notepad" contains both words,
-    // but `open` comes after `tools` and targets Notepad, not Lumi's tools page.
-    const prefix = text.slice(Math.max(0, match.index - 48), match.index);
-    const sameClausePrefix = prefix.split(/[\uff0c,\u3002\uff01\uff1f!?\uff1b;\n]/u).pop() || '';
-    return CLIENT_NAVIGATION_VERB_RE.test(sameClausePrefix);
-  });
+    if (/^[a-z0-9]/iu.test(match[0]) && /[a-z0-9_-]/iu.test(clauseText[match.index - 1] || '')
+      || /[a-z0-9]$/iu.test(match[0]) && /[a-z0-9_-]/iu.test(clauseText[match.index + match[0].length] || '')) return false;
+    const prefix = clauseText.slice(0, match.index).replace(/[“”‘’「」『』"'\x60]/gu, '').trim();
+    const suffix = clauseText.slice(match.index + match[0].length).replace(/^[”’」』"'\x60]+/u, '').trim();
+    // i18n-allow: The operand ends at its UI noun/command boundary, not an external page's owner or location.
+    return directPrefix.test(prefix)
+      && /^(?:(?:页面|界面|面板|窗口)|(?:page|screen|panel|window)\b)?\s*(?:(?:一下|吧|即可)\s*)?(?:[，,。.!?！？；;\n]|$|(?:后|之后|然后|并|并且)|\b(?:and|then|afterwards)\b)/iu.test(suffix);
+  }));
   if (!surface) return null;
   // i18n-allow: Multilingual wallpaper close-action recognition; not user-visible copy.
   const clientActionArguments = surface.action === 'set_wallpaper_mode'
@@ -965,9 +985,26 @@ function inboundMessageRead(text: string): NormalizedActionIntent | null {
 }
 
 export function hasNegatedMessagingSendIntent(text: string): boolean {
-  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  if (/^(?:我)?(?:没有|没|并未|从未|不是|并不是).{0,100}(?:发给|发送给|给.{0,24}发|让你.{0,24}(?:发|回复|告诉))/u.test(text)) return true;
-  return /(?:不要|别|无需|禁止|不用|不需要|请勿|不(?=发送|发消息|回复|发出)).{0,32}(?:发送|发消息|回复|发出)|\b(?:do\s+not|don't|dont|never)\b.{0,64}\b(?:send|message|reply)\b|\bwithout\b.{0,40}\b(?:sending|messaging|replying)\b/iu.test(text);
+  const negative = negatedActionInstructions(text);
+  // i18n-allow: The owned negated predicate must be a send, including a coordinated send.
+  const sends = (instruction: string) => /^(?:(?:再|继续|对外|真正|实际|现在|立即)\s*)*(?:发送|发消息|回复|发出|(?:给|向)\s*[^\s，,。！？!?：:；;、]{1,32}\s*(?:发送|发消息|回复|发出|发))|^(?:(?:actually|really|ever|again|continue\s+to|to)\s+)*(?:send|sending|message|messaging|reply|replying)\b/iu.test(instruction);
+  // i18n-allow: A retrospective denial owns only its own clause and actual denied predicate.
+  if (actionInstructionClauses(text).some(({ probe }) => {
+    const denial = /^(?:我)?(?:没有|没|并未|从未|不是|并不是)\s*/u.exec(probe.trim());
+    if (!denial) return false;
+    return sends(probe.trim().slice(denial[0].length).replace(/^(?:让|叫|要求|授权|同意)你\s*/u, ''));
+  })) return true;
+  if (negative.some(({ instruction }) => instruction.split(/\b(?:and|or|nor)\b/iu).some(part => sends(part.trim())))) return true;
+  let coordinatedProhibition = false;
+  for (const { probe } of actionInstructionClauses(text)) {
+    // i18n-allow: Explicit contrast/sequencing starts a new instruction; sentence endings close a list.
+    if (/^(?:但是|不过|而是|但|然后|接着|随后|之后)|^(?:but|instead|then|next)\b/iu.test(probe.trim())) coordinatedProhibition = false;
+    if (negative.some(clause => probe.includes(clause.text))) coordinatedProhibition = true;
+    if (coordinatedProhibition && /^(?:and|or|nor)\s+/iu.test(probe.trim())
+      && sends(probe.trim().replace(/^(?:and|or|nor)\s+/iu, ''))) return true;
+    if (/[。！？!?；;\n]\s*$|\.\s*$/u.test(probe)) coordinatedProhibition = false;
+  }
+  return false;
 }
 
 function outgoingMessageSend(text: string): NormalizedActionIntent | null {
@@ -977,28 +1014,36 @@ function outgoingMessageSend(text: string): NormalizedActionIntent | null {
   if (!confirmationOnly && hasNegatedMessagingSendIntent(text)) return null;
   const patterns = [ // i18n-allow: Chinese outbound-message semantic-role recognition; not user-visible copy.
     /(?:请)?(?:准备)?给(?:测试联系人)?\s*[「『“"']([^」』”"']{1,32})[」』”"']\s*(?:发送消息|发消息|发)\s*[「『“"']([\s\S]{1,1000}?)[」』”"']/u, // i18n-allow: confirmation-only outbound-message semantic-role recognition.
-    /(?:发|发送|回复)给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})\s*[「『“"']([\s\S]{1,1000}?)[」』”"']/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
-    /(?:我|帮我|替我|麻烦你|请你|你)?\s*给\s*([^\s，。！？!?：:；;、]{1,32})\s*(?:发|发送|回复|说|告诉)\s*([\s\S]{1,1000})/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
-    /(?:我|帮我|替我|麻烦你|请你|你)?\s*(?:发|发送|回复)给\s*([^\s，。！？!?：:；;、]{1,32})\s*([\s\S]{1,1000})/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
+    /(?:发送|回复|发)给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})\s*[「『“"']([\s\S]{1,1000}?)[」』”"']/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
+    /(?:我|帮我|替我|麻烦你|请你|你)?\s*给\s*([^\s，。！？!?：:；;、]{1,32})\s*(?:发送|回复|告诉|发|说(?!明))\s*([\s\S]{1,1000})/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
+    /(?:我|帮我|替我|麻烦你|请你|你)?\s*(?:发送|回复|发)给\s*([^\s，。！？!?：:；;、]{1,32})\s*([\s\S]{1,1000})/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
     /(?:微信\s*)?(?:问一下|问问|询问)\s*([^\s，。！？!?：:；;、]{1,32})\s*([\s\S]{1,1000})/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
     /(?:send\s+(?:a\s+message\s+)?(?:to\s+)?|message\s+|reply\s+to\s+)(?!(?:has|have|had|is|was|were|contains?|includes?|with|body|content|attachment|file|text)\b)([\p{L}\p{N}_.'-]{1,40})\s*:?\s*([\s\S]{1,1000})/iu,
   ];
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    const target = trimSlot(match?.[1] || '');
-    const payload = trimSlot(match?.[2] || '');
-    if (!target || !payload || /^(?:我|我们)$/u.test(target)) continue; // i18n-allow: Chinese pronoun input recognition.
-    return {
-      kind: 'messaging_send',
-      operation: 'mutate',
-      subject: 'user',
-      target,
-      payload,
-      sideEffectClass: 'external_commit',
-      relation: 'new',
-      confidence: 0.97,
-      rule: 'messaging-outbound-role',
-    };
+  for (const { text: clauseText, probe } of affirmativeActionInstructionClauses(text)) {
+    // A quoted recipient is masked by the shared projection; the send predicate remains outside the literal.
+    // i18n-allow: Existing outbound predicate roles with a projected literal recipient.
+    if (!patterns.some(pattern => pattern.test(probe))
+      && !/^(?:(?:我|帮我|替我|麻烦你|请你?|你|准备)\s*)*(?:给\s*(?:发送消息|发消息|发送|回复|告诉|发|说)|(?:发送|回复|发)给)/u.test(probe)) continue;
+    for (const pattern of patterns) {
+      const match = clauseText.match(pattern);
+      const target = trimSlot(match?.[1] || '');
+      const payload = trimSlot(match?.[2] || '');
+      if (!target || !payload || /^(?:我|我们|你|你们)$/u.test(target)) continue; // i18n-allow: Chinese pronoun input recognition.
+      const requestPrefix = clauseText.slice(0, match?.index || 0).split(/[，,。！？!?；;\n]/u).pop() || '';
+      if (/(?:怎么|如何|怎样|教我|请教|不知道|不清楚|不懂)|\b(?:how|teach\s+me)\b/iu.test(requestPrefix)) continue; // i18n-allow: A send verb inside a how-to question is not an external command.
+      return {
+        kind: 'messaging_send',
+        operation: 'mutate',
+        subject: 'user',
+        target,
+        payload,
+        sideEffectClass: 'external_commit',
+        relation: 'new',
+        confidence: 0.97,
+        rule: 'messaging-outbound-role',
+      };
+    }
   }
   return null;
 }
@@ -1080,25 +1125,39 @@ export function genericExternalCommit(text: string, independentInstruction = fal
 }
 
 function localDesktopOperation(text: string): NormalizedActionIntent | null {
+  // i18n-allow: Quoted commands, examples and prohibitions do not supply desktop action predicates.
+  text = affirmativeActionInstructionClauses(text.replace(/^(?:你)?(?:能不能|能否|可否|是否可以)(?=\s*(?:用|使用|调用))/u, ''))
+    .filter(({ probe }) => /打开|启动|运行|切换到|聚焦|最大化|最小化|还原|关闭|\b(?:open|launch|start|focus|maximi[sz]e|minimi[sz]e|restore|close)\b/iu.test(probe))
+    .map(clause => {
+      const originalProbe = actionInstructionClauses(clause.text).map(part => part.probe).join('').trim();
+      // Preserve literal targets only when polarity left the whole instruction intact.
+      return originalProbe === clause.probe.trim() ? clause.text : clause.probe;
+    }).join('\n');
   // Client surfaces and external commits have already won the priority race.
   // This rule requires an explicit local action plus a concrete target; a lone
   // action-shaped word is never enough to create executable work.
   const forbidsInstrumentedAction = /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u7528).{0,20}(?:\u4f7f\u7528|\u8c03\u7528)|\b(?:do\s+not|don['\u2019]?t|without)\s+(?:use|using|call(?:ing)?)\b/iu.test(text);
   const instrumented = forbidsInstrumentedAction ? null : text.match(
-    // i18n-allow: Tool-as-instrument phrasing; the target belongs to the action after the tool noun.
-    /(?:\u4f7f\u7528|\u8c03\u7528).{0,24}?(?:\u5de5\u5177|\u6280\u80fd).{0,8}?(\u6253\u5f00|\u542f\u52a8|\u8fd0\u884c|\u5207\u6362\u5230|\u805a\u7126|\u6700\u5927\u5316|\u6700\u5c0f\u5316|\u8fd8\u539f|\u5173\u95ed)\s*(?:\u7a0b\u5e8f|\u5e94\u7528|\u8f6f\u4ef6|\u7a97\u53e3)?\s*([^\uff0c,\u3002\uff01\uff1f!?\uff1b;\n]{1,120})|\b(?:use|using|call(?:ing)?)\b.{0,30}?\b(?:tools?|skills?)\b\s+(?:to\s+)?\b(open|launch|start|focus|maximi[sz]e|minimi[sz]e|restore|close)\b\s*(?:app|application)?\s*([^,.!?;\n]{1,120})/iu,
+    // i18n-allow: An explicitly named instrument/application governs the following desktop action and its operand.
+    /(?:^|[，,。！？!?；;\n])\s*(?:(?:现在|请你?|帮我|麻烦你?|先|首先)\s*)*(?:用|使用|调用)\s*[^，,。！？!?；;\n]{1,80}?\s*(?:来|去)?(打开|启动|运行|切换到|聚焦|最大化|最小化|还原|关闭)\s*(?:程序|应用|软件|窗口)?\s*([^，,。！？!?；;\n]{1,120})|(?:^|[,.;!?\n])\s*(?:(?:please|now|first)\s+)*(?:use|using|call(?:ing)?)\s+[^,!?;\n]{1,80}?\s+to\s+(open|launch|start|focus|maximi[sz]e|minimi[sz]e|restore|close)\b(?!-)\s*(?:app|application)?\s*([^,!?;\n]{1,120})/iu,
   );
-  const direct = text.match(
+  const direct = [...text.matchAll(
     // i18n-allow: Chinese local desktop semantic-role input recognition.
-    /(?:^|[，。！？!?：:；;\s])(?:现在\s*)?(?:请|请你|帮我|麻烦你|给我)?\s*(?:先|首先)?\s*(打开|启动|运行|切换到|聚焦|最大化|最小化|还原|关闭|\b(?:open|launch|start|focus|maximi[sz]e|minimi[sz]e|restore|close)\b)\s*(?:程序|应用|软件|窗口|app|application)?\s*([^，。！？!?；;\n]{1,120})/iu,
-  );
+    /(?:^|[，。！？!?：:；;\s])(?:现在\s*)?(?:请|请你|帮我|麻烦你|给我)?\s*(?:先|首先)?\s*(打开|启动|运行|切换到|聚焦|最大化|最小化|还原|关闭|\b(?:open|launch|start|focus|maximi[sz]e|minimi[sz]e|restore|close)\b(?!-))\s*(?:程序|应用|软件|窗口|app|application)?\s*([^，。！？!?；;\n]{1,120})/giu,
+  )].find(match => {
+    const operand = match[2].trim();
+    // i18n-allow: A time/dependency suffix belongs to the preceding predicate, not to an application name.
+    return /^[“‘「『"\x27\x60]/u.test(operand)
+      || !/^(?:之后|以后|之前|以前|的时候|后|前)|^(?:after|before|when|once)\b/iu.test(operand);
+  });
   const objectFirst = text.match(/^(?:请|请你|帮我)?\s*(?:先)?(?:把|将|用)\s*([^，。！？!?；;\n]{1,80}?)\s*(?:先)?(打开|启动|运行|最大化|最小化|还原|关闭)(?:一下|吧)?[。！!]*$/u); // i18n-allow: Object-before-verb desktop instructions.
   if (!instrumented && !direct && !objectFirst) return null;
   const verb = trimSlot(instrumented?.[1] || instrumented?.[3] || objectFirst?.[2] || direct?.[1] || '');
   const rawTarget = trimSlot(instrumented?.[2] || instrumented?.[4] || objectFirst?.[1] || direct?.[2] || '')
     // i18n-allow: existing-window qualifiers are not part of the application name.
     .replace(/^(?:正在运行|当前运行|已经打开|已打开|现有)(?:着)?(?:的)?/u, '').trim();
-  const target = rawTarget.match(/^https?:\/\/[^\s\u3002\uff0c\uff1b,;]+/iu)?.[0] || rawTarget;
+  const locations = rawTarget.match(/https?:\/\/[^\s\u3002\uff0c\uff1b,;]+/giu) || [];
+  const target = locations.length === 1 ? locations[0].replace(/[.!?]+$/u, '') : rawTarget;
   if (!target || /^(?:什么|啥|哪个|了|好了|完成了|why|what|which)$/iu.test(target)) return null; // i18n-allow: interrogatives and completion feedback are not app names.
   return {
     kind: 'desktop_operation',
@@ -1181,6 +1240,9 @@ export function normalizeActionIntent(value: string, analysis?: ActionIntentAnal
   if (analysis) return analysis.intent(value);
   const text = withoutNegatedLookupClauses(currentTurnText(value));
   if (!text) return { ...EMPTY_INTENT };
+  if (hasExplicitNoToolInstruction(text)) {
+    return correctionOrExplanation(text) || statusQuery(text) || { ...EMPTY_INTENT, operation: 'explain' };
+  }
   // A fresh local observation is work. `status_query` means explaining saved
   // task evidence and intentionally disables new tools on follow-up turns.
   if (classifyExternalCliIntent(text) === 'inspect') return {

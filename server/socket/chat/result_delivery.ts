@@ -207,9 +207,6 @@ export async function completeChatTurn(context: completeChatTurnInput) {
       if (isReconnect) {
         updatedState = updateEmotionalState(updatedState, { type: 'reconnect', intensity: Math.min(1, hoursSinceLast / 72), userId: context.uid, timestamp: new Date().toISOString() });
       }
-      if (context.isNovel) {
-        updatedState = updateEmotionalState(updatedState, { type: 'novel_topic', userId: context.uid, timestamp: new Date().toISOString() });
-      }
       // HIM: comfort-gradient drive → dynamic initiative + curiosity
       const { state: himUpdated, him: newHim } = updateEmotionalStateWithHIM(updatedState, { type: 'self_reflection', userId: context.uid }, context.himState, context.text.slice(0, 40));
       saveEmotionalState(context.emotionKey, himUpdated);

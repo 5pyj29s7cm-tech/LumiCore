@@ -1,4 +1,7 @@
 import './helpers';
+import { prepareChatEvents } from '../server/socket/chat/phases/prepare_chat_events';
+import { projectConversationMessageForCustomer } from '../server/routes/conversations';
+import { resolveGeneratedDownloadPath } from '../server/files/knowledge/paths';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -148,4 +151,123 @@ it('stops the real entry engine after its first verified existing-video retrieva
 it.each([' ', '\n', '\r\n'])('requires the same current-turn evidence across claim whitespace %s', separator => {
   const text='已查询到工商登记信息。'+separator+'企业名称：企查查科技股份有限公司；登记状态：在业；成立日期：2014-03-12；注册资本：36225万元。'+separator+'来源：企查查官方MCP；查询时间：2026-10-20T22:26:27.226Z。';
   expect(finalizeLumiResponse({taskText:'通过企查查查询该公司的工商登记信息。',responseText:text,toolRecords:[],taskId:'missing-source-task',requestId:'missing-source-request',source:'chat'})).toMatchObject({blocked:true,reason:'Missing external legal platform result evidence.'});
+});
+
+
+it('completes the exact desktop Word to PDF handoff after real reads without an extra model closeout', async () => {
+  const os = (await import('node:os')).default;
+  const { Document, Packer, Paragraph } = await import('docx');
+  const { registerDocumentTools } = await import('../server/tools/definitions/document_tools');
+  const { registerPdfTools } = await import('../server/tools/definitions/pdf_tools');
+  const { extractPdfTextContent } = await import('../server/utils/pdf_text');
+  const home = path.join(String(process.env.LUMI_DATA_DIR), 'word-pdf-entry-home-' + randomUUID());
+  const homedir = vi.spyOn(os, 'homedir').mockReturnValue(home);
+  try {
+    const desktop = path.join(home, 'Desktop'); fs.mkdirSync(desktop, { recursive: true });
+    const source = path.join(desktop, '共同验收修订.docx'), output = path.join(desktop, '共同验收修订.pdf');
+    const body = '共同验收修订\n蓝色纸盒，共3个\n橙色书签，共9个';
+    fs.writeFileSync(source, await Packer.toBuffer(new Document({ sections: [{ children: body.split('\n').map(text => new Paragraph(text)) }] })));
+    const sourceHash = createHash('sha256').update(fs.readFileSync(source)).digest('hex');
+    const userId = 'real-word-pdf-' + randomUUID(), requestId = randomUUID();
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', ''), conversationId = conversation.id;
+    const identity = { userId, conversationId, requestId, agentId: 'lumi', domain: 'personal' as const, orgId: '' };
+    const text = '读取桌面的“共同验收修订.docx”，将全部文字制作成桌面的“共同验收修订.pdf”，保留标题和两条内容，不修改原Word。核对PDF文字后，把原Word和PDF两个文件都发到当前聊天。';
+    const registry = new ToolRegistry(); registerDocumentTools(registry); registerPdfTools(registry);
+    let round = 0, unnecessaryModelCalls = 0; model.mockReset(); model.mockImplementation(async () => {
+      if (++round === 1) return { text: '', toolCalls: [{ id: 'real-source-docx-read', name: 'read_docx', arguments: { filePath: source } }] };
+      if (round === 2) return { text: '', toolCalls: [{ id: 'real-exact-pdf-create', name: 'create_pdf', arguments: { outputPath: output, title: '共同验收修订', content: body } }] };
+      if (readDB().conversationActionReceipts.some((row: any) => row.requestId === requestId && row.toolName === 'read_pdf' && row.outcome === 'verified_success')) { unnecessaryModelCalls++; throw Error('Verified Word and PDF handoff must finish without another model closeout.'); }
+      if (round === 3) return { text: '', toolCalls: [{ id: 'real-pdf-readback', name: 'read_pdf', arguments: { filePath: output } }] };
+      unnecessaryModelCalls++; throw Error('Unexpected additional model call for an exact three-tool handoff.');
+    });
+    const result: any = await runLumiEntryTurn({ entry: { source: 'chat', channel: 'chat', historyLimit: 10, failureText: 'Not complete.', failureReason: 'fixture' }, identity, userText: text,
+      authorization: captureRequestAuthorization(() => true, 'Revoked'), controller: new AbortController(),
+      planning: { dispatch: { ...identity, text, source: 'chat', channel: 'chat', operationMode: 'assistant', targetIsLumi: true }, registry,
+        personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: [], maxIterations: 4 }, executionBoundary: 'trusted_local' },
+      assemble: () => ({ systemPrompt: 'Offline real-document handoff fixture; model selects only the next tool.', model: { registry,
+        config: { provider: 'deepseek', model: 'offline-fixture', userId, requestId }, getters: {}, maxIterations: 4,
+        context: { authenticated: true, authRole: 'admin', localExecution: true, executionBoundary: 'trusted_local', actionIntent: text, routedTaskText: text,
+          allowLocalFileWrites: true, requestConfirmation: async () => true } } }), deliver: value => value } as any);
+    expect(unnecessaryModelCalls).toBe(0); expect(round).toBeGreaterThanOrEqual(2); expect(round).toBeLessThanOrEqual(3); expect(result.toolRecords.map((record: any) => record.name)).toEqual(['read_docx', 'create_pdf', 'read_pdf']);
+    expect(result.toolRecords.every((record: any) => record.envelope?.status === 'verified_success'), JSON.stringify(result.toolRecords.map((record: any) => ({name:record.name,error:record.error,result:record.result,verification:record.terminalVerification,envelope:record.envelope?.status})))).toBe(true);
+    expect(result.finalized.blocked, JSON.stringify(result.finalized)).toBe(false);
+    expect(readDB().conversationActionTasks.find((task: any) => task.id === result.taskId)?.status).toBe('completed');
+    const expected = [source, output].sort();
+    expect(result.finalized.fileArtifacts.map((file: any) => file.path).sort()).toEqual(expected);
+    const events = await prepareChatEvents({ uid: userId, requestId, selectedConversationId: conversationId, selectedConversation: conversation,
+      visibleUserText: text, resolvedDomain: 'personal', resolvedOrgId: '', eventSource: 'command-center-chat', conversationAgentId: 'lumi',
+      durableTaskId: result.taskId, collectRequestTerminalRecords: () => result.toolRecords } as any);
+    const terminal = events.context!.normalizeAgentPayload('agent:response', { ...result.finalized, finalized: true });
+    expect(terminal.blocked).toBe(false); expect(terminal.fileArtifacts.map((file: any) => file.path).sort()).toEqual(expected);
+    const stored = readDB().interactions.find((row: any) => row.requestId === requestId && row.role === 'assistant');
+    expect(stored).toBeTruthy();
+    const history = projectConversationMessageForCustomer(stored);
+    expect(history.fileArtifacts.map((file: any) => file.path).sort()).toEqual(expected);
+    const req = { user: { uid: userId, role: 'admin' }, query: { conversationId } } as any;
+    for (const file of expected) expect(resolveGeneratedDownloadPath(file, req)).toBe(fs.realpathSync.native(file));
+    expect(createHash('sha256').update(fs.readFileSync(source)).digest('hex')).toBe(sourceHash);
+    const pdfText = (await extractPdfTextContent(output)).text.replace(/\s+/gu, '');
+    for (const line of body.split('\n')) expect(pdfText).toContain(line.replace(/\s+/gu, ''));
+    expect(pdfText).not.toContain('共7个');
+  } finally { homedir.mockRestore(); }
+});
+
+
+it.each([
+  '另外通过微信把新文件发送给王经理。',
+  '再用微信给李女士发送文件。',
+])('preserves an additional messaging action beside source and output components: %s', send => {
+  const text = sourceRead + ' ' + firstWrite + ' ' + send;
+  const contract = buildActionEvidenceContract(text);
+  expect(contract.components).toHaveLength(3);
+  const messaging = contract.components!.filter(item => item.contract.kind === 'messaging_send');
+  expect(messaging).toHaveLength(1);
+  expect(messaging[0].text).toContain('微信');
+  expect(messaging[0].contract.preferredTools).toContain('wechat_send_file');
+  expect(hasCoreActionEvidence(messaging[0].contract, [], messaging[0].text)).toBe(false);
+});
+it('does not turn current-chat file handoff into an additional messaging action', () => {
+  const text = '读取桌面的“源文.docx”，将全部文字制作成桌面的“转出.pdf”。核对PDF文字后，把原Word和PDF两个文件都发到当前聊天。';
+  const contract = buildActionEvidenceContract(text);
+  expect(contract.components).toHaveLength(2);
+  expect(contract.components!.every(item => item.contract.kind === 'artifact_work')).toBe(true);
+});
+it.each([
+  '不要通过微信把新文件发送给王经理。',
+  '怎么通过微信发送这个文件？',
+])('does not add negated or informational messaging to artifact obligations: %s', suffix => {
+  const contract = buildActionEvidenceContract(sourceRead + ' ' + firstWrite + ' ' + suffix);
+  expect(contract.components).toHaveLength(2);
+  expect(contract.components!.some(item => item.contract.kind === 'messaging_send')).toBe(false);
+});
+it('does not turn quoted output content into an additional messaging action', () => {
+  const contract = buildActionEvidenceContract(sourceRead + ' Then create D:/note.txt containing “通过微信给王经理发送文件”。');
+  expect(contract.components).toHaveLength(2);
+  expect(contract.components!.some(item => item.contract.kind === 'messaging_send')).toBe(false);
+});
+
+it('keeps normal finalization blocked when source and output succeeded but the extra file send did not', () => {
+  const fixtureParent = String(process.env.LUMI_DATA_DIR);
+  const root = fs.mkdtempSync(path.join(fixtureParent, 'pending-file-send-'));
+  const source = path.join(root, 'source.txt');
+  const output = path.join(root, 'output.txt');
+  const turn = { requestId: 'pending-send-request', taskId: 'pending-send-task' };
+  const verifiedRead = { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'Current complete text read.' };
+  try {
+    fs.writeFileSync(source, 'SOURCE'); fs.writeFileSync(output, 'DONE');
+    const text = 'Read the file "' + source + '" and show its complete contents. Then create the file "' + output + '" containing "DONE" and read it back. 另外通过微信把新文件发送给王经理。';
+    const records = [
+      { id: 'source-read', name: 'read_file', arguments: { path: source }, result: 'SOURCE', ...turn, terminalVerification: verifiedRead },
+      { id: 'output-write', name: 'write_file', arguments: { path: output, content: 'DONE' }, result: 'File written: ' + output, ...turn,
+        terminalVerification: { status: 'verified' as const, strategy: 'artifact' as const, reason: 'Current local output exists.' } },
+      { id: 'output-read', name: 'read_file', arguments: { path: output }, result: 'DONE', ...turn, terminalVerification: verifiedRead },
+    ];
+    const contract = buildActionEvidenceContract(text);
+    expect(contract.components!.some(item => item.contract.kind === 'messaging_send')).toBe(true);
+    expect(hasCoreActionEvidence(contract, records, text, undefined, turn)).toBe(false);
+    expect(finalizeLumiResponse({ taskText: text, responseText: '文件已全部发给王经理，任务已完成。', toolRecords: records, source: 'chat', ...turn }).blocked).toBe(true);
+  } finally {
+    if (!path.resolve(root).startsWith(path.resolve(fixtureParent) + path.sep)) throw new Error('Fixture cleanup escaped its isolated directory.');
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

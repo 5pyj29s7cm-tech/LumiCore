@@ -12,7 +12,7 @@ import type { SurfaceReturnTarget } from './shared';
 import desktopConfig from '../../../../src-tauri/tauri.conf.json';
 
 export function useDesktopSurfaceControls(previousBindings: ReturnType<typeof useDesktopNotificationsAndShortcuts>) {
-  const { canCustomizeLumiAppearance, lang, setSelectedPet, savePetPrefsToServer, equippedAccessories, t, setIsNotificationPanelOpen, windowCommand, setPersonalizationSection, openKnowledgeBase, openCommandCenter, openMemoryAvatar, inferSurfaceReturnTarget, dismissUtilitySurfaces, surfaceReturnTargetRef, setIsSearchOpen, setViewMode, setActiveTab, setNexusReturnTarget, knowledgeOpen, closeKnowledgeBase, closeMemoryAvatar, nexusReturnTarget, activeTab, setIsDesktopWidgetMode, isTauri, isWallpaperModeRef, chatOpen, wallpaperPresentationRef, applyWallpaperMode, endMeetingAndReport, meetingHistoryReadOnly, isDesktopWidgetMode, openWindows, operationMode, orgConnection, setOperationMode, switchDomain, workDomain, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle, setSettingsSection, socket, callError, clientRuntime, viewMode, focusedWindow, settingsSection, isSearchOpen, memoryLabOpen, sanctuaryOpen, commandCenterView, isNotificationPanelOpen, meetingNotesOpen, isWallpaperMode, organizationWorkspaceView, clientPermissions, availableOrganizationWorkspaceViews, reportedKnowledgeRuntimeState, minimizedWindows, wallpaperPresentation, wallpaperWorkspace, callState, isMuted, meetingPaused, meetingNotes, meetingReport, meetingStartedAt, meetingReportGenerating, agentStatus, mcpActivities } = previousBindings;
+  const { canCustomizeLumiAppearance, lang, setSelectedPet, savePetPrefsToServer, equippedAccessories, t, setIsNotificationPanelOpen, windowCommand, setPersonalizationSection, openKnowledgeBase, openCommandCenter, openMemoryAvatar, inferSurfaceReturnTarget, restoreSurfaceReturnTarget, dismissUtilitySurfaces, surfaceReturnTargetRef, setIsSearchOpen, setViewMode, setActiveTab, setNexusReturnTarget, knowledgeOpen, closeKnowledgeBase, closeMemoryAvatar, nexusReturnTarget, activeTab, setIsDesktopWidgetMode, isTauri, isWallpaperModeRef, chatOpen, wallpaperPresentationRef, applyWallpaperMode, endMeetingAndReport, meetingHistoryReadOnly, isDesktopWidgetMode, openWindows, operationMode, orgConnection, setOperationMode, switchDomain, workDomain, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle, setSettingsSection, socket, callError, clientRuntime, viewMode, focusedWindow, settingsSection, isSearchOpen, memoryLabOpen, sanctuaryOpen, commandCenterView, isNotificationPanelOpen, meetingNotesOpen, isWallpaperMode, organizationWorkspaceView, clientPermissions, availableOrganizationWorkspaceViews, reportedKnowledgeRuntimeState, minimizedWindows, wallpaperPresentation, wallpaperWorkspace, callState, isMuted, meetingPaused, meetingNotes, meetingReport, meetingStartedAt, meetingReportGenerating, agentStatus, mcpActivities } = previousBindings;
 
 
   const widgetTransitions = useRef<Promise<boolean>>(Promise.resolve(true));
@@ -41,9 +41,10 @@ export function useDesktopSurfaceControls(previousBindings: ReturnType<typeof us
     if (windowId === 'command-center') { openCommandCenter('office'); return; }
     if (windowId === 'memory-avatar') { void openMemoryAvatar(undefined, returnTarget); return; }
 
-    const nexusOrigin = windowId === 'nexus' ? returnTarget || inferSurfaceReturnTarget() : 'home';
+    const nexusOrigin = windowId === 'nexus' && (returnTarget || inferSurfaceReturnTarget()) === 'command-center' ? 'command-center' : 'home';
     dismissUtilitySurfaces();
-    surfaceReturnTargetRef.current = 'home';
+    surfaceReturnTargetRef.current = windowId === 'skills' || windowId === 'business' || windowId.startsWith('business-')
+      ? returnTarget || inferSurfaceReturnTarget() : 'home';
     setIsSearchOpen(windowId === 'app-launcher');
     setViewMode(windowId === 'nexus' ? 'world' : 'personal');
     if (windowId === 'home') {
@@ -69,8 +70,10 @@ export function useDesktopSurfaceControls(previousBindings: ReturnType<typeof us
 
   const closeWindow = useCallback((tab: string) => {
     try { sounds.playClick(); } catch {}
-    if (windowCommand('close', tab)) setActiveTab('home');
-  }, [setActiveTab, windowCommand]);
+    const lastWindowClosed = windowCommand('close', tab);
+    if ((tab === 'skills' || tab === 'business' || tab.startsWith('business-')) && focusedWindow === tab) restoreSurfaceReturnTarget();
+    else if (lastWindowClosed) setActiveTab('home');
+  }, [focusedWindow, restoreSurfaceReturnTarget, setActiveTab, windowCommand]);
 
   const focusOsWindow = useCallback((tab: string) => { windowCommand('focus', tab); }, [windowCommand]);
 

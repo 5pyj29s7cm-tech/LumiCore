@@ -11,12 +11,16 @@ describe('desktop startup shell', () => {
     expect(html).not.toContain('fonts.googleapis.com');
   });
 
-  it('uses one truthful startup sequence without the old white flash', () => {
+  it('waits only for real shell readiness without an opening animation', () => {
     const desktopEntry = readImplementationSource(path.join(process.cwd(), 'src/entries/desktop.tsx'), 'utf8');
     const desktopUi = readImplementationSource(path.join(process.cwd(), 'src/components/DesktopUI.tsx'), 'utf8');
     const startup = readImplementationSource(path.join(process.cwd(), 'src/components/StartupSequence.tsx'), 'utf8');
 
-    expect(desktopEntry).toContain('<StartupSequence ready={!shell.loading} />');
+    expect(desktopEntry).toContain('if (shell.loading) return <StartupSequence />;');
+    expect(desktopEntry).not.toContain('startupVisible');
+    expect(desktopEntry).not.toContain('<motion.');
+    expect(startup).not.toContain('motion/react');
+    expect(startup).toContain('role="status"');
     expect(desktopEntry).toContain('initializeSharedSocketRuntime();');
     expect(desktopUi).not.toContain('HardcoreBootSequence');
     expect(startup).not.toContain('Core Temperature');

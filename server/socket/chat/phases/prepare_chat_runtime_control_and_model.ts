@@ -1,5 +1,4 @@
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
-import { resolveModelRequestInputBudget } from "../../../llm/request_context_budget";
 import { toolRegistry } from "../../../tools/registry";
 import { executeToolCall } from "../../../tools/execution_engine";
 import { buildForegroundTaskCompletionFeedback } from "../../../cognition/acceptance_evidence";
@@ -187,7 +186,6 @@ export async function prepareChatRuntimeControlAndModel(context: NonNullable<Awa
         ...(context.nativeRequestBinding || {}),
         interactionId: context.interactionId,
         source: 'chat',
-        inputTokenBudget: resolveModelRequestInputBudget(),
       };
 
       // Hybrid dispatch is opt-in only; do not change providers unless the user chose auto.

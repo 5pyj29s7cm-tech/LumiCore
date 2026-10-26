@@ -4,7 +4,6 @@ import { getScopedPreferredLLM } from "../user_preferences";
 import { compileReasoningFailoverCandidates } from "../failover_policy";
 import { isExtensionProviderId, isRegisteredOpenAICompatibleProvider } from "../../extensions/registry";
 import type { LLMCallConfig } from './contracts';
-import { isReasoningModel } from './openai_compatible';
 
 export function autoDispatchPreference(config: LLMCallConfig) {
   const preferred = config.userId
@@ -27,17 +26,12 @@ export function autoDispatchPreference(config: LLMCallConfig) {
   };
 }
 
-/**
- * An explicit caller budget is a contract. Classifiers and other bounded
- * control-plane calls must not silently become 4k-token reasoning requests
- * merely because the selected model can reason. Full reasoning calls that do
- * not provide a budget keep the generous default.
- */
-export function resolveModelMaxTokens(model: string, requested?: number): number | undefined {
+/** Explicit caller budgets remain binding; otherwise use the provider's model default. */
+export function resolveModelMaxTokens(_model: string, requested?: number): number | undefined {
   if (Number.isFinite(requested) && Number(requested) > 0) {
     return Math.max(1, Math.floor(Number(requested)));
   }
-  return isReasoningModel(model) ? 8_000 : undefined;
+  return undefined;
 }
 
 export function pinnedFailoverDispatchPreference(config: LLMCallConfig) {

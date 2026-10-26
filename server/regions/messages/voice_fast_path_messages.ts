@@ -39,7 +39,11 @@ export function formatCnToolFailureDetail(error: string): string {
     return `视觉识别服务返回 HTTP ${httpStatus}，这次没有取得可用的识别结果。`;
   }
   if (/\bAbortError\b|operation was aborted|request was aborted/iu.test(raw)) {
-    return '这次请求被新的输入或停止操作打断，旧请求已经结束。';
+    return '这一步在返回结果前被打断，未取得可用结果。';
+  }
+  if (/read_file reads UTF-8 text only/iu.test(raw)) return '这份文件需要按文档格式提取正文，纯文本读取未能完成。';
+  if (/current file reference is ambiguous|names an unbound produced file|Document analysis is blocked until|Document analysis target does not match/iu.test(raw)) {
+    return '程序未能确认这次要读取的源文件，文档正文尚未读取。';
   }
   if (/previous runtime ended|pending confirmation expired/i.test(raw)) {
     return '上一次客户端运行结束时任务尚未收尾，已停在最后一个可验证步骤，可以从这里继续。';
@@ -154,12 +158,9 @@ export const CN_RESULT_GROUNDING_MESSAGES = {
   artifactReadbackHeading: '回读结果：',
   artifactReadbackExcerpt: (limit: number) => `这里只展示回读内容的前 ${limit} 个字符。`,
   desktopObservationLabel: '桌面状态读取',
-  priorDiagnosticUnsupported: '刚才没有可核实的客户端自检工具回执。我不能把延迟解释成“在跑自检”；只能确认那一轮没有记录到客户端自检。',
   clientStateProtocolBlocked: '我还没有读取到当前客户端状态，不能把内部工具请求当作回答。',
   toolProtocolBlocked: '这轮工具请求没有被执行，内部协议文本已拦截。',
-  unverifiedExecutionActivity: '这轮没有启动新的执行任务；刚才的回复混入了旧任务内容。',
   actionNotStarted: '这轮没有任何工具执行回执；刚才只说了方案，实际还没开始。不能把计划当成执行结果。',
-  executionEndedWithoutCompletion: '这一轮操作已经结束，但还没有证据证明目标完成；不会继续显示“正在执行”。',
   desktopSoftwareShortcutCount: (count: number) => `桌面上有 ${count} 个软件快捷方式。`,
   desktopSnapshotIntro: '桌面信息已经更新。',
   desktopUnknownWindow: '未知窗口',
@@ -218,8 +219,5 @@ export const CN_ACTION_CONTRACT_BLOCKERS = {
   cadDrafting: (failure: string) => failure
     ? `这次还没有完成 AutoCAD 前台绘图：${failure}。`
     : '这次还没有完成并验证 AutoCAD 前台绘图。',
-  generic: (failure: string) => [
-    failure ? `这一步还没有完成：${failure}。` : '这一步还没有拿到可验证的执行结果。',
-    '我没有把未执行或未验证的动作说成已经完成。',
-  ].join('\n'),
+  generic: (failure: string) => failure ? `${failure}。` : '',
 } as const;

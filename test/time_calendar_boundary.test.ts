@@ -53,7 +53,7 @@ describe('user calendar boundaries', () => {
     const config = personalityRegistry.get('lumi')!;
     for (const sensory of [undefined, { audio: true, deviceCount: 1, activeDeviceTypes: [], visual: false, spatial: false, haptic: false, holographic: false }]) {
       const prompt = generateSystemPrompt(config, { mode: 'chat', sensory }, { userId, domain: 'personal' });
-      expect(prompt).toContain(firstLine!);
+      expect(prompt).not.toContain(firstLine!);
     }
     const avatarPrompt = generateSystemPrompt({ ...config, id: 'memory_avatar_person' }, { mode: 'chat' }, { userId });
     expect(avatarPrompt).not.toContain(firstLine!);

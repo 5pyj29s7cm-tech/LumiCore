@@ -5,7 +5,6 @@ import type { prepareChatPriorTaskQuery } from './phases/prepare_chat_prior_task
 
 import { buildTaskTargetAnchorProjection } from "../../conversation/task_target_anchor";
 
-import { formatClientSelfPromptForTurn } from "../../client/self_model";
 
 import { toolRegistry } from "../../tools/registry";
 
@@ -13,16 +12,13 @@ import type { LumiExecutionPipeline, BuildLumiExecutionPipelineInput } from "../
 
 import { restrictSystemPromptForExecutionBoundary } from "../../tools/remote_policy";
 
-import { buildLumiRuntimeCapabilityContext } from "../../cognition/capability_context";
 
 import { buildModeOverlay, generateSystemPrompt } from "../../personality/engine";
 import { personalityRegistry } from "../../personality";
 
-import { getConversationSummary, getTopicContext } from "../../conversation/manager";
 
-import { buildProfessionOverlay } from "../../autonomy/professions";
 
-type prepareChatPromptContextInput = NonNullable<Awaited<ReturnType<typeof prepareChatPriorTaskQuery>>['context']> & Pick<Awaited<ReturnType<typeof retrieveChatContext>>, 'relevantMemories' | 'ragChunks' | 'emotionalState' | 'personalityConfig' | 'kbContext'> & {
+type prepareChatPromptContextInput = NonNullable<Awaited<ReturnType<typeof prepareChatPriorTaskQuery>>['context']> & Pick<Awaited<ReturnType<typeof retrieveChatContext>>, 'emotionalState' | 'personalityConfig'> & {
   conversationId: string;
   conversationMode: string;
   operationMode: LumiClientMode;
@@ -37,7 +33,6 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
         sensory,
       };
       const personalityOptions = {
-        memories: context.relevantMemories.length > 0 ? context.relevantMemories : undefined,
         emotionalState: context.emotionalState,
         userId: context.uid,
         userText: context.text,
@@ -60,27 +55,10 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
           );
       console.log('[ChatHandler] systemPrompt built, personality name:', personality?.name);
 
-      // Inject conversation summary chain for long-running conversations (anti-entropy)
       let effectiveSystemPrompt = restrictSystemPromptForExecutionBoundary(
         systemInstruction,
         context.toolSecurityContext.executionBoundary,
       );
-      if (!context.isMemoryAvatar && context.toolSecurityContext.executionBoundary !== 'remote_restricted') {
-        effectiveSystemPrompt += '\n\n' + formatClientSelfPromptForTurn(context.uid, context.visibleUserText, { domain: context.resolvedDomain, orgId: context.resolvedOrgId, socketId: context.socket?.id });
-      }
-      if (context.conversationId) {
-        const summaryContext = getConversationSummary(context.conversationId);
-        if (summaryContext) {
-          effectiveSystemPrompt += `\n\n## Conversation Context\n${summaryContext}`;
-        }
-      }
-      // Topic continuity: inject recent conversation topics
-      if (context.conversationId) {
-        const topicCtx = getTopicContext(context.conversationId);
-        if (topicCtx) {
-          effectiveSystemPrompt += topicCtx;
-        }
-      }
 
       // Inject conversation mode overlay (shapes interaction style without changing personality)
       if (context.conversationMode) {
@@ -88,10 +66,6 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
         if (modeOverlay) {
           effectiveSystemPrompt += '\n\n' + modeOverlay;
         }
-      }
-      effectiveSystemPrompt += '\n\n' + context.buildNaturalReplyStyleOverlay(context.eventSource);
-      if (context.toolSecurityContext.executionBoundary !== 'remote_restricted') {
-        effectiveSystemPrompt += '\n\nFile handling rule: attachments supplied in this request may be newly added files or verified material carried forward by the client within this same conversation. Treat their copied local paths, extracted text, and transcripts as available conversation material and keep using them for follow-up questions. Ask the user to reattach only when no usable attachment/path is supplied or a supplied path is unreadable; never ask merely because the material first appeared in an earlier turn.';
       }
       if (context.pendingConfirmationPrompt) {
         effectiveSystemPrompt += `\n\n${context.pendingConfirmationPrompt}`;
@@ -154,40 +128,8 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
       const completionTaskText = executionPipeline.trustedActionContinuation
         ? context.conversation?.actionContinuationState?.goal || executionTaskText
         : executionTaskText;
-      if (context.toolSecurityContext.executionBoundary !== 'remote_restricted') {
-        effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
-        effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
-      }
-      if (context.toolSecurityContext.executionBoundary !== 'remote_restricted' && executionPipeline.executionRequested) {
-        effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
-          userId: context.uid,
-          text: turnFlow.routeText,
-          flow: turnFlow,
-          toolRegistry,
-          domain: context.resolvedDomain,
-          orgId: context.resolvedOrgId,
-        });
-      }
 
-      // Inject profession context — adapt language and expertise to user's trade
-      try {
-        const professionOverlay = context.resolvedDomain === 'personal' ? buildProfessionOverlay() : null;
-        if (professionOverlay) {
-          effectiveSystemPrompt += professionOverlay;
-        }
-      } catch {}
 
-      // Inject contact context when user mentions people they know
-      if (context.resolvedDomain === 'personal') try {
-        const { matchContactsFromText } = await import('../../contacts/store');
-        const { formatContactsForContext } = await import('../../contacts/context');
-        const mentioned = matchContactsFromText(context.uid, context.text);
-        if (mentioned.length > 0) {
-          effectiveSystemPrompt += '\n\n' + formatContactsForContext(mentioned);
-          effectiveSystemPrompt += '\n\nYou know these people personally. Use this information to provide relevant, contextual responses when the user asks about them.';
-        }
-      } catch {}
-return { turnFlow, executionPipeline, personality, effectiveSystemPrompt, executionTaskText, completionTaskText,
-  knowledgeContext: [context.ragChunks.join('\n\n'), context.kbContext].filter(Boolean).join('\n\n') };
+return { turnFlow, executionPipeline, personality, effectiveSystemPrompt, executionTaskText, completionTaskText };
       } };
 }

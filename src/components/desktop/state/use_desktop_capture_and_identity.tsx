@@ -1,11 +1,10 @@
+import { businessWorkbenchCopy } from '../../../i18n/locales/businessWorkbench';
+import { Radio, ShoppingBag, Landmark, Archive } from 'lucide-react';
 import { useMeetingTranscript } from "../useMeetingTranscript";
 import { type DesktopIconDefinition, externalCapabilityDesktopIcon } from "../launcher";
 import { type ProactiveChatDetail, formatProactiveChatPrefill } from "../proactive_presentation";
-import { businessWorkbenchCopy } from "../../../i18n/locales/businessWorkbench";
-import { BriefcaseBusiness } from "lucide-react";
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { sounds } from "../../../services/soundService";
-import { Sparkles, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { useSocket } from "@/hooks/useSocket";
 import { useAmbientPoller } from "@/hooks/useAmbientPoller";
@@ -177,10 +176,12 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
     ][index % 4],
     externalLaunch: { capability, action },
   }));
+  const businessCopy = businessWorkbenchCopy[lang === 'en' ? 'en' : 'zh'];
   const desktopIcons: DesktopIconDefinition[] = [
-    { id: 'business', label: businessWorkbenchCopy[lang === 'en' ? 'en' : 'zh'].title, icon: <BriefcaseBusiness size={24} />, colorClass: 'from-emerald-500 to-cyan-600', windowId: 'business' },
-    { id: 'tools', labelKey: 'tools', icon: <Wrench size={24} />, colorClass: 'from-amber-500 to-orange-600', windowId: 'tools' },
-    { id: 'skills', labelKey: 'skills', icon: <Sparkles size={24} />, colorClass: 'from-emerald-500 to-teal-600', windowId: 'skills' },
+    { id: 'business', label: businessCopy.social, icon: <Radio size={24} />, colorClass: 'from-violet-500 to-fuchsia-600', windowId: 'business' },
+    { id: 'business-ecommerce', label: businessCopy.commerce, icon: <ShoppingBag size={24} />, colorClass: 'from-emerald-500 to-cyan-600', windowId: 'business-ecommerce' },
+    { id: 'business-finance', label: businessCopy.finance, icon: <Landmark size={24} />, colorClass: 'from-blue-500 to-indigo-600', windowId: 'business-finance' },
+    { id: 'business-archive', label: businessCopy.archive, icon: <Archive size={24} />, colorClass: 'from-amber-500 to-orange-600', windowId: 'business-archive' },
     ...reviewedExternalDesktopIcons,
   ];
   const desktopIconAreaHeight = Math.max(

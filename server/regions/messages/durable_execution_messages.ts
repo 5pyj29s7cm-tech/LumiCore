@@ -13,7 +13,7 @@ export const CN_DURABLE_EXECUTION_MESSAGES = {
   resumeFromVerifiedArtifacts:
     '以上文件已生成；本次请求尚未全部完成。',
   resumeWithoutVerifiedArtifacts:
-    '可能已生成文件，但尚未确认可交付成果。',
+    '尚未确认可交付成果。',
   terminalVerificationPassed: '已通过终态核验',
   verifiedCheckpointHeading: '已核验的执行结果：',
   verifiedCheckpointContinuation: '当前进度与回执仍可用于继续后续步骤。',

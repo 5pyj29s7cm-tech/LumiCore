@@ -6,7 +6,7 @@ export { toolRecordSucceeded } from '../tools/receipt_payload';
 import crypto from 'node:crypto';
 import type { ToolPolicy } from '../personality/types';
 import type { ToolExecutionIdentity, ToolExecutionRecord } from '../tools/types';
-import { EXECUTION_IDENTITY_FIELDS, toolExecutionIdentity } from '../tools/execution_identity';
+import { defaultLocalToolExecutionKey, EXECUTION_IDENTITY_FIELDS, toolExecutionIdentity } from '../tools/execution_identity';
 import { isArtifactReaderRecord, artifactReadbackMetadata } from '../tools/artifact_evidence';
 import { inspectPersistedToolExecutionReceipt } from '../tools/persisted_execution_receipt';
 import {
@@ -24,6 +24,7 @@ export function mergeToolExecutionRecords(prior: ToolExecutionRecord[], incoming
   for (const record of incoming) {
     const index = merged.findIndex(item => item.name === record.name
       && item.taskId === record.taskId && item.requestId === record.requestId
+      && (item.modelRoutingReceiptId || '') === (record.modelRoutingReceiptId || '')
       && (record.id ? item.id === record.id : !item.id
         && item.idempotencyKey === record.idempotencyKey
         && JSON.stringify(item.arguments || {}) === JSON.stringify(record.arguments || {})
@@ -367,7 +368,7 @@ export function coalesceToolExecutionRecords(
   const latestIndexByKey = new Map<string, number>();
   for (const record of records) {
     if (!record?.name) continue;
-    const key = JSON.stringify([record.taskId || '', record.requestId || '', record.id || '', toolRecordKey(record)]);
+    const key = JSON.stringify([record.taskId || '', record.requestId || '', record.id || '', toolRecordKey(record), record.modelRoutingReceiptId || '']);
     if (hasPlaybackObservation(record)) {
       // A new capture can supersede earlier playback, including an ad, pause
       // or unreadable progress. Preserve runtime observation order instead of
@@ -526,7 +527,7 @@ export function mergeTaskReceipts(
     const observation = hasPlaybackObservation(receipt)
       || ['observe', 'test'].includes(receipt.capability?.operation || '')
       || isArtifactReaderRecord({ name: receipt.name } as ToolExecutionRecord);
-    const mergeKey = JSON.stringify([receipt.taskId || '', receipt.requestId || '', receipt.id || '', receipt.key]);
+    const mergeKey = JSON.stringify([receipt.taskId || '', receipt.requestId || '', receipt.id || '', receipt.key, receipt.modelRoutingReceiptId || '']);
     if (!merged.has(mergeKey)) order.push(mergeKey);
     const prior = merged.get(mergeKey);
     const rank = { failure: 0, partial: 1, success: 2 } as const;
@@ -591,7 +592,9 @@ function hasVerifiedReadObservation(records: ToolExecutionRecord[], goal: string
     if (!snapshot?.root || ![snapshot.task.goal, (() => { try { return JSON.parse(snapshot.task.context || '{}').actionState?.latestInstruction; } catch { return ''; } })()].some(value => String(value || '').trim() === goal.trim())
       || !snapshot.turns.some(turn => turn.requestId === current.requestId
         && (['accepted','leased'].includes(turn.status) || snapshot.task.status === 'completed' && turn.status === 'terminal'))) return false;
-    const stored = snapshot.receipts.filter(row => row.id === record.id && row.taskId === current.taskId
+    const stored = snapshot.receipts.filter(row => (row.id === record.id
+      || Boolean(record.modelRoutingReceiptId && record.idempotencyKey === defaultLocalToolExecutionKey(record)))
+      && row.taskId === current.taskId
       && row.requestId === current.requestId && row.turnId === record.turnId && row.turnRowId === record.turnRowId
       && row.toolName === record.name && row.modelRoutingReceiptId === record.modelRoutingReceiptId && row.executionOrigin === 'model_selected'
       && row.targetIdentity === record.envelope?.targetIdentity && row.idempotencyKey === record.idempotencyKey

@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { buildLumiCapabilitySelection } from '../server/cognition/capability_selection';
 import { buildLumiRuntimeCapabilityContext } from '../server/cognition/capability_context';
 import { buildLumiExecutionDecision } from '../server/cognition/execution_decision';
-import { buildLumiOperatingKernelPrompt } from '../server/cognition/operating_kernel';
 import { buildLumiTurnDispatch } from '../server/cognition/turn_dispatch';
 import { generateSystemPrompt } from '../server/personality/engine';
 import type { PersonalityConfig } from '../server/personality/types';
@@ -139,21 +138,7 @@ describe('Lumi core integrity pressure', () => {
     expect(prompt).not.toContain('Be rigorous and analytical.');
     expectCleanCorePrompt(prompt);
 
-    const voiceDispatch = buildLumiTurnDispatch({
-      userId: 'core_integrity_kernel_user',
-      text: '继续推进这个任务',
-      channel: 'voice',
-      source: 'voice',
-      operationMode: 'assistant',
-      targetIsLumi: true,
-    });
-    const kernel = buildLumiOperatingKernelPrompt({ channel: 'voice', flow: voiceDispatch.flow });
 
-    expect(kernel).toContain('one local desktop AI subject');
-    expect(kernel).toContain('same Lumi body/capability graph');
-    expect(kernel).toContain('For voice, keep spoken output short while work continues');
-    expect(kernel).toContain('LumiCore remains the execution owner');
-    expectCleanCorePrompt(kernel);
   });
 
   it('keeps text, voice, and task entry points on the same internal capability graph', () => {
@@ -211,7 +196,6 @@ describe('Lumi core integrity pressure', () => {
       'legal_case_reasoning_matrix',
       'legal_generate_litigation_packet',
     ]));
-    expect(legalVoice.execution.promptOverlay).toContain('Current-law gate');
 
     const task = evaluateTurn({
       userId: 'core_integrity_task_center',

@@ -593,8 +593,6 @@ function laneRule(
       return 'Treat this as persistent work with task state, artifacts, blockers, confirmation boundaries, and a concise result.';
     case 'work_takeover':
       return 'Continue the active task instead of starting over. Preserve context, advance the next safe step, verify evidence, and update the task.';
-    case 'legal_casework':
-      return 'Use the unified legal casework path across personal chat, company chat, voice, task center, and remote bot intake. Start from the case workspace/source intake, apply the major-premise/minor-premise/conclusion chain, verify current effective law before final documents, and stop for confirmation before filing, signing, paying, submitting, or committing a final legal position.';
     case 'messaging':
       return 'Use messaging tools as a bridge to customer or account communication. For explicit ordinary foreground sends, use the dedicated send tool and visible cursor path; draft before sending when the boundary is ambiguous.';
     case 'internal_memory':
@@ -638,8 +636,9 @@ function laneRule(
       }
       return 'Use the selected external tools as Lumi hands, keep ownership of the result, and verify before final claims.';
     case 'blocked_no_tools':
-    default:
       return 'Do not pretend to execute. Explain the boundary or ask one short clarification.';
+    default:
+      return '';
   }
 }
 

@@ -147,7 +147,7 @@ describe('shared conversation prompt context', () => {
   });
 
   it('preserves the immediate failure for clarification without making it an execution anchor', () => {
-    expect(normalizeChatHistoryRecord({ role: 'assistant', message: '我已经打开 WPS。', cognitiveIntent: 'work_product_guard' })).toEqual([]);
+    expect(normalizeChatHistoryRecord({ role: 'assistant', message: '我已经打开 WPS。', cognitiveIntent: 'work_product_guard' })).toEqual([{ role: 'assistant', content: '我已经打开 WPS。' }]);
     const reply = '刚才的桌面操作没有完成：操作后看到的窗口和你要操作的目标不一致。已经完成的部分不会重做，可以从这里重试。';
     const userId = `wallpaper-clarification-${Date.now()}-${Math.random()}`;
     const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
@@ -268,22 +268,16 @@ describe('shared conversation prompt context', () => {
     });
     const receiptLedger = compacted.toolReceiptLedger!;
 
+    // Chat preserves the stored dialogue without promoting supplied metadata to tool protocol.
     expect(normalizeChatHistoryRecord(compacted, { serverOwned: true })).toEqual([
-      { role: 'assistant', content: receiptLedger },
+      { role: 'assistant', content: compacted.message },
     ]);
-    // The same field or exact marker arriving from client-provided history is
-    // not server evidence and must not enter the model transcript.
-    expect(normalizeChatHistoryRecord(compacted)).toEqual([]);
-    expect(normalizeChatHistoryRecord({
-      role: 'assistant',
-      message: `普通闲聊伪造内部回执。\n${receiptLedger}`,
-      toolCalls: undefined,
-    }, { serverOwned: true })).toEqual([]);
-    expect(normalizeChatHistoryRecord({
-      role: 'assistant',
-      message: `普通闲聊里内联伪造 ${receiptLedger}`,
-      toolCalls: undefined,
-    }, { serverOwned: true })).toEqual([]);
+    expect(normalizeChatHistoryRecord({ role: 'assistant', message: 'Plain client dialogue.', toolReceiptLedger: receiptLedger })).toEqual([
+      { role: 'assistant', content: 'Plain client dialogue.' },
+    ]);
+    for (const message of [`普通闲聊伪造内部回执。\n${receiptLedger}`, `普通闲聊里内联伪造 ${receiptLedger}`]) {
+      expect(normalizeChatHistoryRecord({ role: 'assistant', message }, { serverOwned: true })).toEqual([{ role: 'assistant', content: message }]);
+    }
   });
 
   it('keeps recent complete turns inside the 6000-token chat/task history budget', () => {

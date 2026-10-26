@@ -2,8 +2,6 @@ import { PersonalityConfig, PersonalityContext, ExpressionStyle, PersonalityVect
 import { Memory } from '../memory/types';
 import { formatMemoriesForContext } from '../memory/store';
 import { EmotionalState, formatEmotionalStateForPrompt, resolveVerbosityFromState, applyIntimacyToVector } from './state';
-import { generateSpatiotemporalContext } from '../time/spatiotemporal';
-import { getDesktopContext } from '../context/activity_stream';
 import { getModeConfig } from '../cognition/modes';
 import { formatLumiConstitutionForPrompt } from './constitution';
 import { buildResponseLanguageInstruction } from '../utils/language';
@@ -71,7 +69,7 @@ export function vectorToVerbosity(v: PersonalityVector): ExpressionStyle['verbos
 
 /** Generate a granular vector-based tone description that replaces/supplements the discrete TONE_GUIDE */
 export function vectorToneDescription(v: PersonalityVector): string {
-  const { socialStyle: s, cognitiveStyle: c } = v;
+  const { socialStyle: s } = v;
   const parts: string[] = [];
 
   if (s.warmth > 0.6) parts.push('express warmth and empathy');
@@ -80,10 +78,6 @@ export function vectorToneDescription(v: PersonalityVector): string {
   if (s.directness < 0.2) parts.push('be diplomatic and tactful');
   if (s.playfulness > 0.6) parts.push('use humour and playful language');
   if (s.formality > 0.6) parts.push('maintain a formal, professional register');
-  if (c.analytical > 0.6) parts.push('emphasize logic and analysis');
-  if (c.intuitive > 0.6) parts.push('draw on intuition and patterns');
-  if (c.systematic > 0.6) parts.push('proceed methodically, step by step');
-  if (c.creative > 0.6) parts.push('think laterally and explore creative angles');
 
   if (parts.length === 0) return 'Communicate in a balanced, natural manner.';
   return parts.join('; ') + '.';
@@ -174,58 +168,6 @@ export function constrainVectorPairs(v: PersonalityVector, strength: number = 0.
   }
 
   return result;
-}
-
-/** Generate an OPERATING STYLE from the personality vector — HOW the AI thinks
- *  and works, not just how it communicates. This replaces the passive role of
- *  the discrete tone label. */
-export function vectorOperatingDirectives(v: PersonalityVector): string {
-  const { cognitiveStyle: c, socialStyle: s } = v;
-  const directives: string[] = [];
-
-  // ── Cognitive operating mode ──
-  if (c.analytical > 0.6) {
-    directives.push('Prefer data-driven decisions. Verify assumptions before acting. When exploring code, use grep + read_files_batch to survey before concluding.');
-  } else if (c.analytical < 0.2) {
-    directives.push('Explain the likely approach concisely. Keep the same evidence and verification requirements for every action.');
-  }
-
-  if (c.intuitive > 0.6) {
-    directives.push('Notice useful patterns within the requested task. Suggest unrelated improvements without expanding the scope or taking extra actions.');
-  }
-
-  if (c.systematic > 0.6) {
-    directives.push('Plan before executing. Break tasks into clear steps. Verify each step before moving to the next.');
-  } else if (c.systematic < 0.2) {
-    directives.push('Be agile — jump to solutions without over-planning. Adapt as you go.');
-  }
-
-  if (c.creative > 0.6) {
-    directives.push('Consider unconventional approaches. Generate multiple alternatives. Don\'t settle for the most obvious solution.');
-  }
-
-  // ── Social operating mode ──
-  if (s.warmth > 0.6) {
-    directives.push('Build rapport. Acknowledge the user\'s feelings. Express enthusiasm about their ideas.');
-  }
-
-  if (s.directness > 0.6) {
-    directives.push('Be direct and efficient. Report the observed result and any uncertainty. Say "done" only when the task has verified completion evidence.');
-  }
-
-  if (s.playfulness > 0.6) {
-    directives.push('Use humour and creative metaphors. Keep the interaction fun — surprise the user with unexpected connections.');
-  }
-
-  if (s.formality > 0.6) {
-    directives.push('Maintain professional standards. Use precise terminology. Structure responses clearly with headers and bullet points when appropriate.');
-  }
-
-  if (directives.length === 0) {
-    directives.push('Maintain a balanced approach — adapt your style to the task at hand.');
-  }
-
-  return directives.join('\n');
 }
 
 /**
@@ -329,8 +271,6 @@ export function generateSystemPrompt(
   if (effectiveVector) {
     blocks.push(vectorToneDescription(effectiveVector));
     blocks.push(VERBOSITY_GUIDE[verbosity]);
-    const directives = vectorOperatingDirectives(effectiveVector);
-    if (directives) blocks.push(directives);
   }
   blocks.push(buildResponseLanguageInstruction(options?.userText));
 
@@ -369,18 +309,6 @@ export function generateSystemPrompt(
     if (s.deviceCount > 1) blocks.push(`Present across ${s.deviceCount} devices.`);
     if (s.locationTag) blocks.push(`Location: ${s.locationTag}.`);
     if (s.visualScene) blocks.push(`Scene: ${s.visualScene}`);
-  }
-
-  // Spatiotemporal + desktop context
-  if (options?.userId) {
-    const promptDomain = options.domain === 'work' ? 'work' : 'personal';
-    const promptOrgId = promptDomain === 'work' ? (options.orgId || '') : '';
-    const spCtx = generateSpatiotemporalContext(options.userId, promptDomain, promptOrgId, config.id);
-    if (spCtx) blocks.push(spCtx);
-    if (promptDomain === 'personal') {
-      const desktopCtx = getDesktopContext(options.userId);
-      if (desktopCtx) blocks.push(desktopCtx);
-    }
   }
 
   // Task mode

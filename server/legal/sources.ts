@@ -13,6 +13,8 @@ import { getKey } from '../config/keys';
 import { getDataDirectory } from '../config/data_path';
 import { requireLocalEndpoint } from '../config/privacy';
 import { mcpManager } from '../mcp/client';
+import { normalizeStatuteReferenceTitle } from '../regions/packs/cn/statute_provisions';
+import { searchOfficialStatuteRecords, officialQueryLocator, projectCachedStatuteOriginal, type CurrentStatuteOriginalEvidence, type CachedStatuteOriginal } from './statute_authority_refresh';
 import { CN_QICHACHA_QUERY_COPY } from '../regions/packs/cn/qichacha_copy';
 import { CN_ASSET_TRACE_SOURCE_COPY } from '../regions/packs/cn/legal_asset_trace_sources';
 
@@ -365,6 +367,10 @@ export interface ExternalLegalSearchResult {
   court?: string;
   caseNumber?: string;
   raw?: any;
+  sourceText?: string;
+  statuteSource?: CurrentStatuteOriginalEvidence;
+  sourceEndpoint?: string;
+  queriedAt?: string;
 }
 
 function mapExternalLegalResult(raw: any, sourceId: string, sourceName: string): ExternalLegalSearchResult {
@@ -478,6 +484,10 @@ export async function searchLegalAuthorityDatabase(params: {
       effectiveStatus: item.status,
       publishDate: item.publishDate,
       raw: item,
+      sourceText: item.sourceText,
+      statuteSource: item.statuteSource,
+      sourceEndpoint: item.sourceEndpoint,
+      queriedAt: item.queriedAt,
     })));
   }
 
@@ -494,44 +504,87 @@ export interface StatuteSearchResult {
   effectiveDate: string;
   issuingBody: string;
   url: string;
+  sourceText?: string;
+  statuteSource?: CurrentStatuteOriginalEvidence;
+  sourceEndpoint?: string;
+  queriedAt?: string;
+}
+
+// Keep this bounded cache namespace collision-resistant even on legacy key encoders.
+function officialStatuteCacheKey(query: string): string {
+  return cacheKey('flk-api-v8', crypto.createHash('sha256').update(query).digest('hex'));
+}
+function officialStatuteOriginalKey(title: string): string {
+  return cacheKey('flk-original-v1', crypto.createHash('sha256').update(normalizeStatuteReferenceTitle(title)).digest('hex'));
+}
+type CachedStatuteSearchResult = StatuteSearchResult & { _originalCache?: CachedStatuteOriginal };
+function rememberStatuteOriginals(rows: CachedStatuteSearchResult[]): void {
+  for (const title of new Set(rows.filter(row => row._originalCache).map(row => row.title))) {
+    const key = officialStatuteOriginalKey(title);
+    const previous = readCache(key, 24 * 60 * 60 * 1000);
+    const candidates: CachedStatuteSearchResult[] = Array.isArray(previous) ? previous : [];
+    const identity = (row: CachedStatuteSearchResult) => [row.docId, row.publishDate, row.url].join('\u0000');
+    const versions = new Map(candidates.map(row => [identity(row), row]));
+    // Keep metadata-only versions too; one successful version cannot erase ambiguity.
+    for (const row of rows.filter(row => row.title === title)) {
+      const { sourceText: _display, ...original } = row;
+      versions.set(identity(row), original);
+    }
+    writeCache(key, [...versions.values()]);
+  }
+}
+function publicStatuteRows(rows: CachedStatuteSearchResult[]): StatuteSearchResult[] {
+  return rows.map(({ _originalCache, ...row }) => row);
+}
+
+function selectedStatuteRows(keyword: string, rows: CachedStatuteSearchResult[]): StatuteSearchResult[] | undefined {
+  const selected = rows.map(row => {
+      const source = row.statuteSource;
+      if (!source || !row._originalCache || row.docId !== source.recordId || row.title !== source.title
+        || row.publishDate !== source.versionDate || row.effectiveDate !== source.effectiveDate || row.url !== source.sourceUrl
+        || row.queriedAt !== source.queriedAt) return undefined;
+      const projection = projectCachedStatuteOriginal(keyword, source, row._originalCache);
+      return projection ? { ...publicStatuteRows([row])[0], ...projection } : undefined;
+  });
+  return selected.length && selected.every(row => row !== undefined) ? selected as StatuteSearchResult[] : undefined;
 }
 
 export async function searchFLK(keyword: string): Promise<StatuteSearchResult[]> {
-  const ck = cacheKey('flk', keyword);
+  if (!keyword.trim()) return [];
+  const ck = officialStatuteCacheKey(keyword.trim());
   const cached = readCache(ck, 24 * 60 * 60 * 1000);
-  if (cached) return cached;
-
-  const results: StatuteSearchResult[] = [];
-
-  const html = await fetchWithUA(
-    `https://flk.npc.gov.cn/search.html?keyword=${encodeURIComponent(keyword)}`,
-    12000,
-  );
-
-  if (html) {
-    try {
-      // Try to find embedded JSON data
-      const dataRe = /(?:var|let|const)\s+\w+\s*=\s*(\[[\s\S]*?\]);/;
-      const match = html.match(dataRe);
-      if (match) {
-        const list = JSON.parse(match[1]);
-        for (const item of list) {
-          results.push({
-            title: item.title || item.name || '',
-            docId: item.id || '',
-            status: item.status || item.effectiveness || '未知',
-            publishDate: item.publishDate || '',
-            effectiveDate: item.effectiveDate || '',
-            issuingBody: item.issuingBody || '全国人民代表大会',
-            url: `https://flk.npc.gov.cn/detail.html?${item.id || ''}`,
-          });
-        }
-      }
-    } catch { /* HTML parse fallback */ }
+  const locator = officialQueryLocator(keyword.trim());
+  if (Array.isArray(cached) && cached.length > 0) {
+    rememberStatuteOriginals(cached);
+    if (!locator?.articleKeys.length) return publicStatuteRows(cached);
+    const selected = selectedStatuteRows(keyword, cached);
+    if (selected) return selected;
   }
-
-  writeCache(ck, results);
-  return results;
+  if (locator?.articleKeys.length) {
+    const whole = readCache(officialStatuteOriginalKey(locator.title), 24 * 60 * 60 * 1000);
+    const matching: CachedStatuteSearchResult[] = Array.isArray(whole)
+      ? whole.filter(row => normalizeStatuteReferenceTitle(row.title) === normalizeStatuteReferenceTitle(locator.title)) : [];
+    const selected = selectedStatuteRows(keyword, matching);
+    if (selected) return selected;
+  }
+  const statuses: Record<number, string> = { 1: '已废止', 2: '已修改', 3: '现行有效', 4: '尚未生效' };
+  const results = (await searchOfficialStatuteRecords(keyword, 20)).map(({ details, sourceUrl, sourceEndpoint, queriedAt, sourceText, statuteSource, originalCache }) => ({
+    title: String(details.title || '').replace(/<[^>]+>/g, '').trim(),
+    docId: details.bbbs!,
+    status: statuses[Number(details.sxx)] || '未知',
+    publishDate: String(details.gbrq || ''),
+    effectiveDate: String(details.sxrq || ''),
+    issuingBody: String(details.zdjgName || ''),
+    url: sourceUrl,
+    sourceText,
+    statuteSource,
+    _originalCache: originalCache,
+    sourceEndpoint,
+    queriedAt,
+  }));
+  if (results.length > 0) writeCache(ck, results);
+  rememberStatuteOriginals(results);
+  return publicStatuteRows(results);
 }
 
 // ── 住建部合同模板 (mohurd.gov.cn) ─────────────────────────────────────

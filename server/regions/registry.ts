@@ -42,16 +42,6 @@ export function getRegionalCapabilityPack(input: Parameters<typeof inferRegion>[
   return PACKS[inferRegion(input)];
 }
 
-export function formatRegionalLegalPrompt(pack: RegionalCapabilityPack): string {
-  if (!pack.legal) return '';
-  return [
-    `Regional capability pack: ${pack.id}.`,
-    `External legal platforms: ${pack.legal.externalPlatforms.join(', ')}.`,
-    `Similar-case authority order: ${pack.legal.authorityOrder.join(' -> ')}.`,
-    `External-platform boundary: ${pack.legal.collaborationBoundary}`,
-  ].join('\n');
-}
-
 export function listRegionalCapabilityPacks(): RegionalCapabilityPack[] {
   return Object.values(PACKS);
 }

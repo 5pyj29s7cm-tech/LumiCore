@@ -1,0 +1,20 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+const model=vi.hoisted(()=>vi.fn());
+vi.mock('../server/llm/providers',async original=>({...await original<typeof import('../server/llm/providers')>(),makeLLMCallStreaming:model}));
+import { ModelRequestSourceProvenanceError, prepareModelRequestContext } from '../server/llm/request_context_budget';
+import { modelRoutingErrorReason } from '../server/llm/model_routing_receipts';
+import { buildVerifiedToolCheckpoint } from '../server/llm/tool_loop/checkpoints';
+import { runWithTools } from '../server/llm/adapter';
+import { ToolRegistry } from '../server/tools/registry';
+import { ModelAttemptDeadlineError } from '../server/llm/provider/deadlines';
+const failure=()=>new ModelRequestSourceProvenanceError('Model request budget cannot retain 4 protected tool declarations and protected messages',true);
+const previous:any={id:'old',name:'unknown_observation',arguments:{},result:'',error:'Official source record details timed out after 12000ms',requestId:'old-request',taskId:'capacity-task'};
+beforeEach(()=>vi.resetAllMocks());
+describe('primary capacity failure stays distinct from historical source failures',()=>{
+ it('classifies a real capacity marker rather than calling it a provider failure',()=>{expect(modelRoutingErrorReason(failure())).toBe('context_capacity_exceeded');});
+ it('retains capacity through an internal wrapper',()=>{expect(modelRoutingErrorReason(new Error('wrapped',{cause:failure()}))).toBe('context_capacity_exceeded');});
+ it('keeps invalid provenance, deadlines and caller cancellation separate',()=>{expect(modelRoutingErrorReason(new ModelRequestSourceProvenanceError('bad source annotation'))).not.toBe('context_capacity_exceeded');expect(modelRoutingErrorReason(new ModelAttemptDeadlineError('absolute',100))).toBe('timeout');expect(modelRoutingErrorReason(new DOMException('The request was aborted','AbortError'))).toBe('cancelled');});
+ it('marks an unretainable required schema as capacity without changing the budget',()=>{const names=Array.from({length:500},(_,i)=>'required_field_'+String(i).padStart(4,'0')+'_long_name');let thrown:any;try{prepareModelRequestContext({messages:[{role:'user',content:'Read the requested state.',sourceMessageId:'capacity-user'}],toolDeclarations:[{type:'function',function:{name:'unknown_required_tool',description:'Read state',parameters:{type:'object',properties:Object.fromEntries(names.map(n=>[n,{type:'string'}])),required:names}}}],protectedToolNames:['unknown_required_tool'],inputTokenBudget:4096});}catch(e){thrown=e;}expect(thrown).toBeDefined();expect(thrown.code).toBe('model_request_source_provenance_invalid');expect(thrown.capacityExceeded).toBe(true);});
+ it('reports primary capacity instead of the earlier HTTP timeout at checkpoint',()=>{const result=buildVerifiedToolCheckpoint([previous],'请分析给定事实。',{requestId:'new-request',taskId:'capacity-task'},failure());expect(result).toMatchObject({blocked:true,reason:'model_context_capacity'});expect(result.text).toContain('容量');expect(result.text).not.toMatch(/超时|取消|打断|未出站|内部|工具链/u);});
+ it('keeps the same cause before any new tool execution',async()=>{model.mockRejectedValueOnce(failure());const result=await runWithTools([{role:'user',content:'请分析给定事实。'}],new ToolRegistry(),{provider:'deepseek',model:'synthetic'},()=>{},2,()=>null,()=>null,()=>null,()=>null,()=>null,()=>{}, {requestId:'new-request',taskId:'capacity-task',priorToolRecords:[previous],routedTaskText:'请分析给定事实。'});expect(result.completionGuard).toMatchObject({blocked:true,reason:'model_context_capacity'});expect(result.text).toContain('容量');expect(result.text).not.toMatch(/超时|取消|打断/u);expect(model).toHaveBeenCalledOnce();});
+});

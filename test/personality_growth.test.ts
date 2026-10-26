@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeMutations, generateReviewPrompt, lightweightEvolve, OwnerProfile } from '../server/personality/evolution';
 import { generateSystemPrompt } from '../server/personality/engine';
 import { PersonalityConfig } from '../server/personality/types';
+import * as spatiotemporal from '../server/time/spatiotemporal';
+import * as activityStream from '../server/context/activity_stream';
+import { getLumiPersonalityConstitution } from '../server/personality/constitution';
+import { formatDeepSeekRequest } from '../server/llm/provider/openai_compatible';
 
 const baseConfig: PersonalityConfig = {
   id: 'lumi',
@@ -131,5 +135,65 @@ describe('personality core and growth split', () => {
     });
 
     expect(result).toBeNull();
+  });
+});
+
+
+describe('personality presentation and factual truth', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(['personal', 'work'] as const)('does not retrieve temporal or desktop background while building a %s prompt', domain => {
+    const temporal = vi.spyOn(spatiotemporal, 'generateSpatiotemporalContext').mockReturnValue('AUTOMATIC TEMPORAL BACKGROUND');
+    const desktop = vi.spyOn(activityStream, 'getDesktopContext').mockReturnValue('AUTOMATIC DESKTOP BACKGROUND');
+    const prompt = generateSystemPrompt(baseConfig, { mode: 'chat' }, {
+      userId: 'personality-presentation-fixture', userText: 'Answer only the supplied question.', domain, orgId: domain === 'work' ? 'fixture-org' : '',
+    });
+    expect(temporal).not.toHaveBeenCalled();
+    expect(desktop).not.toHaveBeenCalled();
+    expect(prompt).not.toContain('AUTOMATIC TEMPORAL BACKGROUND');
+    expect(prompt).not.toContain('AUTOMATIC DESKTOP BACKGROUND');
+    expect(prompt).toContain(baseConfig.coreMotivation);
+  });
+
+  it('retains configured identity, expression and exact user text without vector work instructions', () => {
+    const config: PersonalityConfig = { ...baseConfig,
+      coreMotivation: 'EXPLICIT CORE IDENTITY', behavioralBoundaries: ['EXPLICIT USER-CONFIGURED BOUNDARY'],
+      expressionStyle: { ...baseConfig.expressionStyle, persona: 'EXPLICIT CONFIGURED PERSONA', verbosity: 'detailed' },
+      personalityVector: { cognitiveStyle: { analytical: .9, intuitive: .9, systematic: .9, creative: .9 },
+        socialStyle: { warmth: .9, directness: .9, playfulness: .9, formality: .9 } },
+    };
+    const current = '  Supplied event A happened before event B. Unknown later events stay unknown.  ';
+    const prompt = generateSystemPrompt(config, { mode: 'chat' }, { userText: current });
+    expect(prompt).toContain('EXPLICIT CORE IDENTITY');
+    expect(prompt).toContain('EXPLICIT CONFIGURED PERSONA');
+    expect(prompt).toContain('EXPLICIT USER-CONFIGURED BOUNDARY');
+    expect(prompt).toContain('Stable Lumi Identity Anchor');
+    expect(prompt).toContain('express warmth and empathy');
+    expect(prompt).toContain('maintain a formal, professional register');
+    for (const cognitiveInstruction of ['emphasize logic and analysis', 'draw on intuition and patterns', 'proceed methodically, step by step', 'think laterally and explore creative angles']) {
+      expect(prompt).not.toContain(cognitiveInstruction);
+    }
+    expect(prompt).toContain('Provide thorough, detailed responses.');
+    expect(prompt).not.toContain('use grep + read_files_batch');
+    expect(prompt).not.toContain('Suggest unrelated improvements');
+    expect(prompt).not.toContain('Plan before executing.');
+    expect(prompt).not.toContain('Generate multiple alternatives.');
+    expect(prompt).not.toContain('Build rapport.');
+    const wire = formatDeepSeekRequest({ model: 'fixture-model', messages: [{ role: 'system', content: prompt },
+      { role: 'user', content: current, sourceMessageId: 'accepted-current-fixture' }], toolDeclarations: [] });
+    expect(wire.messages.at(-1)).toEqual({ role: 'user', content: current });
+    expect(config.toolPolicy).toBe(baseConfig.toolPolicy);
+  });
+
+  it('uses the existing truth article for supplied facts, unknowns, assumptions and actual work results', () => {
+    const constitution = getLumiPersonalityConstitution();
+    const truth = constitution.articles.find(article => article.id === 'truth.actual_work')!;
+    const prompt = generateSystemPrompt(baseConfig, { mode: 'chat' });
+    expect(prompt).toContain(truth.title + ': ' + truth.rule);
+    expect(truth.rule).toContain('what the user supplied or explicitly sourced material');
+    expect(truth.rule).toContain('Keep missing information unknown');
+    expect(truth.rule).toContain('label necessary assumptions as assumptions');
+    expect(truth.rule).toContain('actual execution results');
+    expect(constitution.articles.filter(article => article.id === 'truth.actual_work')).toHaveLength(1);
   });
 });

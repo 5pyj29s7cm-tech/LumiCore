@@ -1,9 +1,8 @@
 import React, { Suspense, lazy, useMemo, useState } from 'react';
 import {
   Building2, BookOpen, Users, Settings,
-  ScrollText, MessageSquare, ArrowLeft,
+  ScrollText, MessageSquare,
   Shield, User, Briefcase, Home, Scale, Palette, GitBranch, Loader2, MessagesSquare,
-  ChevronDown, ChevronRight, Layers,
 } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
 import { useT } from '../../lib/useT';
@@ -62,9 +61,7 @@ export function OrgHub() {
   const [subView, setSubView] = useState<SubView>(() => initialRoute?.view || 'dashboard');
   const [editingArticleId, setEditingArticleId] = useState<string | undefined>(() => initialRoute?.articleId);
   const [switchBusy, setSwitchBusy] = useState(false);
-  const [orgModulesOpen, setOrgModulesOpen] = useState(false);
   const t = useT();
-  const isZh = t.langCode !== 'en';
 
   const allNavItems: NavItem[] = useMemo(() => [
     { id: 'dashboard', label: t.orgDashboard, icon: <Home size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
@@ -73,12 +70,12 @@ export function OrgHub() {
     { id: 'messaging', label: t.messaging || uiMessage('org-hub.messaging.ec30100616'), icon: <MessagesSquare size={16} />, roles: ['owner', 'admin', 'member'] },
     { id: 'members', label: t.orgMembers, icon: <Users size={16} />, roles: ['owner', 'admin'], showInNav: false },
     { id: 'audit', label: t.orgAudit, icon: <ScrollText size={16} />, roles: ['owner', 'admin'] },
-    { id: 'legal', label: t.legalHub || uiMessage('org-hub.legal.95d17f5100'), icon: <Scale size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
-    { id: 'spatial-design', label: uiMessage('org-hub.spatial-architecture.ad5a608bfc'), icon: <Building2 size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
-    { id: 'brand-design', label: uiMessage('org-hub.brand-creative.2ae19b7f69'), icon: <Palette size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
+    { id: 'legal', label: t.legalHub || uiMessage('org-hub.legal.95d17f5100'), icon: <Scale size={16} />, roles: ['owner', 'admin', 'member', 'viewer'], showInNav: false },
+    { id: 'spatial-design', label: uiMessage('org-hub.spatial-architecture.ad5a608bfc'), icon: <Building2 size={16} />, roles: ['owner', 'admin', 'member', 'viewer'], showInNav: false },
+    { id: 'brand-design', label: uiMessage('org-hub.brand-creative.2ae19b7f69'), icon: <Palette size={16} />, roles: ['owner', 'admin', 'member', 'viewer'], showInNav: false },
     { id: 'settings', label: t.orgSettings, icon: <Settings size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
     { id: 'branch', label: uiMessage('org-hub.branch-connection.9cecc72547'), icon: <GitBranch size={16} />, roles: ['owner', 'admin', 'member', 'viewer'], showInNav: false },
-  ], [t, isZh]);
+  ], [t]);
 
   const roleLabel: Record<string, { label: string; icon: React.ReactNode; color: string }> = useMemo(() => ({
     owner:  { label: t.orgRoleOwner,  icon: <Shield size={10} />, color: 'text-amber-400 bg-amber-500/10' },
@@ -108,16 +105,9 @@ export function OrgHub() {
     () => listOrganizationWorkspaceViewsForRole(orgRole),
     [orgRole],
   );
-  const moduleItemIds = useMemo(() => new Set<SubView>(['legal', 'spatial-design', 'brand-design']), []);
-  const primaryNavItems = visibleItems.filter(item => item.showInNav !== false && !moduleItemIds.has(item.id));
-  const moduleNavItems = visibleItems.filter(item => moduleItemIds.has(item.id));
-  const isModuleView = moduleItemIds.has(subView);
+  const primaryNavItems = visibleItems.filter(item => item.showInNav !== false);
   const roleInfo = roleLabel[orgRole] || roleLabel.member;
   const currentItem = visibleItems.find(item => item.id === subView) || allNavItems.find(item => item.id === subView) || allNavItems[0];
-
-  React.useEffect(() => {
-    if (isModuleView) setOrgModulesOpen(true);
-  }, [isModuleView]);
 
   React.useEffect(() => {
     if (!canAccessOrganizationWorkspaceView(orgRole, subView)) {
@@ -223,59 +213,6 @@ export function OrgHub() {
               <span className="lumi-org-nav-copy hidden min-w-0 truncate sm:block">{item.label}</span>
             </button>
           ))}
-          {moduleNavItems.length > 0 && (
-            <div className="pt-1">
-              <button
-                type="button"
-                onClick={() => setOrgModulesOpen(prev => !prev)}
-                aria-label={uiMessage('org-hub.organization-modules.75dd9b5603')}
-                title={uiMessage('org-hub.organization-modules.75dd9b5603')}
-                className={`flex w-full items-center justify-center gap-2 rounded-xl border px-2 py-2 text-sm transition-colors sm:justify-start sm:px-3 ${
-                  isModuleView
-                    ? 'border-blue-400/20 bg-blue-500/10 text-blue-200'
-                    : 'border-white/[0.08] bg-white/[0.03] text-white/55 hover:bg-white/[0.06] hover:text-white/80'
-                }`}
-              >
-                <Layers size={16} className="shrink-0" />
-                <span className="lumi-org-nav-copy hidden min-w-0 flex-1 truncate text-left sm:block">{uiMessage('org-hub.organization-modules.75dd9b5603')}</span>
-                <span className="lumi-org-nav-copy lumi-org-nav-disclosure hidden sm:block">{orgModulesOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
-              </button>
-              {orgModulesOpen && (
-                <div className="lumi-org-module-items mt-1 space-y-1 sm:pl-3">
-                  {moduleNavItems.map(item => (
-                    <button
-                      key={item.id}
-                      onClick={() => openSubView(item.id)}
-                      aria-label={item.label}
-                      title={item.label}
-                      className={`flex w-full items-center justify-center gap-2 rounded-xl px-2 py-2 text-sm transition-colors sm:justify-start sm:px-3 ${
-                        subView === item.id
-                          ? 'border border-blue-400/20 bg-blue-500/10 text-blue-200'
-                          : 'border border-transparent text-white/45 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/80'
-                      }`}
-                    >
-                      <span className="shrink-0">{item.icon}</span>
-                      <span className="lumi-org-nav-copy hidden min-w-0 truncate sm:block">{item.label}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          <div className="my-2 border-t border-white/[0.08]" />
-          <button
-            onClick={() => {
-              void switchDomain('personal').finally(() => {
-                window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'home' } }));
-              });
-            }}
-            aria-label={t.orgExitWorkSpace}
-            title={t.orgExitWorkSpace}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-transparent px-2 py-2 text-sm text-white/40 transition-colors hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/70 sm:justify-start sm:px-3"
-          >
-            <ArrowLeft size={16} />
-            <span className="lumi-org-nav-copy hidden min-w-0 truncate sm:block">{t.orgExitWorkSpace}</span>
-          </button>
         </nav>
       </div>
 

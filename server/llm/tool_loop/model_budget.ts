@@ -4,7 +4,6 @@ import { isCnLiteralTableFieldEdit } from "../../regions/input/zh_action_continu
 import { resolveModelAttemptTimeouts, type StreamCallback, type ModelAttemptTimeouts } from "../providers";
 import type { LLMConfig } from './contracts';
 
-export const DEFAULT_TOOL_LOOP_MODEL_WAIT_BUDGET_MS = 120_000;
 
 export class ToolLoopModelBudgetError extends Error {
   readonly timeoutMs: number;
@@ -48,7 +47,7 @@ export class ToolLoopModelBudget {
   private generation = 0;
 
   constructor(
-    timeoutMs: number,
+    timeoutMs: number = Infinity,
     private readonly callerSignal?: AbortSignal,
     private readonly isCancelled?: () => boolean,
     private readonly turnState: ModelTurnState = createModelTurnState(),
@@ -108,11 +107,11 @@ export class ToolLoopModelBudget {
           ) onChunk(chunk);
         }
       : undefined;
-    const deadlineTimer = setTimeout(() => {
+    const deadlineTimer = Number.isFinite(modelBudgetForAttempt) ? setTimeout(() => {
       if (!controller.signal.aborted) {
         controller.abort(new ToolLoopModelBudgetError(this.timeoutMs));
       }
-    }, modelBudgetForAttempt);
+    }, modelBudgetForAttempt) : undefined;
     const cancellationPoll = this.isCancelled
       ? setInterval(() => {
           if (controller.signal.aborted || !this.callerCancelled()) return;

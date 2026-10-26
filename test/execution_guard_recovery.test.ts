@@ -1,4 +1,5 @@
 import { readImplementationSource } from './implementation_source';
+import { shouldAllowLocalFileWriteForTurn } from '../server/socket/chat/attachments';
 import { readVoiceImplementationSource } from './voice_implementation_source';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -43,6 +44,50 @@ function expectNaturalCustomerReply(text: string): void {
 }
 
 describe('execution guard recovery', () => {
+  it.each([
+    '请把桌面的“共同验收甲.docx”和“共同验收乙.docx”合并成“共同验收合并.docx”，保留两份文件的全部正文，完成后把合并文件发到当前聊天。',
+    '请把“甲.docx”和“乙.docx”合并为“丙.docx”，原文件保持不变。',
+    'Merge "first.docx" and "second.docx" into "combined.docx".',
+    'Make a Word document.',
+  ])('retains existing explicit local deliverable authorization: %s', task => {
+    expect(shouldAllowLocalFileWriteForTurn(task, [])).toBe(true);
+  });
+  it.each([
+    '我怎么把甲.docx和乙.docx合并成丙.docx？',
+    '先只读取“甲.docx”，不要合并成“丙.docx”。',
+    '请解释“合并成丙.docx”的意思，不执行。',
+    '删除“合并成结果.docx”。',
+    '请搜索桌面的“甲.docx”和“乙.docx”。',
+  ])('does not infer local output authorization from a non-deliverable merge mention: %s', task => {
+    expect(shouldAllowLocalFileWriteForTurn(task, [])).toBe(false);
+  });
+
+  it.each([
+    '请把桌面的“共同验收甲.docx”和“共同验收乙.docx”合并成“共同验收合并.docx”，保留两份文件的全部正文，完成后把合并文件发到当前聊天。',
+    '请将“季度报告.docx”和“附录.docx”合并为“完整报告.docx”，完成后发到当前聊天。',
+    'Merge "source-one.docx" and "source-two.docx" into "combined.docx" and return it here.',
+  ])('keeps a named document merge executable through recovery: %s', task => {
+    expect(normalizeActionIntent(task)).toMatchObject({ kind: 'desktop_operation', operation: 'mutate', relation: 'new' });
+    expect(classifyExecutionGuardIntent(task)).toBe('action_execution');
+    expect(decideExecutionGuardRecovery({ task, blocked: true, allowToolUse: true, toolRecords: [], reason: 'Missing core evidence for requested action.' })).toMatchObject({ recoverable: true, intent: 'action_execution' });
+  });
+
+  it.each([
+    '不要合并“甲.docx”和“乙.docx”。',
+    '请把“甲.docx”和“乙.docx”不合并。',
+    '请解释“合并甲.docx”的含义，不要执行。',
+    '请读取“合并成.docx”，不要修改。',
+    '请把`合并成结果.docx`读一下。',
+    '请把```修改为新.docx```读一下。',
+    '如果把“甲.docx”和“乙.docx”合并成“丙.docx”，会怎样？',
+  ])('does not turn a forbidden, quoted, or hypothetical merge into mutation: %s', task => {
+    expect(normalizeActionIntent(task).sideEffectClass).toBe('none');
+  });
+
+  it('binds the affirmative quoted file rather than the prohibited file before a contrast', () => {
+    expect(normalizeActionIntent('不要修改“旧.docx”但修改“新.docx”')).toMatchObject({ kind: 'desktop_operation', operation: 'mutate', target: '新.docx' });
+  });
+
   it.each([
     '仅执行一次 get_video_generation_status，参数为 {"recoveryId":"existing-provider-job"}，返回真实状态；禁止重新生成视频。',
     '请使用 get_video_generation_status，参数 JSON 为 {"recoveryId":"existing-provider-job"}，把这一个工具返回的结果完整发回本次聊天。只取回原有结果；本次禁止生成视频、禁止生成音乐，也不改变任何工程。',
@@ -284,7 +329,8 @@ describe('execution guard recovery', () => {
     const status = formatExecutionStatusFeedback('刚才任务的进度怎么样了？', []);
 
     for (const reply of [failure, status]) {
-      expect(reply).toContain('没有拿到可以确认的操作结果');
+      expect(reply).toMatch(/没有完成/u);
+      expect(reply).not.toMatch(/可验证|没有拿到|回执/u);
       expect(reply).not.toMatch(/已有进度|保留已有进度|已执行步骤/u);
       expectNaturalCustomerReply(reply);
     }
@@ -1332,5 +1378,33 @@ describe('execution guard recovery', () => {
     expect(finalizer).toContain('waitingForConfirmation: Boolean(pendingConfirmation())');
     expect(finalizer).toContain('if (!isDesktopPaused(candidate.toolRecords || [])) return result;');
     expect(finalizer).toContain('text: pause.text, blocked: true, reason: pause.reason');
+  });
+});
+
+
+describe('explicit task-status question scope', () => {
+  it.each([
+    "这是第4项的虚构验收，只检查原告网上立案材料是否齐备并列出下一步，不生成或修改文书，不创建或归档案件，也不向法院提交。拟向北京市海淀区人民法院起诉，案由民间借贷。已提供的材料清单仅有：已签名民事起诉状.pdf、原告身份证.pdf、借条.pdf、银行转账凭证.pdf。这里提供的只是材料名称，不代表你已读取文件。原告由律师代理，其他材料和当事人身份、地址等未提供。请以这份清单为准，具体说明现有材料、还需补哪些、哪些须查所选法院，并给出可核对的官方立案入口。未提供的材料不能当作已具备，不能把材料已齐备或已经提交当成结果。直接在当前聊天回答。",
+    '请在当前聊天回答。不要把资料齐备当作结果。',
+    '当前我只提供名称清单。请分别列出可能的结果。',
+    '请讨论结果的不同含义。当前仅有一份名称列表。',
+    'Use the current chat to explain these labels. Report the result here.',
+    'The current context contains only labels. Discuss possible results.',
+  ])('does not join unrelated status words into a question: %s', task => {
+    expect(classifyExecutionGuardIntent(task)).not.toBe('status_query');
+  });
+  it.each([
+    '刚才任务的结果是什么？',
+    '当前任务进度怎么样了？',
+    '刚才那次执行有什么证据？',
+    'What is the current task status?',
+  ])('keeps a direct question about an actual task subject: %s', task => {
+    expect(classifyExecutionGuardIntent(task)).toBe('status_query');
+  });
+  it.each([
+    '请解释“当前任务的结果是什么”这句话的含义。',
+    '不要询问当前任务的结果是什么。请分析这个清单。',
+  ])('does not treat quoted or forbidden questions as current status requests: %s', task => {
+    expect(classifyExecutionGuardIntent(task)).not.toBe('status_query');
   });
 });

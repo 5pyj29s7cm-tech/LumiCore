@@ -1,7 +1,7 @@
 import type { TaskTargetEvidenceRecord, EvidenceCandidate, SupportedAuthoringApplication } from './contracts';
 import { compact, objectValue, firstString, primaryTaskText, capsuleTaskText, parseTaskTargetJson, normalizedIdentity, unique } from './values';
 import { ACTIVE_WINDOW_TOOLS, WINDOW_KEYS, APPLICATION_KEYS, WPS_RE, TARGET_NAME_KEYS, TARGET_PATH_KEYS, RUNNING_PROCESS_TOOLS, DOCUMENT_INTERFACE_RE, DISCOVERY_TOOLS } from './recognition';
-import { displayableFileName, concreteTargetPath, directoryWithin, targetReferenceMatches, fileName } from './paths';
+import { displayableFileName, concreteTargetPath, directoryWithin, targetReferenceMatches, fileName, canonicalPathIdentity } from './paths';
 import { isAllowedTaskSearchDirectory, isUnconfirmedRuntimeCandidate, isStandardUserDirectory } from './search_scope';
 
 export function recordSucceeded(record: TaskTargetEvidenceRecord): boolean {
@@ -188,11 +188,23 @@ export function discoveryCandidate(
   sourcePaths: string[],
 ): EvidenceCandidate | null {
   const name = compact(record.name, 160).toLowerCase();
-  if (!DISCOVERY_TOOLS.has(name) || !recordSucceeded(record) || !preferredName) return null;
+  if ((!DISCOVERY_TOOLS.has(name) && name !== 'desktop_path_info') || !recordSucceeded(record) || !preferredName) return null;
   const args = objectValue(record.arguments);
-  const directory = firstString(args, ['directory', 'path'], 500);
+  let directory = firstString(args, ['directory', 'path'], 500);
+  let items = resultItems(record.receipt ?? record.result);
+  if (name === 'desktop_path_info') {
+    const payload = objectValue(record.receipt ?? record.result);
+    const observed = firstString(payload, TARGET_PATH_KEYS, 500);
+    const requested = firstString(args, TARGET_PATH_KEYS, 500);
+    if (record.terminalVerification?.status !== 'verified' || payload.exists !== true || payload.is_directory !== false
+      || !concreteTargetPath(observed) || !concreteTargetPath(requested)
+      || canonicalPathIdentity(observed) !== canonicalPathIdentity(requested)) return null;
+    const boundary = Math.max(observed.lastIndexOf('/'), observed.lastIndexOf('\\'));
+    directory = observed.slice(0, boundary);
+    items = [payload];
+  }
   if (!isAllowedTaskSearchDirectory(directory, taskText, sourcePaths)) return null;
-  const matches = resultItems(record.receipt ?? record.result).flatMap(item => {
+  const matches = items.flatMap(item => {
     const candidatePath = firstString(item, TARGET_PATH_KEYS, 500) || firstString(item, TARGET_NAME_KEYS, 220);
     if (!candidatePath || isUnconfirmedRuntimeCandidate(candidatePath, taskText)) return [];
     const resolvedCandidate = concreteTargetPath(candidatePath)

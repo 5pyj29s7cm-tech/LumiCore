@@ -6,12 +6,9 @@ import { clearPendingConfirmationDurably } from "../../../tools/pending_confirma
 import { toolRegistry } from "../../../tools/registry";
 import { coalesceToolExecutionRecords, taskReceiptsToRecords } from "../../../cognition/task_execution_ledger";
 import type { ToolExecutionRecord } from "../../../tools/types";
-import { executionBoundaryPromptOverlay, restrictSystemPromptForExecutionBoundary, restrictVisibleToolNamesForExecutionBoundary } from "../../../tools/remote_policy";
-import { buildInteractionModeOverlay } from "../../../cognition/turn_flow";
-import { buildVisionRoutingOverlay } from "../../../cognition/vision_routing";
+import { restrictSystemPromptForExecutionBoundary, restrictVisibleToolNamesForExecutionBoundary } from "../../../tools/remote_policy";
 import { formatCompactClientSelfPrompt } from "../../../client/self_model";
 import { buildLumiRuntimeCapabilityContext } from "../../../cognition/capability_context";
-import { buildLumiOperatingKernelPrompt } from "../../../cognition/operating_kernel";
 import { getScopedPreferredLLM } from "../../../llm/user_preferences";
 import { buildVoiceReplyStyleOverlay } from "../../voice_turn_policy";
 import type { prepareVoiceContextAndRouting } from './prepare_voice_context_and_routing';
@@ -129,9 +126,6 @@ export async function prepareVoiceExecutionAndPrompt(context: NonNullable<Awaite
     });
   }
   const needsExecutionPrompt = context.toolSessionActive && !remoteRestricted;
-  const opModeOverlay = remoteRestricted ? '' : '\n\n' + buildInteractionModeOverlay(context.turnFlow);
-  const workSurfaceOverlay = context.workSurfaceRoute.promptOverlay && needsExecutionPrompt ? '\n\n' + context.workSurfaceRoute.promptOverlay : '';
-  const visionRoutingOverlay = context.visionIntent && context.effectiveOperationMode !== 'meeting' && needsExecutionPrompt ? '\n\n' + buildVisionRoutingOverlay(context.session.userId, context.routedUserText) : '';
   const interactionOverlay = remoteRestricted
     ? context.baseVoiceOverlay
     : context.toolSessionActive
@@ -142,14 +136,6 @@ export async function prepareVoiceExecutionAndPrompt(context: NonNullable<Awaite
     ? '\n\n' + formatCompactClientSelfPrompt(context.session.userId, { ...context.voiceScope, socketId: context.socket?.id })
     : '';
   const dispatchOverlay = needsExecutionPrompt ? '\n\n' + context.turnDispatch.promptOverlay : '';
-  const executionOverlay = needsExecutionPrompt || remoteRestricted
-    ? '\n\n' + executionBoundaryPromptOverlay(
-        context.executionDecision.promptOverlay,
-        context.toolSecurityContext.executionBoundary,
-      )
-    : '';
-  const capabilitySelectionOverlay = needsExecutionPrompt ? '\n\n' + context.capabilitySelection.promptOverlay : '';
-  const desktopExecutionOverlay = context.desktopExecutionPolicy.promptOverlay && needsExecutionPrompt ? '\n\n' + context.desktopExecutionPolicy.promptOverlay : '';
   const turnFlowOverlay = remoteRestricted ? '' : '\n\n' + context.turnFlow.promptOverlay;
   const runtimeCapabilityOverlay = needsExecutionPrompt
     ? '\n\n' + buildLumiRuntimeCapabilityContext({
@@ -161,18 +147,12 @@ export async function prepareVoiceExecutionAndPrompt(context: NonNullable<Awaite
         orgId: context.voiceScope.orgId,
       })
     : '';
-  const operatingKernelOverlay = needsExecutionPrompt
-    ? '\n\n' + buildLumiOperatingKernelPrompt({
-        channel: 'voice',
-        flow: context.turnFlow,
-      })
-    : '';
   const actionContinuationOverlay = context.actionContinuationBridge ? `\n\n${context.actionContinuationBridge}` : '';
   const pendingConfirmationOverlay = context.pendingConfirmationPrompt ? `\n\n${context.pendingConfirmationPrompt}` : '';
   const voiceSystemPrompt = restrictSystemPromptForExecutionBoundary(
     context.fullPersonalityPrompt,
     context.toolSecurityContext.executionBoundary,
-  ) + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + actionContinuationOverlay + pendingConfirmationOverlay + clientSelfPrompt + context.topicContext + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
+  ) + interactionOverlay + buildVoiceReplyStyleOverlay() + actionContinuationOverlay + pendingConfirmationOverlay + clientSelfPrompt + context.topicContext + dispatchOverlay + turnFlowOverlay + runtimeCapabilityOverlay;
 
   const userLLMPrefs = getScopedPreferredLLM(context.session.userId, context.voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';

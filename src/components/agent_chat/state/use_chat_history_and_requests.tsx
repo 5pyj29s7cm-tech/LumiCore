@@ -1,16 +1,15 @@
+import { chatPreviewCopy } from '@/i18n/locales/chatPreview';
 import type { GeneratedFileLink, KnowledgeUpdateDetail } from "../contracts";
-import { stripStoredAttachmentSummary } from "../history";
 import { extractPersistedMediaArtifacts } from "../media_artifacts";
 import { getSelectedTextWithin } from "../appearance";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { FileResourceVideo } from "../../FileResourceMedia";
-import { FileText, Image as ImageIcon, Video, ExternalLink } from "lucide-react";
+import { FileText, Image as ImageIcon, Video, ExternalLink, Eye } from "lucide-react";
 import { toast } from "sonner";
 import { normalizeTaskCompletionFeedback } from "../../workflowTypes";
 import { uiMessage } from "../../../i18n/uiMessages";
 import { CN_FOUNDER_ALIASES } from "../../../i18n/regions/cn/recognition";
 import { chatAttachmentIdentity } from "@/lib/chatAttachmentReferences";
-import { hasInternalAgentExecutionDetail, sanitizeAgentResponseTextForDisplay } from "@/lib/agentResponseDelivery";
 import { chatExecutionStorageKey, ownedPendingChatExecutions, type ChatRecoveryOwner } from "@/lib/chatExecutionRecovery";
 import { resolveChatExecutionEvent } from "@/lib/conversationSync";
 import { takeChatStreamBucket, removePersistedPendingChatExecution, upsertPersistedPendingChatExecution, type PersistedPendingChatExecution } from "@/lib/chatEventReceipts";
@@ -18,7 +17,7 @@ import type { useChatAttachmentsAndPresentation } from './use_chat_attachments_a
 import { CHAT_SEARCH_LIMIT } from './shared';
 
 export function useChatHistoryAndRequests(previousBindings: ReturnType<typeof useChatAttachmentsAndPresentation>) {
-  const { pendingAttachments, chatFileSections, agentId, agentCategory, agentName, isOpen, refreshKnowledgeFiles, activeDomain, activeOrgId, socket, agentNameRef, recognition, setDraftText, setIsListening, t, setCopiedId, mediaGenerationText, openChatFile, searchQuery, messages, searchResults, user, isZh, setSearchResults, setIsSearchingHistory, setSearchError, scopedConversationUrl, chatExecutionSource, attachmentConversationIdRef, activeMediaGenerationRef, chatExecutionWatchesRef, terminalReceiptsRef, chatRequestLedgerRef, chatTurnUiMetaRef, chatTurnTimerGuardRef, currentTurnUiMetaRef, resetMediaGenerationSurface, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents, setMessages, bindAttachmentContextToConversation } = previousBindings;
+  const { pendingAttachments, chatFileSections, agentId, agentCategory, agentName, isOpen, refreshKnowledgeFiles, activeDomain, activeOrgId, socket, agentNameRef, recognition, setDraftText, setIsListening, t, setCopiedId, mediaGenerationText, openChatFile, searchQuery, messages, searchResults, user, isZh, platform, setSearchResults, setIsSearchingHistory, setSearchError, scopedConversationUrl, chatExecutionSource, attachmentConversationIdRef, activeMediaGenerationRef, chatExecutionWatchesRef, terminalReceiptsRef, chatRequestLedgerRef, chatTurnUiMetaRef, chatTurnTimerGuardRef, currentTurnUiMetaRef, resetMediaGenerationSurface, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents, setMessages, bindAttachmentContextToConversation } = previousBindings;
 
   const pendingAttachmentKeys = useMemo(
     () => new Set(pendingAttachments.map(chatAttachmentIdentity)),
@@ -135,6 +134,7 @@ export function useChatHistoryAndRequests(previousBindings: ReturnType<typeof us
               type="button"
               onClick={() => openChatFile({ fileName: file.fileName, path: file.path, openUrl: file.url, saveUrl: file.url })}
               className="flex min-w-0 flex-1 items-center gap-3 text-left"
+              title={uiMessage('agent-chat-page.open-file.01b8938ac4')}
             >
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-400/15 text-emerald-200">
               {file.kind === 'image' ? <ImageIcon size={17} /> : file.kind === 'video' ? <Video size={17} /> : <FileText size={17} />}
@@ -147,11 +147,18 @@ export function useChatHistoryAndRequests(previousBindings: ReturnType<typeof us
               </div>
             </div>
             </button>
+            {platform === 'tauri' && file.path && /\.(?:pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|txt|md|csv|tsv)$/iu.test(file.fileName) && <button
+              type="button"
+              onClick={() => void openChatFile({ fileName: file.fileName, path: file.path, openUrl: file.url, saveUrl: file.url }, 'preview')}
+              className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-emerald-100/60 hover:bg-emerald-400/15 hover:text-emerald-100"
+              title={chatPreviewCopy(isZh).preview}
+              aria-label={chatPreviewCopy(isZh).preview + ': ' + file.fileName}
+            ><Eye size={13} />{chatPreviewCopy(isZh).preview}</button>}
           </div>
         ))}
       </div>
     );
-  }, [mediaGenerationText, openChatFile]);
+  }, [isZh, mediaGenerationText, openChatFile, platform]);
 
   const buildSearchDisplayMessages = useCallback(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -187,17 +194,10 @@ export function useChatHistoryAndRequests(previousBindings: ReturnType<typeof us
       const baseId = m.id || `persisted-${index}`;
       const timestamp = m.timestamp || m.createdAt || new Date().toISOString();
       const role = m.role || '';
-      const userText = role === 'assistant' ? '' : stripStoredAttachmentSummary(m.content || m.message || '');
-      const storedAssistantText = role === 'assistant'
+      const userText = role === 'assistant' ? '' : (m.content || m.message || '');
+      const assistantText = role === 'assistant'
         ? (m.content || m.message || m.response || '')
         : (m.response || '');
-      const legacyExecutionReport = Boolean(
-        storedAssistantText && hasInternalAgentExecutionDetail(storedAssistantText),
-      );
-      const assistantText = sanitizeAgentResponseTextForDisplay(
-        storedAssistantText,
-        isZh ? 'zh' : 'en',
-      );
 
       if (role !== 'tool' && userText) {
         pushMessage({
@@ -220,7 +220,6 @@ export function useChatHistoryAndRequests(previousBindings: ReturnType<typeof us
           timestamp,
           type: 'agent',
           mode: m.mode,
-          ...(legacyExecutionReport ? { legacyExecutionReport: true } : {}),
           ...(completionFeedback ? { completionFeedback } : {}),
           ...(mediaArtifacts.length ? { mediaArtifacts } : {}),
           fileArtifacts: m.fileArtifacts || [],

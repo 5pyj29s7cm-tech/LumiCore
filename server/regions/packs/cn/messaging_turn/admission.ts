@@ -16,7 +16,6 @@ import { revalidateAcceptedTaskRelation } from "../../../../cognition/task_concu
 import { getStoredOperationMode } from "../../../../cognition/operation_mode_store";
 import { persistExplicitRemoteRelationshipMemories } from "../remote_memory";
 import { generateSystemPrompt } from "../../../../personality/engine";
-import { buildUnifiedLegalEntryPrompt } from "../../../../cognition/legal_entry";
 import { CN_TASK_EXECUTION_MESSAGES } from "../../../messages/task_execution_messages";
 import { createConversationReceiptObserver } from "../../../../conversation/execution_receipt_archive";
 import type { OrganizationWorkExecution } from "../../../../org/work_routing";
@@ -234,14 +233,6 @@ export async function prepareMessagingTurn(msg: IncomingMessage, options?: Messa
     systemPrompt += `\n\nRemote material continuity: ${attachmentContext.totalCount} verified locally cached attachment(s) are available in this exact member/chat/thread scope, including ${attachmentContext.carriedCount || 0} carried from earlier turns. Use them for follow-up questions without asking the user to upload again. Never carry them into another member, organization, chat, or thread. If this turn added new files, briefly tell the user once that the materials will remain available in this conversation and can be cleared by sending “清除会话材料”.`;
   }
 
-  const legalOverlay = buildUnifiedLegalEntryPrompt({
-    text: routingText,
-    domain,
-    orgId,
-    channel: msg.platform,
-    source: `${msg.platform}_bot`,
-  });
-  if (legalOverlay) systemPrompt += `\n\n${legalOverlay}`;
 
   const turnDispatch = executionPlan.turnIntent;
   const turnFlow = turnDispatch.flow;

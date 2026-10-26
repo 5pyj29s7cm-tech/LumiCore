@@ -279,7 +279,7 @@ export function taskExplicitlyNamesTool(task: string, toolName: string): boolean
  * Identify schemas a local 4096-token attempt may not discard. The already
  * ordered declaration array remains authoritative: hard projections retain
  * every declaration, while a dynamic route retains its semantic winner,
- * explicitly requested/previously executed tools, and discovery.
+ * explicit task/verification requirements, and discovery.
  */
 export function resolveRequiredToolNamesForModel(
   context: ToolContext | undefined,
@@ -307,10 +307,6 @@ export function resolveRequiredToolNamesForModel(
   required.add(orderedNames[0]);
   for (const name of orderedNames) {
     if (taskExplicitlyNamesTool(primaryTask, name)) required.add(name);
-  }
-  for (const record of records) {
-    const name = String(record?.name || '').trim();
-    if (declared.has(name)) required.add(name);
   }
   for (const name of buildActionEvidenceContract(primaryTask, undefined, context?.acceptedActionContract).verificationTools || []) {
     if (declared.has(name)) required.add(name);

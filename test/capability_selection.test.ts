@@ -552,9 +552,6 @@ describe('Lumi capability selection', () => {
     expect(selection.lane).toBe('legal_casework');
     expect(selection.preferredTools).toContain('legal_message_intake_to_case');
     expect(selection.preferredTools).toContain('legal_case_reasoning_matrix');
-    expect(selection.promptOverlay).toContain('unified legal casework path');
-    expect(execution.promptOverlay).toContain('Unified Legal Casework Entry');
-    expect(execution.promptOverlay).toContain('organization case workspace');
     expect(execution.toolRoute?.categories).toEqual(expect.arrayContaining(['legal', 'messaging']));
   });
 
@@ -568,8 +565,6 @@ describe('Lumi capability selection', () => {
     expect(selection.lane).toBe('legal_casework');
     expect(selection.preferredTools).toContain('legal_case_workspace');
     expect(selection.preferredTools).toContain('legal_generate_citation_verification_report');
-    expect(execution.promptOverlay).toContain('legal work in the personal workspace');
-    expect(execution.promptOverlay).toContain('Current-law gate');
   });
 
   it('routes voice legal work through the same legal casework lane', async () => {
@@ -583,7 +578,6 @@ describe('Lumi capability selection', () => {
     expect(selection.lane).toBe('legal_casework');
     expect(selection.preferredTools).toContain('legal_meeting_minutes_to_case');
     expect(selection.preferredTools).toContain('legal_generate_litigation_packet');
-    expect(execution.promptOverlay).toContain('major premise');
   });
 
   it('selects foreground WeChat sending with the virtual cursor path', async () => {

@@ -4,9 +4,9 @@ import type { NormalizedLLMResponse } from '../../tools/types';
 export const DEFAULT_MODEL_ATTEMPT_TIMEOUTS: Readonly<ModelAttemptTimeouts> = Object.freeze({
   requestMs: 20_000,
   firstByteMs: 20_000,
-  semanticContentMs: 45_000,
+  semanticContentMs: Infinity,
   idleMs: 20_000,
-  absoluteMs: 60_000,
+  absoluteMs: Infinity,
 });
 
 export class ModelAttemptDeadlineError extends Error {
@@ -148,9 +148,10 @@ export class ModelAttemptSupervisor {
       void operation.catch(() => {});
       return Promise.reject(new ModelAttemptDeadlineError('cancelled', 0, { cause: this.callerSignal.reason }));
     }
-    const deadline = deadlines.reduce((earliest, candidate) => candidate.dueAt < earliest.dueAt ? candidate : earliest);
-    const remainingMs = deadline.dueAt - Date.now();
-    if (remainingMs <= 0) {
+    const deadline = deadlines.filter(candidate => Number.isFinite(candidate.dueAt))
+      .reduce<AttemptDeadline | undefined>((earliest, candidate) => !earliest || candidate.dueAt < earliest.dueAt ? candidate : earliest, undefined);
+    const remainingMs = deadline ? deadline.dueAt - Date.now() : Infinity;
+    if (deadline && remainingMs <= 0) {
       const error = new ModelAttemptDeadlineError(deadline.stage, deadline.timeoutMs);
       this.abort(error);
       void operation.catch(() => {});
@@ -169,11 +170,11 @@ export class ModelAttemptSupervisor {
       const onCallerAbort = () => finish(() => {
         reject(new ModelAttemptDeadlineError('cancelled', 0, { cause: this.callerSignal?.reason }));
       });
-      const timer = setTimeout(() => finish(() => {
+      const timer = deadline ? setTimeout(() => finish(() => {
         const error = new ModelAttemptDeadlineError(deadline.stage, deadline.timeoutMs);
         this.abort(error);
         reject(error);
-      }), remainingMs);
+      }), remainingMs) : undefined;
       this.callerSignal?.addEventListener('abort', onCallerAbort, { once: true });
       operation.then(
         value => finish(() => resolve(value)),

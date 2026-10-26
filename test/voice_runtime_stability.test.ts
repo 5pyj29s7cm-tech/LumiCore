@@ -4,12 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_MODEL_REQUEST_INPUT_BUDGET_TOKENS,
   estimateModelRequestInputTokens,
   prepareModelRequestContext,
 } from '../server/llm/request_context_budget';
 import {
   VOICE_DESKTOP_LEASE_WAIT_MS,
+  VOICE_EXTENDED_INPUT_BUDGET_TOKENS,
   VOICE_MODEL_INPUT_BUDGET_TOKENS,
   resolveVoiceModelInputBudget,
 } from '../server/socket/voice_runtime_policy';
@@ -65,9 +65,9 @@ describe('live voice runtime stability policy', () => {
     })).toBe('restart_capture');
   });
 
-  it('keeps spoken turns below the generic model budget and never waits 30 seconds for desktop control', () => {
+  it('keeps spoken turns within the explicit extended voice profile and never waits 30 seconds for desktop control', () => {
     expect(VOICE_MODEL_INPUT_BUDGET_TOKENS).toBeGreaterThanOrEqual(8_192);
-    expect(VOICE_MODEL_INPUT_BUDGET_TOKENS).toBeLessThan(DEFAULT_MODEL_REQUEST_INPUT_BUDGET_TOKENS);
+    expect(VOICE_MODEL_INPUT_BUDGET_TOKENS).toBeLessThan(VOICE_EXTENDED_INPUT_BUDGET_TOKENS);
     expect(VOICE_DESKTOP_LEASE_WAIT_MS).toBeGreaterThanOrEqual(1_000);
     expect(VOICE_DESKTOP_LEASE_WAIT_MS).toBeLessThanOrEqual(5_000);
     expect(resolveVoiceModelInputBudget({ text: '你好', allowToolUse: false }))
@@ -75,9 +75,9 @@ describe('live voice runtime stability policy', () => {
     expect(resolveVoiceModelInputBudget({ text: '打开桌面文件', allowToolUse: true }))
       .toBe(VOICE_MODEL_INPUT_BUDGET_TOKENS);
     expect(resolveVoiceModelInputBudget({ text: '全面审计整个工作区', allowToolUse: true }))
-      .toBe(DEFAULT_MODEL_REQUEST_INPUT_BUDGET_TOKENS);
+      .toBe(VOICE_EXTENDED_INPUT_BUDGET_TOKENS);
     expect(resolveVoiceModelInputBudget({ text: '仔细的核实主程序和子程序', allowToolUse: true }))
-      .toBe(DEFAULT_MODEL_REQUEST_INPUT_BUDGET_TOKENS);
+      .toBe(VOICE_EXTENDED_INPUT_BUDGET_TOKENS);
   });
 
   it('retains the current input, TaskCapsule, and safety boundary under the voice budget', () => {

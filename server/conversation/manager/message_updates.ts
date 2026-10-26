@@ -63,6 +63,9 @@ export function updateConversationForMessage(
         requestId: msg.requestId,
         skipActionContinuation: msg.skipActionContinuation,
         terminalDisposition: msg.terminalTaskDisposition,
+        assistantText: msg.content,
+        completionFeedback: msg.completionFeedback,
+        toolRecords: receiptOwnership.currentRecords,
       });
       if (receiptOwnership.staleRecords.length > 0) {
         // Receipt ownership is independent from the transient user/assistant

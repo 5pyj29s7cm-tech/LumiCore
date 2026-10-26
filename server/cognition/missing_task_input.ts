@@ -1,43 +1,75 @@
+import path from 'node:path';
 import type { ToolExecutionRecord } from '../tools/types';
 import { buildTaskTargetAnchorProjection, canonicalPathIdentity, sourceDocumentInstruction } from '../conversation/task_target_anchor';
-import { matchesRequestedArtifactOutput } from './artifact_write_scope';
+import { FILE_NAME_RE } from '../conversation/targets/recognition';
+import { targetReferenceMatches } from '../conversation/targets/paths';
+import { parseReceiptObject, toolRecordSucceeded, toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { normalizeActionIntent } from './normalized_action_intent';
 
 export const MISSING_TASK_INPUT_REASON = 'required_input_file_missing';
-
 const FILE_READERS = new Set(['read_file', 'read_xlsx', 'read_docx', 'read_pdf', 'extract_document_text']);
 
-/** A missing required source is a user-input boundary, not a model retry.
- * Only consume local reader failures for the exact input named by the task.
- * Callers must fence these receipts to the current turn; old failures do not
- * revoke a later user's permission to retry after supplying the source.
+// search_files returns path arrays during execution; only persisted display
+// records use the summary shape. Reaching its 200-path cap is not absence proof.
+function fileSearchResult(record: ToolExecutionRecord): Record<string, any> | null {
+  const payload = toolRecordTerminalPayload(record);
+  return Array.isArray(payload)
+    ? { kind: 'desktop_files_summary', originalCount: payload.length, truncated: payload.length >= 200, entries: payload }
+    : parseReceiptObject(payload);
+}
+
+/** Missing input is a user-input boundary. Callers fence receipts to this turn;
+ * reader errors and complete scoped searches must retain the exact input role.
  */
 export function missingTaskInputResult(taskText: string, records: ToolExecutionRecord[]): {
   text: string; blocked: true; reason: typeof MISSING_TASK_INPUT_REASON;
 } | null {
   const sourceText = sourceDocumentInstruction(taskText);
-  const source = buildTaskTargetAnchorProjection({ taskText: sourceText }).target.path;
-  if (!source || !/^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(source)) return null;
-  if (matchesRequestedArtifactOutput(taskText, source)) return null;
   const intent = normalizeActionIntent(sourceText);
-  // A new output may legitimately be absent before creation. Only an explicit
-  // read/edit task owns an existing input requirement.
-  // i18n-allow: recognition of required source-file use, not user-facing text.
+  // i18n-allow: existing source operations and standard user-folder recognition.
   if (!['read', 'inspect', 'edit'].includes(intent.operation)
-    && !/(?:读取|读入|分析|修改|改成|改为|根据|基于)|\b(?:read|load|inspect|analy[sz]e|modify|edit|using|based on)\b/iu.test(sourceText)) return null;
-  const sourceId = canonicalPathIdentity(source);
-  const latest = records.slice().reverse().find(record => FILE_READERS.has(record.name)
-    && canonicalPathIdentity(String(record.arguments?.filePath || record.arguments?.path || '')) === sourceId);
-  if (!latest?.error || latest.adapterStarted === false) return null;
-  // The handler's failure, not model narration or a string inside the file.
-  // Match the missing filename in the error too: a missing parser/dependency
-  // must not be presented as a missing user document.
-  const missingPath = latest.error.match(/^(?:(?:XLSX|DOCX|PDF|Audio)\s+)?file\s+(?:not found|does not exist):\s*(.+)$/iu)?.[1]
-    || latest.error.match(/\bENOENT:\s*no such file or directory,\s*(?:open|stat|access)\s+['"](.+)['"]\s*$/iu)?.[1];
-  if (!missingPath || canonicalPathIdentity(missingPath) !== sourceId) return null;
-  // i18n-allow: exact-path, receipt-grounded missing-input explanation.
-  const text = /[\u3400-\u9fff]/u.test(taskText)
-    ? `没有找到这项任务需要的源文件：${source}\n任务尚未完成。请补齐文件或提供正确路径，再让我继续原任务。`
-    : `The required source file was not found: ${source}\nThe task is incomplete. Supply the file or correct its path, then ask me to continue the original task.`;
-  return { text, blocked: true, reason: MISSING_TASK_INPUT_REASON };
+    && !/读取|读入|分析|修改|根据|基于|\b(?:read|load|inspect|analy[sz]e|modify|edit|using|based on)\b/iu.test(sourceText)
+    && !/合并|汇总|整合|\b(?:merge|combine)\b/iu.test(taskText)) return null;
+  const primary = buildTaskTargetAnchorProjection({ taskText: sourceText }).target.path;
+  const absolute = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(primary || '');
+  const folder = /桌面|\bdesktop\b/iu.test(sourceText) ? 'Desktop'
+    : /下载|\bdownloads\b/iu.test(sourceText) ? 'Downloads'
+      : /文档(?:目录|文件夹)|\bdocuments\b/iu.test(sourceText) ? 'Documents' : '';
+  const names = [...sourceText.matchAll(new RegExp(FILE_NAME_RE.source, 'giu'))].map(match => match[1]);
+  const sources = absolute ? [primary] : folder ? names.map(name => canonicalPathIdentity('~/' + folder) + '/' + name) : [];
+  for (const source of new Set(sources)) {
+    const sourceId = canonicalPathIdentity(source);
+    if (!sourceId) continue;
+    const name = source.split(/[\\/]/u).at(-1)!;
+    const directory = sourceId.slice(0, sourceId.lastIndexOf('/'));
+    const latest = [...records].reverse().find(record => FILE_READERS.has(record.name)
+      && canonicalPathIdentity(record.arguments?.filePath || record.arguments?.path) === sourceId);
+    if (latest) {
+      if (!latest.error || latest.adapterStarted === false) continue;
+      const missingPath = latest.error.match(/^(?:(?:XLSX|DOCX|PDF|Audio)\s+)?file\s+(?:not found|does not exist):\s*(.+)$/iu)?.[1]
+        || latest.error.match(/\bENOENT:\s*no such file or directory,\s*(?:open|stat|access)\s+['"](.+)['"]\s*$/iu)?.[1];
+      if (!missingPath || canonicalPathIdentity(missingPath) !== sourceId) continue;
+    } else {
+      const observed = [...records].reverse().find(record => {
+        if (record.name !== 'search_files' || !toolRecordSucceeded(record) || record.terminalVerification?.status !== 'verified') return false;
+        const pattern = String(record.arguments?.pattern || '');
+        if (!pattern || /[\\/\[\]{}!]/u.test(pattern) || !path.matchesGlob(name, pattern)
+          || canonicalPathIdentity(record.arguments?.directory) !== directory) return false;
+        const result = fileSearchResult(record);
+        return result?.kind === 'desktop_files_summary' && Array.isArray(result.entries)
+          && result.entries.every((entry: unknown) => typeof entry === 'string' && canonicalPathIdentity(entry).startsWith(directory + '/'));
+      });
+      const result = observed && fileSearchResult(observed);
+      if (!result || result.entries.some((entry: string) => targetReferenceMatches(entry, name))
+        || result.truncated !== false || result.originalCount !== result.entries.length || result.originalCount >= 200) continue;
+    }
+    const location = folder === 'Desktop' ? '桌面' : folder === 'Downloads' ? '下载目录' : '文档目录';
+    // i18n-allow: specific input identified by a reader failure or scoped search.
+    const text = /[\u3400-\u9fff]/u.test(taskText)
+      ? (!absolute ? '没有在' + location + '找到“' + name + '”' : '没有找到这项任务需要的源文件：' + source)
+        + '，暂时无法完成这项文件处理。请补齐文件或提供正确路径。'
+      : 'The required source file was not found: ' + source + '\nSupply the file or correct its path before continuing.';
+    return { text, blocked: true, reason: MISSING_TASK_INPUT_REASON };
+  }
+  return null;
 }

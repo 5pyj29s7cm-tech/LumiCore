@@ -1,8 +1,7 @@
-import { DEFAULT_MODEL_REQUEST_INPUT_BUDGET_TOKENS } from '../llm/request_context_budget';
-
 /** Voice must stay responsive even when the generic text channel can afford a larger prompt. */
 export const VOICE_CHAT_INPUT_BUDGET_TOKENS = 10_000;
 export const VOICE_MODEL_INPUT_BUDGET_TOKENS = 16_000;
+export const VOICE_EXTENDED_INPUT_BUDGET_TOKENS = 24_000;
 export const VOICE_DESKTOP_LEASE_WAIT_MS = 5_000;
 
 // i18n-allow: multilingual input-recognition pattern; not user-visible copy.
@@ -13,7 +12,7 @@ export function resolveVoiceModelInputBudget(input: {
   allowToolUse?: boolean;
 }): number {
   if (EXPLICIT_FULL_AUDIT.test(String(input.text || ''))) {
-    return DEFAULT_MODEL_REQUEST_INPUT_BUDGET_TOKENS;
+    return VOICE_EXTENDED_INPUT_BUDGET_TOKENS;
   }
   return input.allowToolUse
     ? VOICE_MODEL_INPUT_BUDGET_TOKENS

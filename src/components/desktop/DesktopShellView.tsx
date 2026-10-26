@@ -19,7 +19,7 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 
 import { KnowledgeBaseEntry } from "../KnowledgeBaseEntry";
-import { X, ArrowLeft } from 'lucide-react';
+import { X, ArrowLeft, Sparkles } from 'lucide-react';
 
 import { DayInkLandscape } from "../DesktopShellAuxiliary";
 import { CursorGlow } from "../CursorGlow";
@@ -46,7 +46,7 @@ import { getDesktopChromeMetrics } from '@/lib/desktopLayout';
 
 import { InkWorldLazy, MeshSyncSelector, ContributorNodePanel, AgentChatPage, OrgPortal, Sanctuary, MemoryAvatarLab } from "./surface_components";
 
-type SurfaceReturnTarget = "home" | "command-center";
+import type { SurfaceReturnTarget } from "./state/shared";
 
 export type DesktopShellViewInput = {
 resolvedAppearanceMode: "light" | "dark";
@@ -71,7 +71,6 @@ personalScale: import("motion/react").MotionValue<number>;
 personalOpacity: import("motion/react").MotionValue<number>;
 syncRate: number;
 t: any;
-nexusReturnTarget: "command-center" | "home";
 openCommandCenter: (view?: CommandCenterView) => void;
 setSyncRate: React.Dispatch<React.SetStateAction<number>>;
 handleTopbarPointerDown: (event: React.PointerEvent<HTMLDivElement>) => Promise<void>;
@@ -218,10 +217,29 @@ setMemoryAvatars: React.Dispatch<React.SetStateAction<any[]>>;
 enterCreatedMemoryAvatar: (avatar: any) => void;
 };
 export function DesktopShellView(input: DesktopShellViewInput) {
-  const { resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, desktopExecutionPreference, setDesktopExecutionPreference, lang, personalScale, personalOpacity, syncRate, t, nexusReturnTarget, setSyncRate, openSurface, closeSurface, workDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, user, startStandardVoiceCall, endVoiceCallFromUI, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar, callState, audioLevel } = input;
+  const { resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, desktopExecutionPreference, setDesktopExecutionPreference, lang, personalScale, personalOpacity, syncRate, t, setSyncRate, openSurface, closeSurface, workDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, user, startStandardVoiceCall, endVoiceCallFromUI, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar, callState, audioLevel } = input;
+
+  const handleRealmWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if ((input.activeTab !== 'home' && !input.minimizedWindows.includes(input.activeTab)) || input.isWallpaperMode
+      || (input.viewMode === 'personal' && input.openWindows.some(id => !input.minimizedWindows.includes(id)))
+      || input.chatOpen || input.knowledgeOpen || input.memoryLabOpen || input.sanctuaryOpen || input.meetingNotesOpen
+      || input.operationMode === 'meeting' || input.isSearchOpen || input.isNotificationPanelOpen || input.pendingOperationMode
+      || input.showOnboarding || !input.sensorPrimerSeen || input.isTrainingOpen || event.defaultPrevented || event.ctrlKey || event.metaKey) return;
+    if (Math.abs(event.deltaY) < (event.deltaMode === 0 ? 12 : 1) || Math.abs(event.deltaX) > Math.abs(event.deltaY)
+      || (input.viewMode === 'personal' ? event.deltaY > 0 : event.deltaY < 0)) return;
+    const target = event.target as HTMLElement;
+    if (!target?.closest || target.closest('button, a, input, textarea, select, [contenteditable], [role="button"], [role="dialog"], .lumi-desktop-widget-rail, .lumi-dock, .lumi-shell-topbar')) return;
+    for (let node: HTMLElement | null = target; node && node !== event.currentTarget; node = node.parentElement) {
+      if (node.scrollHeight > node.clientHeight + 1 && /auto|scroll/.test(window.getComputedStyle(node).overflowY)) return;
+    }
+    event.stopPropagation();
+    if (input.viewMode === 'world') input.closeSurface('nexus');
+    else input.openSurface('nexus', 'home');
+  };
 
   return (
     <div
+      onWheelCapture={handleRealmWheel}
       data-theme-scope="shell"
       data-appearance={resolvedAppearanceMode}
       data-view-mode={viewMode}
@@ -350,18 +368,12 @@ export function DesktopShellView(input: DesktopShellViewInput) {
                 </div>
               </motion.div>
 
-              <motion.button
-                onClick={() => closeSurface('nexus')}
-                className="lumi-ink-return-button group px-10 py-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full text-xs font-black text-white/60 tracking-[0.4em] uppercase transition-all backdrop-blur-2xl hover:text-white hover:border-white/20"
-              >
-                {nexusReturnTarget === 'command-center'
-                  ? `${t.back || 'Back'} · ${uiMessage('command-center.title.c5bb6d0f01')}`
-                  : (t.focusPersonalTerritory || 'Focus Personal Territory')}
-              </motion.button>
+
             </div>
 
             <div className="absolute left-8 top-24 flex flex-col gap-3 pointer-events-auto">
               <ClientSurface id="nexus-devices">
+                <button type="button" data-nexus-skills-entry onClick={() => openSurface('skills', 'nexus')} className="flex items-center gap-3 rounded-2xl border border-violet-300/25 bg-violet-400/15 px-8 py-4 text-sm font-semibold text-violet-50 shadow-lg shadow-violet-500/10 backdrop-blur-xl transition-colors hover:bg-violet-400/25"><Sparkles size={18} />{t.skills || 'Skill Hall'}</button>
                 <MeshSyncSelector t={t} syncRate={syncRate} onSyncRateChange={setSyncRate} />
                 <ContributorNodePanel t={t} />
               </ClientSurface>
@@ -484,7 +496,6 @@ export function DesktopShellView(input: DesktopShellViewInput) {
             desktopModeControl={<DesktopModeSwitch preference={desktopExecutionPreference} setPreference={setDesktopExecutionPreference} lang={lang} appearance={resolvedAppearanceMode} />}
             commandCenterView={commandCenterView}
             onCommandCenterViewChange={setCommandCenterView}
-            onOpenNexus={() => openSurface('nexus', 'command-center')}
             onOpenMemoryAvatar={() => { void openMemoryAvatar(); }}
             onOpenKnowledge={() => {
               openKnowledgeBase('command-center');

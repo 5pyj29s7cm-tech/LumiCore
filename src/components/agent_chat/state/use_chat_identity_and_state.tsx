@@ -46,7 +46,6 @@ export function useChatIdentityAndState({
   layout = 'standalone',
   commandCenterView = 'office',
   onCommandCenterViewChange,
-  onOpenNexus,
   onOpenMemoryAvatar,
   onOpenKnowledge,
   voiceSession,
@@ -68,7 +67,6 @@ export function useChatIdentityAndState({
   layout?: 'standalone' | 'command-center' | 'creation';
   commandCenterView?: CommandCenterView;
   onCommandCenterViewChange?: (view: CommandCenterView) => void;
-  onOpenNexus?: () => void;
   /** Open the Memory Avatar surface from the command-center right rail. */
   onOpenMemoryAvatar?: () => void;
   /** Open the scoped knowledge base from the command-center right rail. */
@@ -468,7 +466,7 @@ export function useChatIdentityAndState({
     onClose, workflowStatus, chatAccentTheme, previewFile, layout, commandCenterView,
     resolvedAppearanceMode, prefersReducedMotion, mediaStudioMode, mediaGenerationStatus, mediaGenerationDetail,
     mediaSources, mediaGenerationRetryRequest, isWorkChat, chatSongOpen, isDraggingFiles, isCommandCenterUtility,
-    onCommandCenterViewChange, onOpenNexus, voices, voicePickerRef, setSelectedVoiceId, audioLevel,
+    onCommandCenterViewChange, voices, voicePickerRef, setSelectedVoiceId, audioLevel,
     voiceSession, endVoiceSession, operationModeMeta, OperationModeIcon, activeDomainDetail, activeDomainLabel,
     runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, conversationHistoryLoading,
     conversationHistoryLoadingMore, setCommandCenterPlannerOpen, commandCenterPlannerOpen, commandCenterPlannerText,

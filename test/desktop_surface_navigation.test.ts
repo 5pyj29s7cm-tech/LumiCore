@@ -1,3 +1,6 @@
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { BusinessWorkbench } from '../src/components/BusinessWorkbench';
 import { desktopWindowCommand } from './desktop_window_harness';
 import { expect, it, vi } from 'vitest';
 import { extractSourceExpression } from './source_expression';
@@ -106,4 +109,81 @@ it('opening and closing Nexus uses the same recorded origin as the command-cente
   d.invoke('openSurface', 'nexus', 'command-center'); expect(d.state.viewMode).toBe('world'); expect(d.state.chatOpen).toBe(false);
   d.invoke('closeSurface', 'nexus'); expect(d.state.viewMode).toBe('personal'); expect(d.state.chatOpen).toBe(true);
   expect(d.state.nexusReturnTarget).toBe('home');
+});
+
+it('Skill Hall opened from Breath Realm returns there after closing', () => {
+  const d = desktop({ viewMode: 'world' });
+  d.invoke('openSurface', 'skills', 'nexus');
+  expect(d.state.viewMode).toBe('personal'); expect(d.state.focusedWindow).toBe('skills');
+  d.invoke('closeWindow', 'skills');
+  expect(d.state.viewMode).toBe('world'); expect(d.state.activeTab).toBe('home');
+});
+it.each(['business', 'business-ecommerce', 'business-finance', 'business-archive'])('the %s workspace returns to its command-center origin', id => {
+  const d = desktop({ activeTab: 'command-center', chatOpen: true });
+  d.invoke('openSurface', id);
+  expect(d.state.chatOpen).toBe(false); expect(d.state.focusedWindow).toBe(id);
+  d.invoke('closeWindow', id);
+  expect(d.state.chatOpen).toBe(true); expect(d.state.activeTab).toBe('command-center');
+});
+it('leaving Breath Realm does not send a later direct Skill Hall opening back there', () => {
+  const d = desktop({ viewMode: 'world' });
+  d.invoke('openSurface', 'skills', 'nexus'); d.invoke('closeWindow', 'skills');
+  d.invoke('closeSurface', 'nexus');
+  d.invoke('openSurface', 'skills'); d.invoke('closeWindow', 'skills');
+  expect(d.state.viewMode).toBe('personal'); expect(d.state.activeTab).toBe('home');
+});
+it('closing the focused relocated workspace preserves its origin with another window still open', () => {
+  const d = desktop({ activeTab: 'command-center', chatOpen: true, openWindows: ['settings'], focusedWindow: 'settings' });
+  d.invoke('openSurface', 'business', 'command-center'); d.invoke('closeWindow', 'business');
+  expect(d.state.openWindows).toEqual(['settings']); expect(d.state.chatOpen).toBe(true);
+});
+
+function realmWheel(state: Record<string, any> = {}, event: Record<string, any> = {}, interactive = false, scrolling = false) {
+  const openSurface = vi.fn();
+  const closeSurface = vi.fn();
+  const input = { viewMode: 'personal', activeTab: 'home', openWindows: [], minimizedWindows: [], sensorPrimerSeen: true, ...state, openSurface, closeSurface };
+  const target = { closest: () => interactive ? {} : null, scrollHeight: scrolling ? 200 : 100, clientHeight: 100, parentElement: null };
+  extractSourceExpression('src/components/desktop/DesktopShellView.tsx', 'handleRealmWheel', {
+    input, window: { getComputedStyle: () => ({ overflowY: scrolling ? 'auto' : 'visible' }) },
+  })({ deltaY: -100, deltaX: 0, deltaMode: 0, target, currentTarget: {}, stopPropagation: vi.fn(), ...event });
+  return Object.assign(openSurface, { closeSurface });
+}
+it.each([[0, -12], [1, -1], [2, -1]])('the clear personal background supports pixel, line and page wheel units: %s', (deltaMode, deltaY) => {
+  expect(realmWheel({}, { deltaMode, deltaY })).toHaveBeenCalledWith('nexus', 'home');
+});
+it.each([{ openWindows: ['settings'] }, { chatOpen: true }, { meetingNotesOpen: true }, { operationMode: 'meeting' },
+  { isSearchOpen: true }, { isNotificationPanelOpen: true }, { isWallpaperMode: true }, { pendingOperationMode: 'meeting' },
+  { showOnboarding: true }, { sensorPrimerSeen: false }, { isTrainingOpen: true }])('keeps existing surfaces in control of their wheel events: %j', state => {
+  expect(realmWheel(state)).not.toHaveBeenCalled();
+});
+it.each([{ deltaY: -5 }, { deltaY: 100 }, { deltaX: 200 }, { ctrlKey: true }, { metaKey: true }, { defaultPrevented: true }])('ignores slight, reverse, horizontal, zoom and consumed gestures: %j', event => {
+  expect(realmWheel({}, event)).not.toHaveBeenCalled();
+});
+it('does not navigate from controls or from a scrollable container', () => {
+  expect(realmWheel({}, {}, true)).not.toHaveBeenCalled();
+  expect(realmWheel({}, {}, false, true)).not.toHaveBeenCalled();
+});
+
+it.each([[0, 12], [1, 1], [2, 1]])('scrolling backward exits Breath Realm with native wheel units: %s', (deltaMode, deltaY) => {
+  const action = realmWheel({ viewMode: 'world' }, { deltaMode, deltaY });
+  expect(action).not.toHaveBeenCalled(); expect(action.closeSurface).toHaveBeenCalledWith('nexus');
+});
+vi.mock('../src/contexts/AppContext', () => ({ useApp: () => ({ user: { uid: 'section-owner' }, workbenchDrafts: new Map() }) }));
+it.each([['social', '社媒运营'], ['ecommerce', '电商运营'], ['finance', '财务管理'], ['archive', '任务与归档']] as const)('renders the direct %s section with its own title and without aggregate tabs', (section, title) => {
+  const markup = renderToStaticMarkup(React.createElement(BusinessWorkbench, { section, lang: 'zh', domain: 'personal',
+    onOpenSettings: vi.fn(), onOpenKnowledge: vi.fn(), onOpenSkills: vi.fn(), onOpenCreation: vi.fn(), onOpenDigitalHuman: vi.fn() }));
+  expect(markup).toContain('>' + title + '</h2>'); expect(markup).not.toContain('<nav');
+});
+
+it('allows a cleared personal background with only minimized windows', () => {
+  expect(realmWheel({ activeTab: 'settings', openWindows: ['settings'], minimizedWindows: ['settings'] })).toHaveBeenCalledWith('nexus', 'home');
+});
+it('consumes the captured gesture only when a page switch actually occurs', () => {
+  const stopPropagation = vi.fn();
+  realmWheel({}, { deltaY: -12, stopPropagation }); expect(stopPropagation).toHaveBeenCalledOnce();
+  stopPropagation.mockClear(); realmWheel({}, { deltaY: -1, stopPropagation }); expect(stopPropagation).not.toHaveBeenCalled();
+});
+it('allows backward exit when personal windows are hidden behind Breath Realm', () => {
+  const action = realmWheel({ viewMode: 'world', openWindows: ['settings'] }, { deltaY: 12 });
+  expect(action.closeSurface).toHaveBeenCalledWith('nexus');
 });

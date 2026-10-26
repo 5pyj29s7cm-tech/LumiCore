@@ -1,4 +1,5 @@
 import { isStrictPrivacy } from '../config/privacy';
+import { isModelDeadlineError } from '../llm/model_routing_receipts';
 
 export const CHAT_PUBLIC_ERROR_MESSAGES = {
   CHAT_PRIVACY_RESTRICTED: 'Strict mode blocks cloud AI and automatic tools. Select an available local model, or turn off strict mode in Privacy & Security and restart Lumi.',
@@ -7,6 +8,7 @@ export const CHAT_PUBLIC_ERROR_MESSAGES = {
   CHAT_CONVERSATION_REFRESH_FAILED: 'This conversation is unavailable for the current user or workspace.',
   CHAT_ACTION_TURN_BIND_FAILED: 'Lumi could not bind this message to the active task. Refresh the task state before retrying.',
   CHAT_MODEL_ROUTES_UNAVAILABLE: 'Lumi tried the configured model route, but no model is currently available. Check provider balance or health, or start the configured local model, then retry.',
+  CHAT_MODEL_TIMEOUT: 'The model response timed out. This request remains incomplete; existing results are retained.',
   CHAT_EXECUTION_FAILED: 'Lumi could not complete this chat turn. Check the task state before retrying.',
 } as const;
 
@@ -16,6 +18,7 @@ const CHAT_PUBLIC_ERROR_CODES = new Set<string>(Object.keys(CHAT_PUBLIC_ERROR_ME
 
 export function chatPublicErrorCodeForException(error: unknown): ChatPublicErrorCode {
   const candidate = error as any;
+  if (isModelDeadlineError(error)) return 'CHAT_MODEL_TIMEOUT';
   if (String(candidate?.message || '').startsWith('[Privacy]')) return 'CHAT_PRIVACY_RESTRICTED';
   if (
     candidate?.name === 'ModelRoutingDispatchError'

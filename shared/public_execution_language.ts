@@ -57,61 +57,19 @@ export function classifyInternalExecutionIssue(value: unknown): PublicExecutionI
   return 'unverified';
 }
 
-/**
- * Converts leaked runtime diagnostics into short customer language. Clean
- * assistant prose is returned byte-for-byte so this is safe as a last-mile
- * display boundary as well as a legacy-history migration.
- */
+/** Redact explicit tool-protocol blocks without rewriting ordinary prose. */
 export function sanitizePublicExecutionText(
   value: unknown,
-  language?: PublicExecutionLanguage,
+  _language?: PublicExecutionLanguage,
 ): string {
-  const text = String(value || '').trim();
-  if (!text || !containsInternalExecutionLanguage(text)) return text;
-  const locale = language || (/[\u3400-\u9fff]/u.test(text) ? 'zh' : 'en');
-  const issue = classifyInternalExecutionIssue(text);
-  // A protocol dump has a boundary; normal business prose outside it does not.
-  // Keep completed blocks out of prose and hide an unfinished streamed block.
+  const text = String(value || '');
+  if (!text.trim()) return '';
+  if (!containsInternalToolProtocol(text)) return text;
   const withoutProtocol = text.replace(/(?:<|&lt;)\s*(function_calls|tool_calls|invoke|parameter|tool_call|[A-Za-z][\w.-]*_[\w.-]+)(?=\s|\/?>|&gt;)[^>]*?(?:>|&gt;)[\s\S]*?(?:<|&lt;)\s*\/\s*\1\s*(?:>|&gt;)/giu, '')
     .replace(new RegExp(INTERNAL_TOOL_PROTOCOL_RE.source + '[\\s\\S]*$', 'iu'), '');
-  const confirmation = withoutProtocol.search(INTERNAL_CONFIRMATION_RE);
-  const body = confirmation < 0 ? withoutProtocol : withoutProtocol.slice(0, confirmation);
-  const cleaned = body.replace(/\[The historical reply[^\]]*(?:\]|$)/giu, '')
-    .split(/\r?\n/).map(line => {
-      if (!containsInternalExecutionLanguage(line)) return line;
-      // A source/evidence heading is not itself a failed execution verdict.
-      const content = line.replace(/^\s*(?:证据|具体阻塞|执行回馈|Evidence|Concrete blocker|Execution feedback)\s*[:：]\s*/iu, ''); // i18n-allow -- internal report labels only.
-      return content.split(/(?<=[。！？])\s*|(?<=[.!?])\s+/u)
-        .filter(part => !containsInternalExecutionLanguage(part)).join(' ').trim();
-    }).filter(Boolean).join('\n').trim();
-  const failedReport = /^\s*(?:状态\s*[:：]\s*(?:受阻|失败)|Status\s*:\s*(?:blocked|failed))/imu.test(text); // i18n-allow -- structured failure labels only.
-  const fallback = publicExecutionIssueText(issue === 'completed' ? 'unverified' : issue, locale);
-  if (cleaned) return failedReport ? cleaned + '\n' + fallback : cleaned;
-  // An internal status label alone supplies no source evidence for success.
-  return issue === 'completed' ? '' : fallback;
+  return withoutProtocol.trim() ? withoutProtocol : '';
 }
 
-function publicExecutionIssueText(issue: PublicExecutionIssue, locale: PublicExecutionLanguage): string {
-  if (locale === 'zh') {
-    // i18n-allow -- canonical Simplified Chinese customer copy.
-    if (issue === 'confirmation_required') return '这项操作还未执行。请先查看本次操作的目标和内容，再回复“确认”或“取消”。';
-    if (issue === 'target_changed') return '刚才没有完成，因为操作后的窗口和目标不一致。请把目标窗口保持在前台，再让我重试。';
-    if (issue === 'user_active') return '检测到你正在操作电脑，我先暂停了这一步，避免和你抢控制。你说“继续”后我会接着做。';
-    if (issue === 'desktop_busy') return '桌面控制正被另一项操作占用，所以这一步还没完成。等当前操作结束后可以直接重试。';
-    if (issue === 'service_unavailable') return '我现在没能连接到桌面操作功能，所以这一步没有完成。连接恢复后可以直接重试。';
-    if (issue === 'timed_out') return '这一步等待太久仍没有结果，已经安全停止。你可以直接让我重试。';
-    if (issue === 'cancelled') return '这项操作已经停止，未完成的步骤不会继续。';
-    return '刚才没有完成，我没有拿到能确认结果的反馈。你可以直接让我重试。';
-  }
-  if (issue === 'confirmation_required') return 'This action has not run. Review its target and content, then reply “confirm” or “cancel”.';
-  if (issue === 'target_changed') return 'That did not finish because the window no longer matched the target. Keep the target window in front, then ask me to retry.';
-  if (issue === 'user_active') return 'I paused this step while you were using the computer so I would not interfere. Say “continue” when you want me to resume.';
-  if (issue === 'desktop_busy') return 'Desktop control is busy with another operation, so this step did not finish. Retry after that operation ends.';
-  if (issue === 'service_unavailable') return 'I could not reach desktop control, so this step did not finish. You can retry when the connection is back.';
-  if (issue === 'timed_out') return 'This step waited too long without a result and stopped safely. You can ask me to retry.';
-  if (issue === 'cancelled') return 'This operation was stopped. Unfinished steps will not continue.';
-  return 'That did not finish because I could not confirm the result. You can ask me to retry.';
-}
 /** Exact runtime identities are private unless the original request or input source contains them. */
 export function privateExecutionReferences(text: string, identities: readonly (string | undefined)[], originalText: readonly string[]): string[] {
   return identities.filter((id): id is string => Boolean(id && text.includes(id) && !originalText.some(source => source.includes(id))));

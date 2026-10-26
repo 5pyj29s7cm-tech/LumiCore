@@ -43,12 +43,13 @@ describe('Lumi client self model', () => {
     expect(definition.useWhen).toContain(interfaceCopy['command-center.inner-realm.4d8f2a1c09'].zh);
     expect(prompt).toContain('not a live visibility claim');
     expect(prompt).toContain('no live desktop state');
-    expect(definition.useWhen).toMatch(/Memory Territory.*Breath Realm.*Knowledge Base.*AI Creation/);
+    expect(definition.useWhen).toMatch(/Memory Territory.*Knowledge Base.*AI Creation/);
+    expect(definition.useWhen).toContain('Enter Breath Realm');
     expect(prompt).not.toContain('### Client Adapter Registry');
     expect(prompt.length).toBeLessThan(5_000);
   });
 
-  it.each(['local', 'remote_restricted'])('delivers client facts once to ordinary chat while respecting the %s boundary', async (boundary) => {
+  it.each(['local', 'remote_restricted'])('does not automatically inject client facts into ordinary chat under the %s boundary', async (boundary) => {
     const personality = personalityRegistry.getDefault();
     const build = vi.spyOn(personalityRegistry, 'buildSystemPrompt').mockReturnValue({ config: personality, systemPrompt: 'Conversation personality.' });
     try {
@@ -57,7 +58,7 @@ describe('Lumi client self model', () => {
         resolvedDomain: 'personal', resolvedOrgId: '', isMemoryAvatar: false, personalityId: 'lumi',
         conversationAgentId: 'lumi', conversationId: '', conversationMode: '', operationMode: 'assistant',
         relevantMemories: [], ragChunks: [], attachments: [], persistedConversationHistory: [],
-        sensoryFn: () => ({}), buildNaturalReplyStyleOverlay: () => '',
+        sensoryFn: () => ({}),
         toolSecurityContext: { executionBoundary: boundary },
       } as any);
       const flow = { promptOverlay: '', currentAttachmentPaths: [], routeText: '' };
@@ -65,7 +66,7 @@ describe('Lumi client self model', () => {
         turnIntent: { flow, promptOverlay: '' }, executionRequested: false,
       } as any);
       const definition = PERSONAL_CLIENT_SURFACES.find(surface => surface.id === 'command-center')!.useWhen;
-      expect(result.effectiveSystemPrompt.split(definition)).toHaveLength(boundary === 'local' ? 2 : 1);
+      expect(result.effectiveSystemPrompt.split(definition)).toHaveLength(1);
       expect(result.effectiveSystemPrompt).not.toContain('### Client Adapter Registry');
     } finally { build.mockRestore(); }
   });

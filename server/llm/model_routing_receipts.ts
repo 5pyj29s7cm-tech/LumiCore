@@ -73,7 +73,34 @@ function compact(value: unknown, limit = 200): string {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
 }
 
+/** A transport abort may carry an earlier model deadline as its actual cause. */
+export function isModelDeadlineError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: any = error;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    if (current.name === 'ToolLoopModelBudgetError'
+      || (current instanceof ModelAttemptDeadlineError && current.stage !== 'cancelled' && !current.completedEmpty)) return true;
+    current = current.cause;
+  }
+  return false;
+}
+
+/** A deterministic local capacity refusal, distinct from provider or caller cancellation. */
+export function isModelContextCapacityError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: any = error;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    if (current.code === 'model_request_source_provenance_invalid' && current.capacityExceeded === true) return true;
+    current = current.cause;
+  }
+  return false;
+}
+
 export function modelRoutingErrorReason(error: unknown): string {
+  if (isModelContextCapacityError(error)) return 'context_capacity_exceeded';
+  if (isModelDeadlineError(error)) return 'timeout';
   if (error instanceof ModelAttemptDeadlineError && error.completedEmpty) return error.finishReason === 'length' ? 'output_limit' : 'empty_response';
   if ((error as any)?.code === 'MODEL_TOOL_ARGUMENTS_INVALID') return 'invalid_tool_arguments';
   if ((error as any)?.name === 'LocalModelContextBudgetError') return 'local_context_budget_exceeded';

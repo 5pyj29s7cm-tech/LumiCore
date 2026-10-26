@@ -32,6 +32,16 @@ describe('generated deliverable continuation', () => {
     expect(prompt).toContain('Do not create it again');
     expect(buildArtifactProgressPrompt('Create a document. Do not open it.', [saved])).toContain('"openRequestedAndPending":false');
   });
+  it('explains runtime file-card delivery without granting arbitrary files or whole-task completion', () => {
+    const prompt = buildArtifactProgressPrompt('Create a document and attach it in this chat.', [saved]);
+    expect(prompt).toContain('automatically attached as file cards');
+    expect(prompt).toContain('actual public-delivery check');
+    expect(prompt).toContain('A separate attachment-push tool is not required');
+    expect(prompt).toContain('does not attach arbitrary local files');
+    expect(prompt).toContain('do not prove the whole request complete');
+    expect(prompt).toContain('does not replace chat attachment delivery');
+    expect(buildArtifactProgressPrompt('Attach an arbitrary local file.', [])).toBe('');
+  });
   it('does not promote failed or unverified writes into saved-file state', () => {
     expect(buildArtifactProgressPrompt('Open the document', [{ ...saved, error: 'write failed' }])).toBe('');
     expect(buildArtifactProgressPrompt('Open the document', [{ ...saved, terminalVerification: { status: 'unverified' } }])).toBe('');

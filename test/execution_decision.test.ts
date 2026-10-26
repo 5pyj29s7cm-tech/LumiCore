@@ -478,7 +478,7 @@ describe('Lumi execution decision', () => {
     },
   );
 
-  it('adds the unified legal entry overlay for company legal chat', async () => {
+  it('retains legal tool routing for company legal chat', async () => {
     const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
     const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
 
@@ -501,9 +501,6 @@ describe('Lumi execution decision', () => {
 
     expect(decision.allowToolUse).toBe(true);
     expect(decision.toolRoute?.categories).toContain('legal');
-    expect(decision.promptOverlay).toContain('Unified Legal Casework Entry');
-    expect(decision.promptOverlay).toContain('organization case workspace');
-    expect(decision.promptOverlay).toContain('Current-law gate');
   });
 
   it('adds the unified legal entry overlay for voice legal work', async () => {
@@ -527,8 +524,6 @@ describe('Lumi execution decision', () => {
 
     expect(decision.allowToolUse).toBe(true);
     expect(decision.toolRoute?.categories).toContain('legal');
-    expect(decision.promptOverlay).toContain('legal work in the personal workspace');
-    expect(decision.promptOverlay).toContain('major premise');
   });
 
   it('keeps text and voice on the shared entry and execution decision owner', () => {
@@ -1262,4 +1257,25 @@ describe('Lumi execution decision', () => {
     expect(mcpConceptQuestion.trace.toolIntent.blockedBy).toContain('information-only-question');
     expect(mcpConceptQuestion.dispatch.flow.acceptedActionContract).toBeUndefined();
   });
+});
+
+
+it('retains browser capabilities for the exact external portal request with an after-open page condition', async () => {
+  const { initDatabase } = await import('../db_layer');
+  await initDatabase();
+  const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+  const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+  const { buildLumiCapabilitySelection } = await import('../server/cognition/capability_selection');
+  const text = "请用系统浏览器打开人民法院在线服务网 https://zxfw.court.gov.cn/ ，打开后停在首页或登录页面，告诉我实际打开的结果。只打开入口，不登录、不填写或提交案件。";
+  const dispatch = buildLumiTurnDispatch({userId: 'external-portal-routing-probe', text, channel: 'chat', source: 'command-center-chat', operationMode: 'assistant', targetIsLumi: true});
+  const browserDeclarations = [...declarations, {type: 'function' as const, function: {name: 'browser_open_task', description: 'Open an external browser task', parameters: {type: 'object', properties: {}}}}];
+  const decision = buildLumiExecutionDecision({flow: dispatch.flow, text, toolDeclarations: browserDeclarations});
+  const selection = buildLumiCapabilitySelection({dispatch, execution: decision, text});
+  const { normalizeActionIntent } = await import('../server/cognition/normalized_action_intent');
+  expect(normalizeActionIntent(text)).toMatchObject({kind: 'desktop_operation', target: 'https://zxfw.court.gov.cn/'});
+  expect(dispatch.flow.clientActionOnlyTurn).toBe(false);
+  expect(dispatch.boundary).toBe('tool_action');
+  expect(decision.baseToolPolicy.allowedTools).toContain('*');
+  expect(decision.toolRoute?.toolNames.some(name => name === 'browser_open_task' || name === 'desktop_open')).toBe(true);
+  expect(selection.lane).not.toBe('client_surface');
 });

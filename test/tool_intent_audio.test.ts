@@ -140,3 +140,29 @@ describe('audio transcription tool intent', () => {
     expect(traceToolIntentDecision(text, 'chat', 'assistant').signals.diagnosticOrRepair).toBe(true);
   });
 });
+
+describe('user method questions are guidance, not implicit delivery', () => {
+  it.each([
+    '这个文件在其他文件夹，我怎么找到它并发给你',
+    '我该如何把其他目录里的文档发到当前聊天？',
+    '怎样复制文件的完整路径',
+    'How can I find this file and send it to you?',
+  ])('recognizes a procedural question without requiring a special suffix: %s', text => {
+    expect(isInformationOnlyQuestion(text)).toBe(true);
+    expect(hasExplicitToolIntent(text)).toBe(false);
+    expect(shouldAllowToolUseForTurn(text, 'chat', 'assistant')).toBe(false);
+  });
+  it.each([
+    '这个文件在其他文件夹，我怎么找到它并发给你？请先帮我搜索桌面',
+    '我怎么发附件？请把桌面的报价单.pdf发给张三',
+    '我怎么打开文件，随后帮我打开记事本。',
+  ])('preserves an independent authorized action after the question: %s', text => {
+    expect(isInformationOnlyQuestion(text)).toBe(false);
+    expect(shouldAllowToolUseForTurn(text, 'chat', 'assistant')).toBe(true);
+  });
+});
+
+it.each(['怎么打不开客户端'])('keeps concrete failures eligible for diagnosis: %s', text => {
+  expect(isInformationOnlyQuestion(text)).toBe(false);
+  expect(shouldAllowToolUseForTurn(text, 'chat', 'assistant')).toBe(true);
+});

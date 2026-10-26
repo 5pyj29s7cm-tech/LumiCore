@@ -1,3 +1,6 @@
+import { actualDocumentReadContent } from '../cognition/action_desktop_evidence';
+import { projectRequestedSourceArtifactHandoff } from '../cognition/artifact_progress';
+import { actionInstructionClauses, affirmativeActionInstructionClauses } from '../cognition/action_instruction_clauses';
 import { createHash } from 'node:crypto';
 import { readDatabaseTables } from '../../db_layer';
 import { privateExecutionReferences, projectExecutionReferenceText } from '../../shared/public_execution_language';
@@ -336,21 +339,100 @@ export function artifactContentSnapshot(file: string, identities: readonly strin
   } catch { return undefined; } finally { if (descriptor !== undefined) try { fs.closeSync(descriptor); } catch {} }
 }
 
+/** Public attachment facts override only contradictory same-chat delivery narration. */
+function projectChatAttachmentNarration(text: string, artifacts: ChatArtifact[], records: ToolExecutionRecord[],
+  requests: readonly string[], preservedTexts: readonly string[]): string {
+  const instructions = requests.flatMap(request => affirmativeActionInstructionClauses(request));
+  // i18n-allow -- same-chat handoff grammar, not a completion verdict.
+  if (!instructions.some(({ probe }) => /(?:发(?:送|回|到|在)?|回传|附上|交付|返回|提供).{0,24}(?:当前聊天|本次聊天|这里)|\b(?:send|return|attach|provide)\b.{0,120}\b(?:here|(?:this|current)\s+chat)\b/iu.test(probe))) return text;
+  const delivered = artifacts.filter(artifact => records.some(record => isArtifactDeliveryRecord(record)
+    && record.terminalVerification?.status === 'verified' && toolRecordSucceeded(record)
+    && (!record.envelope || record.envelope.status === 'verified_success')
+    && sameArtifactPath(artifact.path, artifactPathFromRecord(record))) && (() => {
+      try { const stat = fs.statSync(artifact.path); return stat.isFile() && stat.size > 0; } catch { return false; }
+    })());
+  if (!delivered.length) return text;
+  const protectedRanges = preservedTexts.filter(Boolean).flatMap(body => {
+    const ranges: Array<{ start: number; end: number }> = [];
+    for (let at = text.indexOf(body); at >= 0; at = text.indexOf(body, at + body.length)) ranges.push({ start: at, end: at + body.length });
+    return ranges;
+  });
+  const units: Array<{ text: string; probe: string; start: number }> = [];
+  for (const clause of actionInstructionClauses(text)) {
+    const previous = units.at(-1);
+    if (previous && !/[。！？!?\n]\s*$|\.\s*$/u.test(previous.text)) { previous.text += clause.text; previous.probe += clause.probe; }
+    else units.push({ ...clause });
+  }
+  const names = delivered.flatMap(artifact => [artifact.path, artifact.path.replaceAll('\\', '/'), artifact.path.split(/[\\/]/u).at(-1) || '']).filter(Boolean);
+  const differentFile = (part: string) => /[\p{L}\p{N}_-]+\.(?:docx?|xlsx?|pptx?|pdf|txt|md|csv|json|png|jpe?g|mp4)\b/iu.test(names.reduce((value, name) => value.split(name).join(''), part));
+  // i18n-allow -- an independent recipient failure and an explicitly requested open stay visible.
+  const external = /微信|邮件|邮箱|飞书|钉钉|\b(?:wechat|e-?mail|outlook|slack|teams)\b/iu;
+  const requestedOpen = instructions.some(({ probe }) => /打开|\bopen\b/iu.test(probe));
+  let removedDenial = false;
+  const projected = units.filter(unit => {
+    if (protectedRanges.some(range => range.start < unit.start + unit.text.length && range.end > unit.start)
+      || requests.some(request => unit.text.trim() && request.includes(unit.text.trim()))
+      || /^\s*>/u.test(unit.text) || external.test(unit.probe) || differentFile(unit.text)) return true;
+    // Quoted/code denial is absent from the existing quote-aware probe.
+    // i18n-allow -- first-person capability denial scoped to this chat and a file attachment.
+    const denial = /(?:我|我的工具|当前可用.{0,12}工具).{0,100}(?:没有|无法|不能|不支持|不具备)|\bi\s+(?:cannot|can't|am\s+unable|have\s+no)\b/iu.test(unit.probe)
+      && /(?:当前|本次|这个|本|此).{0,8}(?:聊天|对话|窗口)|这里|\b(?:this|current)\s+chat\b/iu.test(unit.text)
+      && (/附件|文件|文档|\b(?:attachment|file|document)\b/iu.test(unit.probe) || names.some(name => unit.text.includes(name)))
+      && /发|回传|推送|上传|附|\b(?:attach|send|return|upload)\b/iu.test(unit.probe);
+    if (denial) { removedDenial = true; return false; }
+    // Remove only the unrequested alternative offered after that false denial.
+    // i18n-allow -- local fallback-offer grammar, not general tool-name filtering.
+    const alternative = removedDenial && !requestedOpen
+      && /告诉我改用其他方式|如果你希望我用|如果你需要我用|\b(?:if\s+you(?:'d|\s+would)\s+like|let\s+me\s+know)\b/iu.test(unit.probe)
+      && /desktop_open|改用其他方式/iu.test(unit.text);
+    return !alternative;
+  }).map(unit => unit.text).join('');
+  if (!removedDenial) return text;
+  let start = projected.length - projected.trimStart().length, end = projected.trimEnd().length;
+  for (const body of preservedTexts.filter(Boolean)) for (let at = projected.indexOf(body); at >= 0; at = projected.indexOf(body, at + body.length)) {
+    start = Math.min(start, at); end = Math.max(end, at + body.length);
+  }
+  return projected.slice(start, end);
+}
+
 export function publicChatArtifactDelivery(value: unknown, conversationId?: string,
   context: PublicArtifactContext & { text?: string; progress?: { evidence?: string[] } } = {},
   evidenceSnapshot = capturePublicArtifactEvidenceSnapshot(Array.isArray(value) ? value : [], context)) {
   const evidence = publicArtifactEvidence(value, { ...context, conversationId: conversationId || context.conversationId }, evidenceSnapshot);
   const artifacts = collectTechnicalChatArtifacts([...evidence.selected, ...evidence.legacy], conversationId);
+  for (const [requestId, original] of Object.entries(evidence.originalTextByRequest)) {
+    // Only the current server-owned user request can opt its exact source into delivery.
+    const scoped = evidence.records.filter(record => record.requestId === requestId);
+    const taskIds = [...new Set(scoped.map(record => record.taskId).filter(Boolean))];
+    if (taskIds.length !== 1 || !original[0]) continue;
+    const source = projectRequestedSourceArtifactHandoff(original[0], scoped, { requestId, taskId: taskIds[0] });
+    for (const file of source.paths) if (!artifacts.some(artifact => sameArtifactPath(artifact.path, file))) artifacts.push(makeChatArtifact(file, conversationId));
+  }
   const requests = [...evidence.originalText, ...Object.values(evidence.originalTextByRequest).flat()];
   const { sourceText, verifiedText } = artifactReadbackTextSources(evidence.records, requests);
   const originals = [...requests, ...sourceText];
   const privateIds = evidence.privateIds;
-  const references = privateExecutionReferences(context.text || '', privateIds, originals);
+  let deliveryText = context.text || '';
+  // Project the same verified PDF body in live replies and saved history.
+  // Raw adapter metadata remains in the private receipt, not ordinary readback prose.
+  if (!/(?:元数据|PDF版本)|\b(?:metadata|PDFFormatVersion|producer)\b/iu.test(requests.join(' '))) {
+    for (const record of evidence.records.filter(record => record.name === 'read_pdf')) {
+      const raw = String(record.result || '').trim();
+      const body = actualDocumentReadContent(record);
+      if (/^Pages:\s*\d+\s*\r?\nInfo:\s*\{/u.test(raw) && body && body !== raw) deliveryText = deliveryText.split(raw).join(body);
+    }
+  }
+  const references = privateExecutionReferences(deliveryText, privateIds, originals);
+  const narrationText = verifiedText.filter(Boolean).reduce((text, body) => text.split(body).join(''), deliveryText);
+  const metadataReferences = publicExecutionMetadataReferences(evidence.records, requests).filter(reference => narrationText.includes(reference));
   const projection = projectPublicArtifactDelivery({ artifacts, ...evidence,
     snapshots: artifacts.filter(artifact => evidence.records.some(record => isArtifactProducerRecord(record)
       && sameArtifactPath(artifact.path, artifactPathFromRecord(record)))).map(artifact => artifactContentSnapshot(artifact.path, privateIds)).filter((item): item is ArtifactContentSnapshot => Boolean(item)),
-    text: projectExecutionReferenceText(context.text || '', references, verifiedText, publicExecutionMetadataReferences(evidence.records, requests)), progress: context.progress });
-  return { ...projection, deliveryBlocked: projection.deliveryBlocked || references.length > 0 };
+    text: projectExecutionReferenceText(deliveryText, references, verifiedText, metadataReferences), progress: context.progress });
+  const currentRecords = context.requestId ? evidence.records.filter(record => artifactRecordMatchesTurn(record, context)) : [];
+  const currentRequests = context.requestId ? evidence.originalTextByRequest[context.requestId] || [] : [];
+  const text = projectChatAttachmentNarration(projection.text, projection.artifacts, currentRecords, currentRequests, verifiedText);
+  return { ...projection, text, deliveryBlocked: projection.deliveryBlocked || references.length > 0 };
 }
 
 /** Public files are a projection; raw successful output receipts remain available to the archive engine. */

@@ -1,12 +1,12 @@
 import { CN_TASK_TARGET_ANCHOR_MESSAGES } from "../regions/messages/task_target_anchor_messages";
 import { classifySkillAuthoringIntent } from "../skills/authoring_intent";
 import { affirmativeActionClauses, normalizeActionIntent } from "../cognition/normalized_action_intent";
-import { isArtifactProducerRecord } from "../tools/artifact_evidence";
+import { artifactRecordMatchesTurn, isArtifactProducerRecord } from "../tools/artifact_evidence";
 import type { TaskTargetAnchorV1, AcceptedTaskTarget, TaskTargetEvidenceRecord, BuildTaskTargetAnchorInput, TaskTargetAnchorProjectionV1, EvidenceCandidate, TaskTargetToolCallGuardResult } from './targets/contracts';
 import { primaryTaskText, parseTaskTargetJson, unique, normalizedIdentity, compact } from './targets/values';
-import { explicitFile, excludedFileReferences, fileReferenceClauses, prefersCurrentWpsDocument, prefersCurrentAuthoringDocument, isFileTargetTask } from './targets/instruction_targets';
-import { concreteTargetPath, displayableFileName, targetReferenceMatches, canonicalPathIdentity, fileName } from './targets/paths';
-import { VALUE_CORRECTION_RE, EXCLUDED_FILE_CLAUSE_RE, WPS_RE, UNSTRUCTURED_FILE_ACCESS_TOOL_RE, DISCOVERY_TOOLS, DOCUMENT_INTERFACE_RE, CURRENT_DOCUMENT_INTERFACE_RE } from './targets/recognition';
+import { sourceDocumentInstruction, explicitFile, excludedFileReferences, fileReferenceClauses, prefersCurrentWpsDocument, prefersCurrentAuthoringDocument, isFileTargetTask } from './targets/instruction_targets';
+import { explicitAbsolutePaths, concreteTargetPath, displayableFileName, targetReferenceMatches, canonicalPathIdentity, fileName } from './targets/paths';
+import { FILE_NAME_RE, VALUE_CORRECTION_RE, EXCLUDED_FILE_CLAUSE_RE, WPS_RE, UNSTRUCTURED_FILE_ACCESS_TOOL_RE, DISCOVERY_TOOLS, DOCUMENT_INTERFACE_RE, CURRENT_DOCUMENT_INTERFACE_RE } from './targets/recognition';
 import { verifiedProducedDocumentPath, callTarget, blocked, targetMatchesAnchor, targetKeepsAnchoredObjectIdentity, isVerifiedProducedDocumentTarget, argumentsWithAnchoredDocumentPath } from './targets/call_binding';
 import { isUnconfirmedRuntimeCandidate, allowedTaskSearchRoots, isAllowedTaskSearchDirectory } from './targets/search_scope';
 import { recordSucceeded, activeWindowCandidate, documentCandidate, candidateMatchesRequestedAuthoringApplication, runningAuthoringWindowCandidates, discoveryCandidate, requestedAuthoringApplication, supportedAuthoringApplication } from './targets/evidence_candidates';
@@ -407,6 +407,8 @@ export function buildTaskTargetAnchorProjection(
  */
 export function guardTaskTargetToolCall(input: {
   taskText: string;
+  requestId?: string;
+  taskId?: string;
   toolName: string;
   arguments?: Record<string, unknown>;
   toolRecords?: TaskTargetEvidenceRecord[];
@@ -432,11 +434,36 @@ export function guardTaskTargetToolCall(input: {
   }
   const args = input.arguments || {};
   const target = callTarget(args);
-  const requestedRead = DOCUMENT_INTERFACE_RE.test(toolName) && !CURRENT_DOCUMENT_INTERFACE_RE.test(toolName) && concreteTargetPath(target)
+  let requestedRead = DOCUMENT_INTERFACE_RE.test(toolName) && !CURRENT_DOCUMENT_INTERFACE_RE.test(toolName) && concreteTargetPath(target)
     ? affirmativeActionClauses(primaryTaskText(input.taskText)).find(probe => {
         const intent = normalizeActionIntent(probe);
         return intent.rule === 'explicit-local-artifact-read' && canonicalPathIdentity(intent.target || '') === canonicalPathIdentity(target);
       }) : undefined;
+  // A task may have several inputs, but each concrete read still selects one.
+  // Use an exact user-named source location; otherwise require fresh bounded discovery;
+  // an output name or a remembered/ambiguous file cannot substitute for that source.
+  if (!requestedRead && DOCUMENT_INTERFACE_RE.test(toolName) && !CURRENT_DOCUMENT_INTERFACE_RE.test(toolName) && concreteTargetPath(target)) {
+    const sourceText = sourceDocumentInstruction(input.taskText);
+    const sourceNames = fileReferenceClauses(sourceText).filter(clause => !EXCLUDED_FILE_CLAUSE_RE.test(clause))
+      .flatMap(clause => [...clause.matchAll(new RegExp(FILE_NAME_RE.source, 'giu'))]);
+    const named = sourceNames.find(match => targetReferenceMatches(target, match[1]));
+    const absoluteSources = explicitAbsolutePaths(sourceText).filter(reference => displayableFileName(reference));
+    const sameNamedAbsolute = absoluteSources.filter(reference => targetReferenceMatches(reference, fileName(target)));
+    const folder = /桌面|\bdesktop\b/iu.test(sourceText) ? 'Desktop'
+      : /下载|\bdownloads\b/iu.test(sourceText) ? 'Downloads'
+        : /文档(?:目录|文件夹)|\bdocuments\b/iu.test(sourceText) ? 'Documents' : '';
+    const pathId = canonicalPathIdentity(target);
+    const locationMatches = sameNamedAbsolute.length
+      ? sameNamedAbsolute.some(reference => canonicalPathIdentity(reference) === pathId)
+      : !folder || pathId.slice(0, pathId.lastIndexOf('/')) === canonicalPathIdentity('~/' + folder);
+    if (sourceNames.length >= 1 && named && locationMatches && (folder || sameNamedAbsolute.length)) requestedRead = target;
+    if (!requestedRead && input.requestId && input.taskId && sourceNames.length > 1 && named && locationMatches) {
+      const discovery = (input.toolRecords || []).filter(record => (DISCOVERY_TOOLS.has(String(record.name || '').toLowerCase()) || record.name === 'desktop_path_info')
+        && record.terminalVerification?.status === 'verified' && artifactRecordMatchesTurn(record as import('../tools/types').ToolExecutionRecord, input));
+      const selected = buildTaskTargetAnchorProjection({ taskText: named[0], evidence: discovery });
+      if (selected.analysisReady && canonicalPathIdentity(selected.target.path) === pathId) requestedRead = target;
+    }
+  }
   const projection = buildTaskTargetAnchorProjection({
     taskText: requestedRead || input.taskText,
     evidence: input.toolRecords || [],
@@ -556,7 +583,7 @@ export function guardTaskTargetToolCall(input: {
     if (target && isVerifiedProducedDocumentTarget(target, input.toolRecords || [])) {
       return { allowed: true, reason: '', normalizedArguments: args, anchor: projection };
     }
-    if (input.acceptedTaskTarget?.target.status === 'unresolved' && !input.acceptedTaskTarget.target.path) {
+    if (!requestedRead && input.acceptedTaskTarget?.target.status === 'unresolved' && !input.acceptedTaskTarget.target.path) {
       return blocked('target_unresolved', 'The current file reference is ambiguous or names an unbound produced file. Ask for its exact path; do not substitute the previous source.', projection, CN_TASK_TARGET_ANCHOR_MESSAGES.unresolvedTarget);
     }
     const directVerifiedWpsDocumentRead = Boolean(

@@ -1,3 +1,4 @@
+import type { BusinessSection } from '../BusinessWorkbench';
 import { OSWindow } from "./window_shell";
 import { SensorPrimer } from "./sensor_primer";
 import { KernelMonitorApp } from "./kernel_monitor";
@@ -66,8 +67,8 @@ export function renderDesktopWindows({ isWallpaperMode, sensorPrimerSeen, finish
                 t={t}
               >
                 <div className="os-window-body custom-scrollbar">
-                  {windowId === 'business' ? (
-                    <BusinessWorkbench lang={lang} domain={workDomain} onOpenSettings={() => toggleWindow('settings')} onOpenKnowledge={openKnowledgeBase} onOpenSkills={() => toggleWindow('skills')}
+                  {['business', 'business-ecommerce', 'business-finance', 'business-archive'].includes(windowId) ? (
+                    <BusinessWorkbench section={(windowId === 'business' ? 'social' : windowId.slice('business-'.length)) as BusinessSection} lang={lang} domain={workDomain} onOpenSettings={() => toggleWindow('settings')} onOpenKnowledge={openKnowledgeBase} onOpenSkills={() => toggleWindow('skills')}
                       onOpenCreation={() => { setCreationRequestId(crypto.randomUUID()); openCommandCenter('office'); }}
                       onOpenDigitalHuman={() => { void openMemoryAvatar(undefined, 'home'); }} />
                   ) : windowId === 'kernel' ? (

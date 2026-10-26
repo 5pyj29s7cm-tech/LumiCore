@@ -1,6 +1,5 @@
 import { preparePlannedConversationExecution } from "../../../conversation/planned_execution";
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
-import { buildRecentFailureExplanation } from "../history";
 import { createTurnConfirmation } from "../../../tools/turn_confirmation";
 import { flushDBOrThrow } from "../../../../db_layer";
 import type { ToolExecutionRecord, ToolContext } from "../../../tools/types";
@@ -13,7 +12,7 @@ import { createDesktopExecutionTracker } from "../../../desktop/execution_runtim
 import { persistLumiPostTurnLearning } from "../../../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../../../work_takeover/execution_writeback";
 import { buildTransportNeutralConfirmationScope, formatPendingConfirmationRequest, type recordPendingConfirmationDurably } from "../../../tools/pending_confirmation";
-import { updateAssistantMessageTerminalPresentation, getMessages, getConversationActionStatus, setConversationActionExecutionStatus } from "../../../conversation/manager";
+import { updateAssistantMessageTerminalPresentation, getConversationActionStatus, setConversationActionExecutionStatus } from "../../../conversation/manager";
 import { formatConversationExecutionFactAnswer, getConversationExecutionFacts, isConversationExecutionFactQuestion } from "../../../conversation/execution_facts";
 import { resolveExactConversationCorrection } from "../../../conversation/exact_correction";
 import { recordChatExecutionPersistenceUnknownDurably } from "../../chat_execution_registry";
@@ -259,12 +258,6 @@ export async function prepareChatTerminalWriters(context: NonNullable<Awaited<Re
           context.conversation?.actionContinuationState,
           context.resolvedTaskRelation.taskId || '',
         )}`);
-      }
-      const recentFailureExplanation = context.conversationId && !context.pendingConfirmation
-        ? buildRecentFailureExplanation(context.visibleUserText, getMessages(context.conversationId, 24))
-        : '';
-      if (recentFailureExplanation) {
-        groundedTurnEvidence.push(`Recent failure evidence:\n${recentFailureExplanation}`);
       }
       if (groundedTurnEvidence.length) {
         context.effectiveSystemPrompt += [

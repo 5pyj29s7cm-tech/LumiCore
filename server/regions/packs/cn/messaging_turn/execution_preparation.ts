@@ -11,10 +11,8 @@ import { coalesceToolExecutionRecords, mergeToolExecutionRecords, taskReceiptsTo
 import type { ToolContext, ToolExecutionRecord } from "../../../../tools/types";
 import { buildDesktopExecutionStabilityPolicy } from "../../../../cognition/desktop_execution_stability";
 import { createDesktopExecutionTracker } from "../../../../desktop/execution_runtime";
-import { buildInteractionModeOverlay } from "../../../../cognition/turn_flow";
 import { buildLumiRuntimeCapabilityContext } from "../../../../cognition/capability_context";
 import { formatClientSelfPromptForTurn } from "../../../../client/self_model";
-import { buildLumiOperatingKernelPrompt } from "../../../../cognition/operating_kernel";
 import { buildResponseLanguageInstruction } from "../../../../utils/language";
 import { getUserPreferredLLMConfig } from "../../../../llm/user_preferences";
 import { resolveModelRequestInputBudget } from "../../../../llm/request_context_budget";
@@ -142,8 +140,6 @@ export async function prepareMessagingExecution(context: MessagingTurnContext) {
 
   context.systemPrompt += `\n\n${context.turnDispatch.promptOverlay}`;
   context.systemPrompt += `\n\n${context.turnFlow.promptOverlay}`;
-  context.systemPrompt += `\n\n${buildInteractionModeOverlay(context.turnFlow)}`;
-  context.systemPrompt += `\n\n${context.executionDecision.promptOverlay}`;
   if (context.isIdentityBound) {
     context.systemPrompt += `\n\n${buildLumiRuntimeCapabilityContext({
       userId: context.effectiveUserId,
@@ -153,13 +149,8 @@ export async function prepareMessagingExecution(context: MessagingTurnContext) {
       domain: context.domain,
       orgId: context.orgId,
     })}`;
-    context.systemPrompt += `\n\n${context.capabilitySelection.promptOverlay}`;
-    if (desktopExecutionPolicy.promptOverlay) {
-      context.systemPrompt += `\n\n${desktopExecutionPolicy.promptOverlay}`;
-    }
     context.systemPrompt += `\n\n${formatClientSelfPromptForTurn(context.effectiveUserId, context.routingText, { domain: context.domain, orgId: context.orgId })}`;
   }
-  context.systemPrompt += `\n\n${buildLumiOperatingKernelPrompt({ channel: 'chat', flow: context.turnFlow })}`;
   context.systemPrompt += '\n\nRemote continuity rule: prior assistant statements about installed tool counts, missing desktop access, or mode availability are conversational history, not runtime evidence. Use the current capability map, client state, scoped relay, and actual tool results as the source of truth.';
   context.systemPrompt += '\nRemote embodiment rule: WeChat, Feishu, and WeCom are transport channels into the same Lumi runtime. Do not claim that a remote channel inherently cannot reach the desktop. A no-client result for one data scope proves only that the scoped device route did not match; report that exact fact and check the personal/work scope before inferring that the desktop client is offline.';
   context.systemPrompt += '\nRemote memory rule: authenticated personal remote chat participates in the same personal memory system. Organization turns remain organization-scoped. Do not ask the user to repeat an explicit relationship or trust statement merely to make it memorable, and do not claim a memory was stored unless the memory pipeline accepted it.';

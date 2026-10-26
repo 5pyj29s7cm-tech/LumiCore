@@ -350,7 +350,14 @@ describe('normalized desktop intent priority', () => {
    });
   });
 
+  it.each([['打开社媒运营', 'business', 'open_business'], ['打开电商运营', 'business-ecommerce', 'open_ecommerce_workspace'],
+    ['打开财务', 'business-finance', 'open_finance_workspace'], ['打开任务与归档', 'business-archive', 'open_business_archive']])('opens each direct business destination through its registered metadata: %s', (text, target, clientAction) => {
+    expect(normalizeActionIntent(text)).toMatchObject({ kind: 'client_navigation', target, clientAction });
+  });
   it('derives native navigation from the registered client surface map', () => {
+    expect(normalizeActionIntent('进入灵息之境')).toMatchObject({
+      kind: 'client_navigation', target: 'nexus', clientAction: 'open_nexus',
+    });
     expect(normalizeActionIntent('open personalization')).toMatchObject({
       kind: 'client_navigation',
       target: 'personalization',
@@ -642,5 +649,110 @@ describe('normalized desktop intent priority', () => {
       sideEffectClass: 'none',
       relation: 'correction',
    });
+  });
+});
+
+describe('instructions are not outbound message commands', () => {
+  it.each(["如果共同验收丙.docx在其他目录，我不知道完整路径怎么找，也不知道怎么把文件发给你。请教我具体怎么操作，这一步先给操作说明。", '给我操作说明。', '我不知道怎么把文件发给你。'])('does not invent an external recipient from explanation wording: %s', text => {
+    expect(normalizeActionIntent(text)).toMatchObject({ kind: 'none', sideEffectClass: 'none' });
+  });
+  it('still recognizes an actual send using the same words as a real payload', () => {
+    expect(normalizeActionIntent('给张三发送操作说明，下午三点开始。')).toMatchObject({ kind: 'messaging_send', sideEffectClass: 'external_commit' });
+    expect(normalizeActionIntent('给张三说下午三点开会。')).toMatchObject({ kind: 'messaging_send', sideEffectClass: 'external_commit' });
+  });
+});
+
+describe('message how-to scope keeps independent commands', () => {
+  it.each(['我不知道怎么给张三发送文件。请教我。', '请教我如何给张三发消息。', 'I do not know how to send a message to Bob.'])('does not execute an embedded message example: %s', text => {
+    expect(normalizeActionIntent(text)).not.toMatchObject({ kind: 'messaging_send' });
+  });
+  it('still sends an independent imperative after a how-to clause', () => {
+    expect(normalizeActionIntent('教我如何发送文件，然后给张三发送操作说明。')).toMatchObject({ kind: 'messaging_send', target: '张三', payload: '操作说明' });
+  });
+});
+
+
+describe('same-turn corrected document read intent', () => {
+ it.each(['只读', '只补读', '补读', '读取'])('binds %s这份 to the one explicitly corrected filename in this turn', verb => {
+  const text = '第二份文件名写错了，实际是桌面的“corrected-note.docx”。请' + verb + '这份，把完整正文发到当前聊天，上一份不需要再读。';
+  expect(normalizeActionIntent(text)).toMatchObject({ kind: 'desktop_operation', operation: 'read', sideEffectClass: 'none', target: 'corrected-note.docx', rule: 'explicit-local-artifact-read' });
+ });
+ it.each(['请只读 D:/case-source/source.docx。', '请只补读 D:/case-source/source.docx。'])('keeps the same aliases on a directly named source: %s', text => {
+  expect(normalizeActionIntent(text)).toMatchObject({ operation: 'read', target: 'D:/case-source/source.docx', rule: 'explicit-local-artifact-read' });
+ });
+ it.each([
+  '实际是桌面的“corrected-note.docx”。上一份不需要再读。',
+  '“corrected-note.docx”的只读模式是什么意思？',
+  '文件正文为“实际是桌面的corrected-note.docx。请只补读这份”。',
+  '例如，实际是桌面的“corrected-note.docx”。请只补读这份。',
+  '请只补读这份。',
+ ])('does not bind a read without both a direct affirmative command and a current explicit target: %s', text => {
+  expect(normalizeActionIntent(text).rule).not.toBe('explicit-local-artifact-read');
+ });
+ it('preserves an affirmative write despite quoted read words and a later read-only switch', () => {
+  expect(normalizeActionIntent('请创建 D:/case-source/new-note.txt，内容为“只补读这份”。然后把文件设为只读。')).toMatchObject({ operation: 'create', sideEffectClass: 'local_write', target: 'D:/case-source/new-note.txt' });
+ });
+});
+
+
+describe('client navigation binds its own surface operand', () => {
+  it.each([
+    "请用系统浏览器打开人民法院在线服务网 https://zxfw.court.gov.cn/ ，打开后停在首页或登录页面，告诉我实际打开的结果。只打开入口，不登录、不填写或提交案件。",
+    '请用系统浏览器打开公开文档 https://example.org/ ，打开后停在首页或登录页面。只打开入口。',
+    '请用浏览器打开 https://docs.example.org/ ，打开后显示设置页面，不登录。',
+    '请用系统浏览器打开 https://service.example.net/ ，进入后停在个人主页。',
+    '请打开 https://example.org/ ，返回后停在主界面，不操作其他内容。',
+    '请用Chrome打开 https://example.net/ 的设置页面。',
+    'Open the home page of https://example.org/ in the system browser.',
+    'Show the settings page of https://example.net/ in Chrome.',
+  ])('does not reinterpret a browser page or a post-open condition as a Lumi surface: %s', text => {
+    expect(normalizeActionIntent(text).kind).not.toBe('client_navigation');
+  });
+
+  it.each([
+    '不要打开 Lumi 首页。',
+    '原文写着“打开 Lumi 首页”。请只解释这句话。',
+    '假设打开 Lumi 设置页面，只解释这个例子。',
+    'The source says "open settings". Explain the quotation only.',
+  ])('does not authorize navigation from a negated, quoted, or hypothetical command: %s', text => {
+    expect(normalizeActionIntent(text).kind).not.toBe('client_navigation');
+  });
+
+  it.each([
+    ['请打开 Lumi 首页。', 'focus_home'],
+    ['返回 Lumi 个人主页。', 'focus_home'],
+    ['请打开 Lumi 设置页面。', 'open_settings'],
+    ['打开“Lumi 首页”。', 'focus_home'],
+    ['Please open the Lumi home page.', 'focus_home'],
+    ['Open settings.', 'open_settings'],
+  ])('retains direct client navigation to the registered surface: %s', (text, action) => {
+    expect(normalizeActionIntent(text)).toMatchObject({kind: 'client_navigation', clientAction: action});
+  });
+});
+
+
+describe('local desktop navigation binds an explicit application or location operand', () => {
+  it.each([
+    ["请用系统浏览器打开人民法院在线服务网 https://zxfw.court.gov.cn/ ，打开后停在首页或登录页面，告诉我实际打开的结果。只打开入口，不登录、不填写或提交案件。", 'https://zxfw.court.gov.cn/'],
+    ['请用系统浏览器打开 https://example.org/ ，打开后停在首页。', 'https://example.org/'],
+    ['请使用Chrome打开 https://docs.example.org/ ，启动之后显示当前窗口。', 'https://docs.example.org/'],
+    ['Use the system browser to open https://example.org/. After opening, stay on the homepage.', 'https://example.org/'],
+    ['使用桌面工具打开记事本。打开后读取当前窗口。', '记事本'],
+    ['请打开 Windows 计算器。打开后停在它的主窗口。', 'Windows 计算器'],
+    ['请打开“后勤助手”。', '后勤助手'],
+    ['打开时钟。', '时钟'],
+    ['请打开记事本但不要打开 https://example.org/。', '记事本'],
+    ['请打开记事本，但不要打开 https://example.org/。', '记事本'],
+  ])('retains the real first application/location rather than a later condition: %s', (text, target) => {
+    expect(normalizeActionIntent(text)).toMatchObject({kind: 'desktop_operation', operation: 'navigate', target});
+  });
+  it.each([
+    '打开后停在首页。',
+    '启动之后显示窗口。',
+    '运行前先检查环境。',
+    '原文写着“请用系统浏览器打开 https://example.org/”。请只解释原文。',
+    '假设使用Chrome打开 https://example.org/，请解释这个例子。',
+  ])('does not turn a dependent time clause, quotation, or example into an application target: %s', text => {
+    expect(normalizeActionIntent(text).kind).not.toBe('desktop_operation');
   });
 });

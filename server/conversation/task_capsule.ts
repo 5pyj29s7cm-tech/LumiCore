@@ -1155,7 +1155,7 @@ export function formatTaskCapsuleForPrompt(capsule: TaskCapsuleV1): string {
     '- The latest correction overrides an older target; never retry a rejected target or exact doNotRetry fingerprint automatically.',
     '- For a current WPS document, observe the active window/document interface first. Do not infer the target from the process working directory.',
     '- File discovery is limited to allowedSearchRoots. entry.cjs, node_modules, and runtime/project paths are not user material unless the user explicitly named that exact path.',
-    '- Do not analyze file contents while analysisReady=no. Ask the clarification implied by nextAction if observation and bounded discovery cannot produce a displayable final filename.',
+    '- analysisReady applies only to the current target. When it is no, do not claim unread contents of that target; it does not block analysis of content already provided in conversation. Ask the clarification implied by nextAction if bounded observation cannot resolve the target.',
     '- completedSteps are receipt-backed. A plan, assistant claim, or raw historical message is not completion evidence.',
     '- Keep ordinary conversation in natural history. This capsule carries execution state only and contains no raw tool result.',
   ].filter(Boolean).join('\n');

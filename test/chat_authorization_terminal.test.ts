@@ -419,3 +419,27 @@ it('admits both queued chat turns before a later transport without an outer sour
   expect(order).toEqual(['chat','chat','later voice']);
   expect(h.errors).toEqual([]);
 },15000);
+
+
+it.each(['unqualified-abort', 'model-deadline'] as const)('does not turn an %s failure into a user cancellation at the real socket terminal', async kind => {
+  const h = await openChat(false);
+  const base = fixture.model.getMockImplementation()!;
+  fixture.model.mockImplementation(async (...args: any[]) => {
+    if (args[2]?.source === 'chat') {
+      if (kind === 'model-deadline') {
+        const { ToolLoopModelBudgetError } = await import('../server/llm/tool_loop/model_budget');
+        throw new ToolLoopModelBudgetError(120000);
+      }
+      throw new DOMException('An isolated network request was aborted', 'AbortError');
+    }
+    return base(...args);
+  });
+  await h.send(); await h.finished; await h.drain();
+  expect(h.errors).toEqual([]);
+  const terminal = h.emitted.filter(([event]) => event === 'agent:response').map(([, payload]) => payload);
+  expect(terminal).toHaveLength(1);
+  expect(terminal[0]).toMatchObject({ blocked: true, reason: kind === 'model-deadline' ? 'chat_model_timeout' : 'chat_execution_failed' });
+  expect(terminal[0].text).not.toMatch(/按你的要求|已停止当前任务|新的输入/u);
+  if (kind === 'model-deadline') expect(terminal[0].text).toContain('超时');
+  expect(getChatExecution(h.scope, h.requestId)).toMatchObject({ terminal: true, status: 'failed' });
+});

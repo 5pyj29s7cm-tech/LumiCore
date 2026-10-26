@@ -4,7 +4,6 @@ import type { ToolPolicy } from '../personality/types';
 import type { ToolRegistry } from '../tools/registry';
 import { buildOperationModeToolPolicy } from './operation_modes';
 import { buildClientDiagnosticPlan } from './client_diagnostic_result';
-import { buildUnifiedLegalEntryPrompt } from './legal_entry';
 import { skillAuthoringTools } from '../skills/authoring_intent';
 import {
   formatToolRouteForPrompt,
@@ -700,15 +699,6 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
       : '',
     input.isSanctuary ? 'This guest session is in a restricted boundary; tools are disabled.' : '',
     effectiveToolRoute ? formatToolRouteForPrompt(effectiveToolRoute) : '',
-    buildUnifiedLegalEntryPrompt({
-      text: input.flow.routeText || input.text,
-      domain: input.flow.domain,
-      orgId: input.flow.orgId,
-      channel: input.flow.channel,
-      source: input.flow.source,
-      routeCategories: effectiveToolRoute?.categories,
-      toolNames: effectiveToolRoute?.toolNames,
-    }),
     !effectiveToolRoute && allowToolUse && !input.flow.clientActionOnlyTurn && !input.flow.selfRepairTurn
       ? 'No narrow tool route was selected. Use the base policy conservatively and ask one clarification if the work surface is unclear.'
       : '',

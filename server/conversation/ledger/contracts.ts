@@ -89,12 +89,12 @@ export type ConversationActionTaskFinalizationOutcome =
 /**
  * Request-scoped terminal adjudication supplied by a foreground transport.
  *
- * This is deliberately narrower than task finalization: a blocked request
+ * Completed is accepted only from a finalized observation-only response. A blocked request
  * leaves the durable task resumable, while preventing a successful receipt
  * from an earlier step in the same request from being mistaken for completion.
  */
 export interface ConversationActionTerminalDisposition {
-  outcome: 'blocked' | 'cancelled';
+  outcome: 'blocked' | 'cancelled' | 'completed';
   taskId: string;
   requestId: string;
   reason: string;

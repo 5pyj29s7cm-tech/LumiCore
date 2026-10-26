@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
-  ArrowUpRight,
   Building2,
   ChevronDown,
   CircleAlert,
@@ -131,7 +130,6 @@ export function CommandCenterPanel({
   t,
   view,
   onViewChange,
-  onOpenNexus,
   runtimeStatusOverride,
   /**
    * Render only the animated core field.  The command-center chat uses this
@@ -143,7 +141,6 @@ export function CommandCenterPanel({
   t?: any;
   view: CommandCenterView;
   onViewChange: (view: CommandCenterView) => void;
-  onOpenNexus?: () => void;
   runtimeStatusOverride?: {
     status: StructuredRuntimeStatus | null;
     loading: boolean;
@@ -312,7 +309,7 @@ export function CommandCenterPanel({
               }}
             />
             {!backgroundOnly && <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2">
-              <button type="button" onClick={() => onOpenNexus ? onOpenNexus() : onViewChange('core')} className="flex h-10 items-center gap-2 rounded-2xl border border-violet-300/15 bg-[#080d17]/78 px-3.5 text-[10px] font-bold text-violet-100/70 shadow-2xl backdrop-blur-2xl hover:bg-violet-400/[0.12] hover:text-violet-50"><Cpu size={13} />{copy.core}</button>
+              <button type="button" onClick={() => onViewChange('core')} className="flex h-10 items-center gap-2 rounded-2xl border border-violet-300/15 bg-[#080d17]/78 px-3.5 text-[10px] font-bold text-violet-100/70 shadow-2xl backdrop-blur-2xl hover:bg-violet-400/[0.12] hover:text-violet-50"><Cpu size={13} />{copy.core}</button>
               <button type="button" onClick={() => { void refresh(); void refreshRuntime(); }} className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/[0.08] bg-[#080d17]/78 text-white/35 shadow-2xl backdrop-blur-2xl hover:bg-white/[0.07] hover:text-white/70" title={copy.refresh}><RefreshCw size={13} className={loading ? 'animate-spin' : ''} /></button>
             </div>}
           </div>
@@ -320,11 +317,6 @@ export function CommandCenterPanel({
 
         {view === 'core' && (
           <div className="space-y-4">
-            {onOpenNexus && (
-              <button type="button" onClick={onOpenNexus} className="flex w-full items-center justify-between rounded-2xl border border-violet-300/18 bg-gradient-to-r from-violet-400/[0.10] to-cyan-400/[0.08] px-4 py-3 text-left hover:border-violet-200/30">
-                <span><span className="block text-sm font-bold text-white/85">{copy.openCore}</span><span className="mt-1 block text-[10px] text-white/35">LumiCore · local runtime</span></span><ArrowUpRight size={16} className="text-violet-200" />
-              </button>
-            )}
             <RuntimeEvidencePanel status={status} loading={runtimeLoading} error={runtimeError} />
             <LumiScenePanel scene={scene} loading={sceneLoading} error={sceneError} />
             {!runtimeLoading && !status && <div className="flex items-center gap-2 rounded-2xl border border-amber-300/15 bg-amber-400/[0.05] p-4 text-xs text-amber-100/65"><CircleAlert size={14} />{copy.runtimeUnavailable}</div>}

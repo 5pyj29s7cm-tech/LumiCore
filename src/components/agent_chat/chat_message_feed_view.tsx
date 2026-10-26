@@ -171,7 +171,7 @@ export function renderChatMessageFeed({ scrollRef, isOfficeCommandCenter, messag
                     }}
                   >
                     <div className={`markdown-body chat-message-markdown select-text ${msg.type === 'agent' ? 'chat-message-markdown-agent' : 'chat-message-markdown-user'}`}>
-                      <ChatMessageMarkdown conversationId={msg.conversationId || attachmentConversationIdRef.current} onPreview={setPreviewFile}>
+                      <ChatMessageMarkdown conversationId={msg.conversationId || attachmentConversationIdRef.current} onPreview={file => void openChatFile({ fileName: file.fileName, path: file.path, openUrl: file.url, saveUrl: file.url })}>
                         {getCustomerDisplayText(msg, isZh)}
                       </ChatMessageMarkdown>
                     </div>

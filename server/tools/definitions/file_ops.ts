@@ -126,6 +126,9 @@ async function readFileHandler(
   assertHostFilesystemAccess(context);
   const inputPath = requirePathArg(args, ['path', 'filePath', 'filepath', 'targetPath', 'target'], 'read_file');
   const targetPath = resolveSafePath(inputPath, context?.cwd);
+  if (/\.(?:docx?|docm|xlsx?|xlsm|pptx?|pptm|pdf)$/iu.test(targetPath)) {
+    throw new Error('read_file reads UTF-8 text only. Use read_docx, read_xlsx, read_pdf, or extract_document_text for this structured document.');
+  }
   try {
     const stat = fs.statSync(targetPath);
     if (stat.isDirectory()) {
@@ -358,7 +361,7 @@ async function readFilesBatchHandler(args: Record<string, any>, context?: HostFi
 export function registerFileOpsTools(registry: ToolRegistry): void {
   registry.register({
     name: 'read_file',
-    description: 'Read the contents of a file. Returns the file content as text.',
+    description: 'Read UTF-8 plain-text files. Office documents and PDF are binary formats; use read_docx, read_xlsx, read_pdf, or extract_document_text to obtain their readable content.',
     parameters: {
       type: 'object',
       properties: {

@@ -19,7 +19,7 @@ describe('socket guard-history delivery paths', () => {
     })).toEqual([]);
   });
 
-  it('quarantines legacy status/evidence reports in chat and voice history', () => {
+  it('preserves original chat reports while leaving the existing voice projection unchanged', () => {
     const reports = [
       [
         '状态：受阻。',
@@ -35,7 +35,7 @@ describe('socket guard-history delivery paths', () => {
 
     for (const report of reports) {
       const publicReply = [{ role: 'assistant', content: sanitizePublicExecutionText(report) }];
-      expect(normalizeChatHistoryRecord({ role: 'assistant', message: report }, { serverOwned: true })).toEqual(publicReply);
+      expect(normalizeChatHistoryRecord({ role: 'assistant', message: report }, { serverOwned: true })).toEqual([{ role: 'assistant', content: report }]);
       expect(normalizeVoiceHistoryRecord({ role: 'assistant', message: report })).toEqual(publicReply);
       expect(normalizeVoiceHistoryRecord({
         role: 'user',

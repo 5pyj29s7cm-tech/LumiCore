@@ -235,7 +235,8 @@ describe('single-core command center', () => {
     expect(chatPage).toContain('offset=${offset}');
     expect(chatPage).toContain('data-command-center-right-rail="true"');
     expect(chatPage).toContain('data-memory-avatar-switch');
-    expect(chatPage).toContain('data-lumi-core-switch');
+    expect(chatPage).not.toContain('data-lumi-core-switch');
+    expect(chatPage).not.toContain('data-business-workbench-switch');
     expect(chatPage).toContain('data-knowledge-base-switch');
     expect(chatPage).toContain('onContextMenu={(event) =>');
     expect(chatPage).toContain('deleteConversationFromHistory');
@@ -252,7 +253,7 @@ describe('single-core command center', () => {
     expect(chatPage).toContain('data-command-center-new-conversation');
     expect(chatPage).toContain('data-command-center-message-type');
     expect(chatPage).not.toContain('lumi-command-center-history-new');
-    expect(chatPage).toContain('command-center.inner-realm.4d8f2a1c09');
+    expect(chatPage).not.toContain('command-center.inner-realm.4d8f2a1c09');
     expect(chatPage).toContain('lumi-command-center-message-text');
     expect(chatPage).toContain('lumi-command-center-progress-text');
     expect(chatPage).toContain('data-command-center-integrated-identity');
@@ -305,7 +306,8 @@ describe('single-core command center', () => {
     expect(panel).not.toContain('className="custom-scrollbar absolute bottom-4 right-4 top-16 z-30');
     expect(panel).toContain('className="absolute bottom-4 left-1/2 z-30');
     expect(panel).not.toContain("grid-cols-[minmax(0,1fr)_260px]");
-    expect(panel).toContain("onOpenNexus ? onOpenNexus() : onViewChange('core')");
+    expect(panel).toContain("onClick={() => onViewChange('core')}");
+    expect(panel).not.toContain('onOpenNexus');
     expect(surfaces).toContain("'open_command_center'");
   });
 

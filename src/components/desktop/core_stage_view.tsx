@@ -15,9 +15,6 @@ export function renderDesktopCoreStage({ selectedPet, setPersonalizationSection,
   return (
 <div data-wallpaper-tool="personal-core" className="lumi-core-stage absolute inset-0 flex items-center justify-center z-[15] pointer-events-none">
         <motion.div
-          initial={{ scale: 0.8, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ duration: 2, ease: "easeOut" }}
           className="lumi-core-entity relative pointer-events-auto scale-[0.82] opacity-95 transition-all"
         >
           <div className="lumi-core-shell relative flex flex-col items-center">

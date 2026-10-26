@@ -1,22 +1,45 @@
 import type { ActionIntentAnalysis } from './normalized_action_intent';
-import { buildTaskTargetAnchorProjection, canonicalPathIdentity, outputDocumentInstruction, type AcceptedTaskTarget } from '../conversation/task_target_anchor';
-import { normalizeActionIntent } from './normalized_action_intent';
+import { buildTaskTargetAnchorProjection, canonicalPathIdentity, outputDocumentInstruction, sourceDocumentInstruction, type AcceptedTaskTarget } from '../conversation/task_target_anchor';
+import { hasAffirmativeArtifactMutationAction, normalizeActionIntent } from './normalized_action_intent';
 import path from 'node:path';
+import os from 'node:os';
+import { withoutLocationLiterals } from './location_literals';
+
+/** Resolve one named artifact only in an explicit absolute or standard user folder. */
+export function resolveExplicitUserArtifactPath(text: string, folderContext = ''): string {
+  if ((text.match(/\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/giu) || []).length !== 1) return '';
+  const target = buildTaskTargetAnchorProjection({ taskText: text }).target;
+  if (/^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(target.path)) return target.path;
+  // i18n-allow: standard user-directory input grammar; names and paths are operands.
+  const folderPattern = /桌面(?:上|中|里|内|下|的|(?=[，,\s“”"']|$))|\bdesktop\b|文档(?:目录|文件夹)|\bdocuments\b|下载(?:目录|文件夹)|\bdownloads\b/iu;
+  const folderText = withoutLocationLiterals(text).match(folderPattern)?.[0]
+    || withoutLocationLiterals(folderContext).match(folderPattern)?.[0] || '';
+  const folder = /桌面|desktop/iu.test(folderText) ? 'Desktop'
+    : /文档|documents/iu.test(folderText) ? 'Documents'
+      : /下载|downloads/iu.test(folderText) ? 'Downloads' : '';
+  return folder && target.object && !/[\\/]/u.test(target.object)
+    ? path.join(os.homedir(), folder, target.object) : '';
+}
 
 function mixedTaskOutputPath(text: string): string {
-  // A list of two requested outputs is not an input/output transformation.
-  // i18n-allow: explicit source-file read recognition.
-  if (!/(?:读取|读入|分析|\b(?:read|load|inspect)\b)[^。！？!?；;\n]{0,700}\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/iu.test(text)) return '';
+  const sourceText = sourceDocumentInstruction(text);
+  const hasReadSource = /(?:读取|读入|分析|\b(?:read|load|inspect)\b)[^。！？!?；;\n]{0,700}\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/iu.test(text);
+  // The existing destination grammar separates merge inputs from their result.
+  if (!hasReadSource && (!outputDocumentInstruction(text) || !hasAffirmativeArtifactMutationAction(text))) return '';
   const outputs: string[] = [];
   // Only an affirmative output clause with one filename can select a result.
   // i18n-allow: multilingual file-output clause and same-directory recognition.
   for (const clause of text.split(/[，,。！？!?；;\n]/u)) {
-    if (!/(?:生成|创建|写入|导出|另存|保存(?:到|为|成))|\b(?:create|write|export|save)\b/iu.test(clause)
-      || /(?:不要|别|禁止|不必|无需)|\b(?:do not|don't|never)\b/iu.test(clause)) continue; // i18n-allow: negated output recognition.
-    if ((clause.match(/\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/giu) || []).length !== 1) continue;
-    const absolute = buildTaskTargetAnchorProjection({ taskText: outputDocumentInstruction(clause) || clause }).target.path;
-    if (/^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(absolute)) { outputs.push(absolute); continue; }
-    if (!/(?:同目录|同一目录|同一文件夹)|\bsame\s+(?:directory|folder)\b/iu.test(clause)) continue; // i18n-allow: explicit output directory relation.
+    const destination = outputDocumentInstruction(clause);
+    if (destination ? !hasAffirmativeArtifactMutationAction(clause)
+      : !/(?:生成|创建|写入|导出|另存|保存(?:到|为|成))|\b(?:create|write|export|save)\b/iu.test(clause)) continue;
+    if (/(?:不要|别|禁止|不必|无需)|\b(?:do not|don't|never)\b/iu.test(clause)) continue;
+    const outputText = destination || clause;
+    if ((outputText.match(/\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/giu) || []).length !== 1) continue;
+    const folderContext = destination && /\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/iu.test(sourceText) ? sourceText : '';
+    const outputPath = resolveExplicitUserArtifactPath(outputText, folderContext);
+    if (outputPath) { outputs.push(outputPath); continue; }
+    if (!/(?:同目录|同一目录|同一文件夹)|\bsame\s+(?:directory|folder)\b/iu.test(clause)) continue;
     const filename = clause.match(/(?:^|\s|["'“])([^\s/\\:"'“”<>，,。；;]+\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json))(?=$|[\s"'”])/iu)?.[1];
     const source = buildTaskTargetAnchorProjection({ taskText: text.slice(0, text.indexOf(clause)) }).target.path;
     if (filename && source) {
@@ -24,7 +47,8 @@ function mixedTaskOutputPath(text: string): string {
       outputs.push(paths.join(paths.dirname(source), filename));
     }
   }
-  return outputs.length === 1 ? outputs[0] : '';
+  const unique = outputs.filter((output, index) => outputs.findIndex(other => canonicalPathIdentity(other) === canonicalPathIdentity(output)) === index);
+  return unique.length === 1 ? unique[0] : '';
 }
 
 const OUTPUT_TOOLS = new Set(['write_file', 'desktop_write_text_file', 'create_xlsx', 'modify_xlsx', 'create_docx', 'create_ppt', 'create_pdf']);
@@ -34,11 +58,12 @@ export function requestedSingleArtifact(text: string, analysis?: ActionIntentAna
   const fileCount = (text.match(/\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/giu) || []).length;
   const mixedOutput = fileCount > 1 ? mixedTaskOutputPath(text) : '';
   const intent = mixedOutput ? { operation: 'create', sideEffectClass: 'local_write', target: mixedOutput } : normalizeActionIntent(text, analysis);
-  if (intent.operation !== 'create' || intent.sideEffectClass !== 'local_write' || !/^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(intent.target)) return null;
+  const target = mixedOutput || (fileCount === 1 ? requestedArtifactSaveAsPath(text) || resolveExplicitUserArtifactPath(text) : '') || intent.target;
+  if (intent.operation !== 'create' || intent.sideEffectClass !== 'local_write' || !/^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(target)) return null;
   // Mixed source/output or multi-deliverable requests need their full plan;
   // do not reinterpret the first filename as the only requested output.
   if (!mixedOutput && fileCount !== 1) return null;
-  const extension = intent.target.match(/\.([a-z]+)$/iu)?.[1].toLowerCase();
+  const extension = target.match(/\.([a-z]+)$/iu)?.[1].toLowerCase();
   const tools: Record<string, [string, string]> = {
     xlsx: ['create_xlsx', 'read_xlsx'], docx: ['create_docx', 'read_docx'],
     pptx: ['create_ppt', 'extract_document_text'], pdf: ['create_pdf', 'read_pdf'],
@@ -46,7 +71,7 @@ export function requestedSingleArtifact(text: string, analysis?: ActionIntentAna
     csv: ['write_file', 'read_file'], json: ['write_file', 'read_file'],
   };
   const selected = extension && tools[extension];
-  return selected ? { path: intent.target, producer: selected[0], reader: selected[1] } : null;
+  return selected ? { path: target, producer: selected[0], reader: selected[1] } : null;
 }
 
 export function matchesRequestedArtifactOutput(text: string, outputPath: string, analysis?: ActionIntentAnalysis): boolean {
@@ -57,8 +82,7 @@ export function matchesRequestedArtifactOutput(text: string, outputPath: string,
 export function requestedArtifactSaveAsPath(text: string): string {
   const destination = outputDocumentInstruction(text);
   if (!destination) return '';
-  const target = buildTaskTargetAnchorProjection({ taskText: destination }).target.path;
-  return /^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(target) ? target : '';
+  return resolveExplicitUserArtifactPath(destination, sourceDocumentInstruction(text));
 }
 
 export function requestedArtifactFormatBlockReason(text: string, toolName: string, args: Record<string, unknown>, analysis?: ActionIntentAnalysis): string | null {
@@ -66,10 +90,10 @@ export function requestedArtifactFormatBlockReason(text: string, toolName: strin
   const producers = new Set(['write_file', 'desktop_write_text_file', 'create_xlsx', 'create_docx', 'create_ppt', 'create_pdf']);
   if (!artifact || !producers.has(toolName)) return null;
   if (toolName === artifact.producer || (artifact.producer === 'write_file' && toolName === 'desktop_write_text_file')) {
-    const actualOutput = ['create_xlsx', 'create_docx'].includes(toolName) ? args.outputPath
+    const actualOutput = ['create_xlsx', 'create_docx', 'create_pdf'].includes(toolName) ? args.outputPath
       : toolName === 'write_file' ? args.path || args.filePath
         : toolName === 'desktop_write_text_file' ? args.path : undefined;
-    if (['create_xlsx', 'create_docx', 'write_file', 'desktop_write_text_file'].includes(toolName)
+    if (['create_xlsx', 'create_docx', 'create_pdf', 'write_file', 'desktop_write_text_file'].includes(toolName)
       && (!actualOutput || canonicalPathIdentity(String(actualOutput)) !== canonicalPathIdentity(artifact.path))) {
       return `The output must use the exact file path requested in this turn: ${artifact.path}.`;
     }
@@ -129,7 +153,7 @@ export function preservedSourceWriteBlockReason(input: {
       ? input.arguments.path
       : input.toolName === 'create_ppt'
         ? input.arguments.filename
-        : ['create_xlsx', 'modify_xlsx', 'create_docx'].includes(input.toolName)
+        : ['create_xlsx', 'modify_xlsx', 'create_docx', 'create_pdf'].includes(input.toolName)
           ? input.arguments.outputPath
           : undefined;
   const target = String(targetValue || '');

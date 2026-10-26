@@ -1,8 +1,8 @@
 import { verifiedSavedArtifactNames } from '../../cognition/user_output_protection';
-import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../../regions/messages/execution_evidence_messages';
+
 import { parseStoredArray } from '../../tools/receipt_payload';
 import { isGuardGeneratedConversationRecord, isGuardGeneratedAssistantText, projectGuardedAssistantText } from "../guard_history";
-import { buildCompactToolEvidenceNote, isUnverifiedExecutionAssistantRecord } from "../summary_grounding";
+import { buildCompactToolEvidenceNote } from "../summary_grounding";
 import { buildHistoricalFileObservations } from "../file_observation_history";
 import { listConversationReceiptHistory } from "../history_repository";
 import { estimateTokenCount } from "../../llm/providers";
@@ -43,7 +43,7 @@ export function isPromptEligibleMessage(m: MessageRecord): boolean {
 }
 
 
-export function compactRecordForPrompt(m: MessageRecord): MessageRecord {
+export function compactRecordForPrompt(m: MessageRecord, options: { preserveText?: boolean } = {}): MessageRecord {
   const legacyCombinedGuardResponse = m.role === 'user'
     && Boolean(String(m.response || '').trim())
     && (
@@ -53,18 +53,11 @@ export function compactRecordForPrompt(m: MessageRecord): MessageRecord {
   const [guardedDialogue, guardedArtifacts] = guardedReplyForPrompt(m);
   const guardedEvidence = [guardedDialogue, guardedArtifacts].filter(Boolean).join('\n');
   const evidenceNote = buildCompactToolEvidenceNote(m.toolCalls);
-  // Removing an ungrounded assistant reply while retaining its user question
-  // makes an already answered turn look pending to the next model. Preserve
-  // the reply boundary without replaying its unsupported outcome claims.
-  const suppressedReply = m.role === 'assistant'
-    && !evidenceNote
-    && isUnverifiedExecutionAssistantRecord(m);
-  const compactedMessage = guardedEvidence || (suppressedReply
-    ? CN_EXECUTION_EVIDENCE_MESSAGES.unsupportedRealWorldClaim
-    : compactPromptText(m.message || '', CONTEXT_MESSAGE_CHAR_LIMIT));
+  const compactedMessage = guardedEvidence || (options.preserveText
+    ? (m.message || '') : compactPromptText(m.message || '', CONTEXT_MESSAGE_CHAR_LIMIT));
   const compactedResponse = legacyCombinedGuardResponse || guardedEvidence
     ? ''
-    : compactPromptText(m.response || '', CONTEXT_RESPONSE_CHAR_LIMIT);
+    : options.preserveText ? (m.response || '') : compactPromptText(m.response || '', CONTEXT_RESPONSE_CHAR_LIMIT);
   return {
     ...m,
     message: evidenceNote && m.role === 'assistant' && !guardedEvidence
@@ -104,7 +97,7 @@ export function getMessagesByTokenBudget(
     ? messagesThroughExternalRequest(messages, throughExternalMessageId) : messages;
   const all = visibleMessages
     .filter(isPromptEligibleMessage)
-    .map(compactRecordForPrompt);
+    .map(record => compactRecordForPrompt(record));
   if (all.length <= keepRecent) return all;
 
   const keep = all.slice(-keepRecent); // always keep most recent
@@ -136,17 +129,20 @@ export function getMessagesThroughExternalMessage(
   conversationId: string,
   externalMessageId: string,
   limit = 1000,
+  acceptedUserMessageId = '',
 ): MessageRecord[] {
-  const messages = getMessages(conversationId, 1000);
-  return messagesThroughExternalRequest(messages, externalMessageId).slice(-limit);
+  const messages = getMessages(conversationId, limit === Infinity ? Infinity : 1000);
+  return messagesThroughExternalRequest(messages, externalMessageId, acceptedUserMessageId).slice(-limit);
 }
 
 /** A request cutoff belongs to its accepted user row, including legacy empty identities. */
-function messagesThroughExternalRequest(messages: MessageRecord[], externalMessageId: string): MessageRecord[] {
+function messagesThroughExternalRequest(messages: MessageRecord[], externalMessageId: string, acceptedUserMessageId = ''): MessageRecord[] {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === 'user' && messages[index].externalMessageId === externalMessageId) {
+    if (messages[index].role === 'user' && (acceptedUserMessageId
+      ? messages[index].id === acceptedUserMessageId
+      : messages[index].externalMessageId === externalMessageId)) {
       return messages.slice(0, index + 1);
     }
   }
-  return messages;
+  return acceptedUserMessageId ? [] : messages;
 }

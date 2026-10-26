@@ -145,11 +145,29 @@ export const CLIENT_SETTINGS_SECTIONS: readonly ClientSettingsSectionDefinition[
 
 export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[] = [
   {
-    id: 'business', label: 'Business workspace', target: 'business', actions: ['open_business'],
-    useWhen: 'Open commerce operations, finance workflows, business subjects and archived results in the main Lumi client.',
+    id: 'business', label: 'Social media workspace', target: 'business', actions: ['open_business'],
+    useWhen: 'Open Social media directly from the personal desktop for content creation, brand materials and digital people.',
     launcherIds: ['business'],
     // i18n-allow: Spoken and typed navigation aliases, not rendered copy.
-    navigationAliases: ['经营工作台', '电商运营', '财务管理', 'business workspace'],
+    navigationAliases: ['经营工作台', '社媒运营', 'social media', 'business workspace'],
+  },
+  {
+    id: 'business-ecommerce', label: 'Commerce workspace', target: 'business-ecommerce', actions: ['open_ecommerce_workspace'],
+    useWhen: 'Open Commerce directly from the personal desktop for store operations, products, sales and customer service.',
+    launcherIds: ['business-ecommerce'],
+    navigationAliases: ['电商运营', 'commerce workspace'],
+  },
+  {
+    id: 'business-finance', label: 'Finance workspace', target: 'business-finance', actions: ['open_finance_workspace'],
+    useWhen: 'Open Finance directly from the personal desktop for invoices, accounting, tax preparation and financial reports.',
+    launcherIds: ['business-finance'],
+    navigationAliases: ['财务管理', '财务', 'finance workspace'],
+  },
+  {
+    id: 'business-archive', label: 'Business tasks and archive', target: 'business-archive', actions: ['open_business_archive'],
+    useWhen: 'Open business tasks and archived deliveries directly from the personal desktop.',
+    launcherIds: ['business-archive'],
+    navigationAliases: ['任务与归档', 'business archive'],
   },
   {
     id: 'home',
@@ -172,7 +190,8 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     label: 'Nexus / central world',
     target: 'nexus',
     actions: ['open_nexus'],
-    useWhen: 'Open the full central-world view of the Lumi client.',
+    navigationAliases: ['灵息之境', 'breath realm'],
+    useWhen: 'Enter Breath Realm / 灵息之境 by scrolling up on the personal sphere or clear home background, and return by scrolling down; or ask Lumi to enter it; open Skill Hall from its left control area.',
     closeAfterUse: false,
     launcherIds: [],
   },
@@ -194,7 +213,7 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
       open_command_center: 'office',
       open_chat: 'office',
     },
-    useWhen: "Converse with Lumi, inspect persistent tasks and receipts, and enter the LumiCore workspace. The right-side menu, top to bottom, is: Memory Territory / 记忆领地 (purple castle; private digital people and their conversations), Breath Realm / 灵息之境 / LumiCore (violet CPU; core and system view), Knowledge Base / 知识库 (cyan folder; import, read and search workspace materials), AI Creation / AI 创作 (amber sparkles; image, video and music creation). The calendar/planner is a separate button in the chat header; the right-side icons are named destinations, not generic calendar/processing/files/automation categories.",
+    useWhen: "Converse with Lumi and inspect persistent tasks and receipts. The right-side menu, top to bottom, is: Memory Territory / 记忆领地 (purple castle; private digital people and their conversations), Knowledge Base / 知识库 (cyan folder; import, read and search workspace materials), AI Creation / AI 创作 (amber sparkles; image, video and music creation). Enter Breath Realm / 灵息之境 by scrolling up on the personal sphere or clear home background or by voice; Skill Hall is inside Breath Realm. The calendar/planner is a separate button in the chat header. These are named destinations, not generic calendar/processing/files/automation categories.",
     // The command center is a permanent top-level navigation destination,
     // not a duplicated desktop/app-launcher icon.
     launcherIds: [],
@@ -274,7 +293,7 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     label: 'Skill Hall',
     target: 'skills',
     actions: ['open_skills'],
-    useWhen: 'Discover, install, enable, repair, and remove skills or MCP extensions, and inspect their health.',
+    useWhen: 'Open Skill Hall from Breath Realm to discover, install, enable, repair, and remove skills or MCP extensions, and inspect their health.',
     launcherIds: ['skills'],
   },
   {

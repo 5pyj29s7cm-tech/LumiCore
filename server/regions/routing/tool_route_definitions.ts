@@ -31,7 +31,7 @@ export const ROUTES: RouteDefinition[] = [
       /法律|律师|律所|案件|案号|案由|类案|法条|法源|现行有效|法律版本|司法解释版本|法院|裁判文书|人民法院案例库|法信|法蝉|企查查|天眼查|北大法宝|法睿|通义法睿|法律数据库|权威库|国家企业信用|委托书|代理词|证据目录|起诉状|要素式诉状|答辩状|质证|文书包|正式文书|交付包|引用核验|核验报告|校验报告|来源登记|浏览器工作区|网页登录工作区|立案|网上立案|立案网|法院在线服务|外部检索|法律意见书|合同审查|合同模板|标书|投标书|财产线索|被执行人|股权穿透|诉讼|仲裁|争议焦点|庭审笔录|庭审提纲|三段论|大前提|小前提|涵摄|法律会议|律师会议|办案会议|案件会议|会议纪要.*案件|沟通记录.*案件|法律分析|应对策略|焦点提炼|案件文件夹|材料文件夹|文件夹.*代理词|文书链接|发送链接|下载文书|提取文书|提取正文|链接.*下载|链接.*提取|材料入库|导入知识库|知识库导入|入案|自动入案|远程消息.*案件|Lumi bot.*案件|机器人.*案件|外部数据源|数据源接入|开庭通知|法院通知|送达通知|短信链接|通知链接|送达链接/u,
       /\b(legal|lawyer|lawsuit|court|judgment|casework|contract\s+review|power\s+of\s+attorney|complaint|defense|pleading|filing|bid|tender|qichacha|tianyancha|pkulaw|pku\s*law|beida\s*fabo|farui|tongyi\s*farui|legal\s+database|authority\s+database|external\s+authority|alpha|fachan|notice\s+link|court\s+notice|document\s+link|extract\s+document|delivery\s+package|citation\s+verification|source\s+register|browser\s+workspace)\b/i,
     ],
-    exact: ['mcp_legal-casework_legal_case_folder_workflow'],
+    exact: ['mcp_legal-casework_legal_case_folder_workflow', 'web_search', 'url_fetch'],
     prefixes: ['mcp_legal-casework_'],
     namePatterns: [/^legal_/, /^web_login_/, /^url_fetch_logged_in$/, /^mcp_playwright_/],
     groups: ['legal', 'files', 'documents', 'web', 'authenticatedWeb'],

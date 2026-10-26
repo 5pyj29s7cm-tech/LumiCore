@@ -381,16 +381,17 @@ export function useDesktopSurfaceState({
   }, [dismissUtilitySurfaces, isTauri, setActiveTab, windowCommand]);
 
   const inferSurfaceReturnTarget = useCallback((): SurfaceReturnTarget => {
+    if (viewMode === 'world') return 'nexus';
     if (chatOpen || activeTab === 'command-center') return 'command-center';
     // A utility surface can open another utility surface (for example the
     // knowledge base can open Memory Avatar).  At that point the chat flag is
     // deliberately false, so infer from the origin already recorded rather
     // than treating the second hop as a fresh desktop launch.
-    if (knowledgeOpen || memoryLabOpen || sanctuaryOpen) {
+    if (knowledgeOpen || memoryLabOpen || sanctuaryOpen || activeTab === 'skills' || activeTab === 'business' || activeTab.startsWith('business-')) {
       return surfaceReturnTargetRef.current;
     }
     return 'home';
-  }, [activeTab, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen]);
+  }, [activeTab, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, viewMode]);
 
   const restoreSurfaceReturnTarget = useCallback(() => {
     const target = surfaceReturnTargetRef.current;
@@ -399,6 +400,7 @@ export function useDesktopSurfaceState({
       openCommandCenter('office');
       return;
     }
+    setViewMode(target === 'nexus' ? 'world' : 'personal');
     setActiveTab('home');
   }, [openCommandCenter, setActiveTab]);
 

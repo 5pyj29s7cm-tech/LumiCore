@@ -1,3 +1,4 @@
+import { affirmativeActionInstructionClauses } from './action_instruction_clauses';
 import { CN_ACTION_CONTRACT_COPY } from '../regions/messages/action_contract_copy';
 import type { ToolExecutionRecord } from '../tools/types';
 import { isCanonicalToolExecutionRecord } from '../tools/execution_engine';
@@ -7,7 +8,7 @@ import { parseReceiptObject, toolRecordTerminalPayload, toolRecordTerminalText }
 import { formatRuntimeCleanupReceipt } from "../regions/messages/runtime_cleanup_messages";
 import { CN_VOICE_FAST_PATH_MESSAGES, CN_VOICE_QUICK_WORK_MESSAGES, formatCnMediaGenerationFailure } from "../regions/messages/voice_fast_path_messages";
 import { isExplicitRuntimeCleanupProposal } from './pending_assistant_offer';
-import { buildActionContract, claimsCurrentAppSaveCompletion, documentReadMatchesRequestedTarget, extractExplicitArtifactTextRequirements, extractSimpleDesktopOpenTarget, hasAuthenticatedWebResultEvidence, browserSessionObservation, hasCoreActionEvidence, hasCurrentAppSaveEvidence, hasCurrentAppUiMutationEvidence, hasMediaPlaybackEvidence, hasMediaPauseEvidence, hasRequestedDesktopOpenEvidence, hasVisibleAutoCadExecutionEvidence, requiresArtifactPostWriteReadback, requiresCurrentAppUiMutation, requiresAuthenticatedWebResult, requiresVisibleAutoCadExecution, summarizeActionContractBlocker } from './action_contract';
+import { buildActionContract, claimsCurrentAppSaveCompletion, documentReadMatchesRequestedTarget, extractExplicitArtifactTextRequirements, extractSimpleDesktopOpenTarget, hasAuthenticatedWebResultEvidence, browserSessionObservation, hasCoreActionEvidence, hasCurrentAppSaveEvidence, hasCurrentAppUiMutationEvidence, hasMediaPlaybackEvidence, hasMediaPauseEvidence, hasVisibleAutoCadExecutionEvidence, requiresArtifactPostWriteReadback, requiresCurrentAppUiMutation, requiresAuthenticatedWebResult, requiresVisibleAutoCadExecution, summarizeActionContractBlocker } from './action_contract';
 import { formatCnMessagingContractBlocker } from "../regions/messages/messaging_messages";
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from "../regions/messages/execution_evidence_messages";
 import type { LumiClientMode } from '../../shared/operation_modes';
@@ -21,6 +22,7 @@ import { artifactRecordMatchesTurn, artifactPathFromRecord, resolveArtifactDeliv
 import { withoutLocationLiterals } from './location_literals';
 import { buildTaskTargetAnchorProjection, isVerifiedProducedDocumentTarget } from '../conversation/task_target_anchor';
 import { missingTaskInputResult } from './missing_task_input';
+import { FILE_NAME_RE } from '../conversation/targets/recognition';
 import { getArtifactTaskProgress } from './action_contract';
 import { requestedArtifactInstructions, formatArtifactProgress, artifactProgressFeedback } from './artifact_progress';
 import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
@@ -30,14 +32,14 @@ import { formatGroundedKnowledgeObservation } from './knowledge_result';
 import { buildMediaArtifactReceipt } from '../socket/media_artifact_receipt';
 import { sanitizeUserFacingExecutionOutput } from './user_output_protection';
 import { guardCompletionClaims } from '../work_product/completion_guard';
-import { hasImmediateExecutionPromise } from './execution_claims';
+
 import { formatClientDiagnosticResult, hasCompleteClientDiagnosticReceipts } from './client_diagnostic_result';
 import { evaluateDesktopObservationEvidence } from './desktop_observation';
 import { hasContinuousStockWatchIntent, hasContinuousStockWatchEvidence, requiresLegalCurrentLawGate, claimsLegalDocumentCompletion, hasLegalDocumentProductionEvidence, hasLegalCurrentLawGateEvidence, hasLegalReasoningChainEvidence, hasLegalExternalPlatformSignal, describesAuthorizedLegalExternalHandoff, claimsExternalLegalPlatformFinalAction, claimsExternalLegalPlatformResult, hasLegalExternalPlatformResultEvidence } from './result_policy_evidence';
 import { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from "./result_finalizer_types";
 import { taskActionContract, isInternalRuntimeWorkNarration, resultTaskText, isChineseText, summarizeToolFailure, hasResultCoreActionEvidence, isVerifiedCurrentTurnRecord, requiresSourceGroundedArtifactContent, sanitizeInternalExecutionText } from "./result_finalizer_support";
 import { formatGroundedDesktopEvidence, formatGroundedSimpleDesktopOpenResult, formatGroundedClientActionResult, formatGroundedCurrentAuthoringDocumentResult, formatGoalSpecificDesktopResult, formatObservedDesktopOpenResult, formatGroundedPartialActionResult, formatCurrentAuthoringDocumentClarification, formatCreatedArtifactWithoutInAppCompletion } from "./result_desktop_presenter";
-import { unsupportedOngoingExecutionClaim, withoutUnsupportedOngoingExecutionTail, leakedLegacyToolProtocol, unsupportedClientStateVerificationClaim, unsupportedLedgerOnlyWorkTaskCompletion, groundedVerifiedDocumentObservation, VERIFIED_DOCUMENT_OBSERVATION_TOOL_RE, unsupportedPriorDiagnosticClaim, unsupportedToolExecutionClaim, realWorldClaimKind, isExecutionClaimGuardTurn, isFirstPersonConcreteRealWorldClaim, hasVerifiedEvidenceForRealWorldClaim, unsupportedRealWorldClaim } from "./result_claim_guards";
+import { leakedLegacyToolProtocol, groundedVerifiedDocumentObservation, VERIFIED_DOCUMENT_OBSERVATION_TOOL_RE } from "./result_claim_guards";
 import { groundedMediaGeneration, formatGroundedWorkflowProgress, formatGroundedSkillDraft, formatGroundedArtifactResult, formatGroundedCadRunResult, formatGroundedBlankAutoCadDocumentResult, formatGroundedWpsMutationResult, formatGroundedCadGeometryExtractionResult, formatExternalAiHistoryResult } from "./result_artifact_presenter";
 
 const TOOL_ITERATION_LIMIT_RESPONSE_RE =
@@ -247,8 +249,10 @@ function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: 
       if (contract.kind === 'messaging_read') {
         return CN_EXECUTION_EVIDENCE_MESSAGES.compactMessagingReadNotCompleted;
       }
-      const detail = contractBlocker || (safeFailure ? `${safeFailure}\u3002` : CN_EXECUTION_EVIDENCE_MESSAGES.compactUnconfirmedFinalResult);
-      return CN_EXECUTION_EVIDENCE_MESSAGES.compactNotCompleted(detail);
+      const detail = contractBlocker || (safeFailure ? `${safeFailure}\u3002` : '');
+      return detail ? CN_EXECUTION_EVIDENCE_MESSAGES.compactNotCompleted(detail)
+        : (input.toolRecords || []).length ? CN_EXECUTION_EVIDENCE_MESSAGES.compactNotCompleted('')
+          : CN_EXECUTION_EVIDENCE_MESSAGES.recoveryNoResultRetry;
     }
     const hasSuccessfulEvidence = (input.toolRecords || []).some(record => (
       !record.error && String(record.result || '').trim().length > 0
@@ -282,8 +286,8 @@ function sanitizeContradictoryOperationModeText(input: LumiResultFinalizerInput)
   const knownMode = input.flow?.requestedMode ? null : input.flow?.effectiveOperationMode;
   const raw = String(input.responseText || '').trim();
   if (!knownMode || !raw) return raw;
-  const currentModeClaim = /(?:\u6211|Lumi)?(?:\u5f53\u524d|\u73b0\u5728|\u76ee\u524d|\u6b63\u5904\u4e8e|\u5904\u4e8e|\u662f)\s*(\u804a\u5929|\u5bf9\u8bdd|\u52a9\u624b|\u52a9\u7406|\u81ea\u4e3b|\u4f1a\u8bae|chat|conversation|assistant|autonomous|meeting)(?:\u6a21\u5f0f)?/iu;
-  const switchPrerequisite = /(?:\u9700\u8981|\u5fc5\u987b|\u5f97|need\s+to|must)\s*(?:\u5148)?(?:\u5207\u6362|\u5207\u5230|\u8fdb\u5165|switch)\s*(?:\u5230|to)?\s*(\u804a\u5929|\u5bf9\u8bdd|\u52a9\u624b|\u52a9\u7406|\u81ea\u4e3b|\u4f1a\u8bae|chat|conversation|assistant|autonomous|meeting)(?:\u6a21\u5f0f)?/iu;
+  const currentModeClaim = /(?:^|[，,；;：:\s])(?:\u6211|Lumi)?(?:\u5f53\u524d|\u73b0\u5728|\u76ee\u524d|\u6b63\u5904\u4e8e|\u5904\u4e8e|\u662f)\s*(\u804a\u5929|\u5bf9\u8bdd|\u52a9\u624b|\u52a9\u7406|\u81ea\u4e3b|\u4f1a\u8bae|chat|conversation|assistant|autonomous|meeting)\s*(?:\u6a21\u5f0f|\bmode\b)/iu;
+  const switchPrerequisite = /(?:\u9700\u8981|\u5fc5\u987b|\u5f97|need\s+to|must)\s*(?:\u5148)?(?:\u5207\u6362|\u5207\u5230|\u8fdb\u5165|switch)\s*(?:\u5230|to)?\s*(\u804a\u5929|\u5bf9\u8bdd|\u52a9\u624b|\u52a9\u7406|\u81ea\u4e3b|\u4f1a\u8bae|chat|conversation|assistant|autonomous|meeting)\s*(?:\u6a21\u5f0f|\bmode\b)/iu;
   // Keep every separator: this filter removes contradictory claims, not
   // Markdown structure. Omitting newline matches flattened even answers that
   // contained no mode claim into one paragraph (including table rows).
@@ -331,17 +335,6 @@ function correctCurrentTurnContractDrift(
     console.warn(`[ResultFinalizer] Corrected current-turn contract drift: task=${taskContract.kind}, response=${responseContract.kind}`);
   }
   return grounded;
-}
-
-function sanitizeUnsupportedRestatementAdditions(taskText: string, responseText: string, toolRecords: ToolExecutionRecord[]): string {
-  if (toolRecords.length > 0) return responseText;
-  if (!/(?:只|仅)?(?:复述|重复|完整说出|原样说出)|其他不变|只(?:说|保留|复述)事实/u.test(taskText)) return responseText;
-  const unsupportedClaim = /(?:写|放|记)(?:进|到|在).{0,8}(?:日程|计划|任务)|(?:已经|已|我)?\s*(?:记下|记录|保存)(?:了|好)?|(?:到时|到时候|出发前|之后).{0,16}(?:提醒|通知)|(?:创建|新建|安排).{0,8}(?:任务|提醒|日程)/u;
-  const explicitInTask = unsupportedClaim.test(taskText);
-  if (explicitInTask || !unsupportedClaim.test(responseText)) return responseText;
-  const clauses = String(responseText || '').match(/[^。！？!?\r\n]+[。！？!?]?|[\r\n]+/gu) || [];
-  const retained = clauses.filter(clause => !unsupportedClaim.test(clause)).join('').trim();
-  return retained || responseText;
 }
 
 /**
@@ -430,7 +423,15 @@ export function tryFinalizeVerifiedBoundedAction(
   if (!hasCoreActionEvidence(contract, records, task, undefined, {
     requestId: input.requestId, taskId: input.taskId,
   }, input.flow?.acceptedTaskTarget || acceptedTaskTarget)) return null;
+  const taskInstruction = affirmativeActionInstructionClauses(task).map(({ probe }) => withoutLocationLiterals(probe)).join(' ');
+  const additionalWork = /(?:运行|发送|发邮件|发给|发布|上传|分析|总结|解释|对比|比较|翻译|删除|移动|复制|重命名|安装|提醒|另外|还要|分别)|\b(?:run|send|publish|upload|analy[sz]\w*|summari[sz]\w*|explain|compare|translate|delete|move|copy|rename|install|remind|another|each)\b/iu.test(taskInstruction); // i18n-allow: additional semantic/action obligations.
   if (contract.components?.length) {
+    if (additionalWork) return null;
+    // Component assembly must not bypass the same actual-readback shortcut
+    // used for a single output. Final wording can still use the full contract.
+    const outputs = contract.components.flatMap(component => component.contract.kind === 'artifact_work' ? requestedArtifactInstructions(component.text) : []);
+    if (outputs.some(output => !resolveArtifactDelivery(records.filter(record => !isArtifactProducerRecord(record)
+      || sameArtifactPath(artifactPathFromRecord(record), output.path)), record => isVerifiedCurrentTurnRecord(scopedInput, record))?.readback)) return null;
     const complete = finalizeLumiResponse(scopedInput);
     return complete.blocked ? null : complete;
   }
@@ -450,8 +451,6 @@ export function tryFinalizeVerifiedBoundedAction(
   // approve spreadsheet semantics it cannot inspect.
   const structuredDelivery = resolveArtifactDelivery(records, record => isVerifiedCurrentTurnRecord(scopedInput, record));
   const computed = structuredDelivery && parseReceiptObject(toolRecordTerminalPayload(structuredDelivery.producer))?.calculatedCells;
-  const taskInstruction = withoutLocationLiterals(task);
-  const additionalWork = /(?:运行|发送|发邮件|发给|发布|上传|分析|总结|解释|对比|比较|翻译|删除|移动|复制|重命名|安装|提醒|另外|还要|分别)|\b(?:run|send|publish|upload|analy[sz]\w*|summari[sz]\w*|explain|compare|translate|delete|move|copy|rename|install|remind|another|each)\b/iu.test(taskInstruction); // i18n-allow: additional semantic/action obligations.
   if (structuredDelivery && /\.xlsx$/iu.test(structuredDelivery.outputPath)
     && Array.isArray(computed) && computed.length > 0 && !additionalWork) {
     const result = formatGroundedArtifactResult(scopedInput);
@@ -459,8 +458,8 @@ export function tryFinalizeVerifiedBoundedAction(
   }
   // The tool loop and channel delivery consume the same producer/readback
   // projection. An artifact's mere existence is not a second completion rule.
-  if (requiresArtifactPostWriteReadback(task)) {
-    const delivery = resolveArtifactDelivery(records, record => isVerifiedCurrentTurnRecord(scopedInput, record));
+  if (structuredDelivery?.readback || requiresArtifactPostWriteReadback(task)) {
+    const delivery = structuredDelivery;
     // Compound tasks and additional analysis still need their own outcome.
     // i18n-allow: outstanding user action recognition, not user-facing copy.
     // Requested opening is already checked by the shared action contract.
@@ -511,7 +510,41 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const actionText = resultTaskText(input);
   const missingInput = missingTaskInputResult(actionText,
     (input.toolRecords || []).filter(record => artifactRecordMatchesTurn(record, input)));
-  if (missingInput) return missingInput;
+  if (missingInput) {
+    // The missing-source fact owns the blocked state, not a fixed explanation
+    // or remedy menu. Preserve the model's grounded, user-facing account.
+    const modelText = sanitizeUserFacingExecutionOutput(sanitizeInternalExecutionText(input.responseText,
+      isChineseText(actionText) || isChineseText(input.responseText)), {
+      task: actionText, toolRecords: input.toolRecords || [], requestId: input.requestId, taskId: input.taskId,
+    });
+    const modelNames = [...modelText.replace(/\*\*|[`「」『』《》]/gu, '"').matchAll(new RegExp(FILE_NAME_RE.source, 'giu'))].map(match => match[1].toLocaleLowerCase());
+    const missingNames = [...missingInput.text.matchAll(new RegExp(FILE_NAME_RE.source, 'giu'))].map(match => match[1]);
+    // Missing input already owns the overall blocked verdict. Validate concrete
+    // statements separately so an independent inline result is not judged as
+    // completion of the failed file operation. Source text remains data.
+    const availableSources = requestsExactReadOnlyArtifactInspection(actionText) ? (input.toolRecords || [])
+      .filter(record => isVerifiedCurrentTurnRecord(input, record) && isSuccessfulExactDocumentRead(record)
+        && documentReadMatchesRequestedTarget(record, actionText, input.flow?.acceptedTaskTarget, input.flow?.currentAttachmentPaths))
+      .map(record => ({ path: artifactPathFromRecord(record), name: artifactPathFromRecord(record).split(/[\\/]/u).pop(), body: actualDocumentReadContent(record) })) : [];
+    const claimText = availableSources.reduce((text, source) => source.body ? text.split(source.body).join('\n') : text, modelText);
+    const checked = affirmativeActionInstructionClauses(claimText).every(clause => !guardCompletionClaims({
+      task: clause.probe, response: clause.text,
+      toolCalls: buildActionContract(clause.probe).applies ? input.toolRecords || [] : [],
+      source: input.source, requestId: input.requestId, taskId: input.taskId,
+      acceptedTaskTarget: input.flow?.acceptedTaskTarget,
+    }).blocked);
+    const explanation = modelText && missingNames.length && missingNames.every(name => modelNames.includes(name.toLocaleLowerCase()))
+      && checked
+      ? modelText : missingInput.text;
+    // Independent read requests still deliver each available source when another input is missing.
+    // Mutation tasks cannot use a preparatory source read as completed work.
+    const sources = availableSources.filter((source, index, all) => {
+        if (all.slice(index + 1).some(other => sameArtifactPath(source.path, other.path))) return false;
+        const labels = [source.path, ...(!all.some(other => other.name === source.name && !sameArtifactPath(source.path, other.path)) ? [source.name] : [])];
+        return !labels.some(label => label && explanation.replace(/\s+/gu, '').includes((label + '\n' + source.body).replace(/\s+/gu, '')));
+      });
+    return { ...missingInput, text: [...sources.map(source => source.name + '\n' + source.body), explanation].join('\n\n') };
+  }
   const business = groundedBusinessAnalysis(input);
   if (business) return business;
   const windowObservation = groundedReadOnlyWindowObservation(input);
@@ -657,25 +690,11 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   if (protectedResponseText !== input.responseText) {
     input = { ...input, responseText: protectedResponseText };
   }
-  const factualResponseText = sanitizeUnsupportedRestatementAdditions(actionText, input.responseText, input.toolRecords || []);
-  if (factualResponseText !== input.responseText) {
-    input = { ...input, responseText: factualResponseText };
-  }
-  const unsupportedClientVerification = unsupportedClientStateVerificationClaim(input);
-  if (unsupportedClientVerification) {
-    return {
-      text: unsupportedClientVerification,
-      blocked: false,
-      reason: 'unsupported_client_state_verification_claim_corrected',
-    };
-  }
   // A CAD workflow receipt owns both its execution truth and its user-facing
   // terminal state. Do not let model narration or a later generic guard hide
   // a verified completion or a concrete workflow blocker.
   const earlyGroundedCadRun = formatGroundedCadRunResult(input);
   if (earlyGroundedCadRun) return earlyGroundedCadRun;
-  const unsupportedWorkTaskCompletion = unsupportedLedgerOnlyWorkTaskCompletion(input);
-  if (unsupportedWorkTaskCompletion) return unsupportedWorkTaskCompletion;
   const modeSafeResponseText = sanitizeContradictoryOperationModeText(input);
   if (modeSafeResponseText !== input.responseText) {
     input = { ...input, responseText: modeSafeResponseText };
@@ -750,24 +769,6 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
         acceptedTaskTarget: input.flow?.acceptedTaskTarget,
         acceptedActionContract: input.flow?.acceptedActionContract,
       });
-  const unsupportedDiagnostic = unsupportedPriorDiagnosticClaim(input);
-  if (unsupportedDiagnostic) {
-    return {
-      text: unsupportedDiagnostic,
-      blocked: true,
-      reason: 'Response claimed a prior diagnostic run without matching diagnostic receipts.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Response claimed a prior diagnostic run without matching diagnostic receipts.',
-      },
-    };
-  }
-  const immediatePromiseFailure = hasImmediateExecutionPromise(input.responseText)
-    ? unsupportedOngoingExecutionClaim(input, !hasResultCoreActionEvidence(input, actionContract, input.toolRecords || [], actionText))
-    : null;
-  if (immediatePromiseFailure) return { text: immediatePromiseFailure, blocked: true,
-    reason: 'Response promised another action after execution ended.' };
   const diagnosticResult = formatClientDiagnosticResult(input.toolRecords || [], actionText, input.responseText);
   if (diagnosticResult) {
     const diagnosticCompleted = hasCompleteClientDiagnosticReceipts(input.toolRecords || [], actionText);
@@ -786,19 +787,6 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       } : {}),
     };
   }
-  const unsupportedExecution = unsupportedToolExecutionClaim(input);
-  if (unsupportedExecution) {
-    return {
-      text: unsupportedExecution,
-      blocked: true,
-      reason: 'Response claimed tool execution without matching tool records.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Response claimed tool execution without matching tool records.',
-      },
-    };
-  }
   if (
     hasLegalExternalPlatformSignal(actionText) &&
     claimsExternalLegalPlatformFinalAction(input.responseText || '')
@@ -811,47 +799,6 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     !hasLegalExternalPlatformResultEvidence(input.toolRecords || [], { requestId: input.requestId, taskId: input.taskId, taskText: actionText })
   ) {
     return blockedCompletionClaim(input, 'Missing external legal platform result evidence.');
-  }
-  // Domain contracts below have stronger target-specific verdicts (for
-  // example exact desktop windows, legal gates, and in-app saves). This guard
-  // closes the dangerous gap left by terse continuation turns whose task text
-  // has no standalone contract, such as “嗯，对” followed by a fictional send.
-  const responseClaimKind = realWorldClaimKind(input.responseText);
-  const claimGuardEligible = responseClaimKind && (
-    isExecutionClaimGuardTurn(input, actionContract.applies)
-    || isFirstPersonConcreteRealWorldClaim(input.responseText, responseClaimKind)
-  );
-  const unsupportedWorldClaim = claimGuardEligible && (
-    !actionContract.applies
-    || ['messaging_send', 'public_post'].includes(actionContract.kind)
-    || (actionContract.kind === 'desktop_operation' && responseClaimKind === 'runtime_configuration')
-    || (
-      actionContract.kind === 'desktop_operation'
-      && responseClaimKind === 'open'
-      && hasRequestedDesktopOpenEvidence(input.toolRecords || [], actionText)
-      && !hasVerifiedEvidenceForRealWorldClaim(input, 'open')
-    )
-  )
-    ? unsupportedRealWorldClaim(input)
-    : null;
-  if (unsupportedWorldClaim) return unsupportedWorldClaim;
-  const hasGroundedCoreAction = actionContract.applies
-    && hasResultCoreActionEvidence(input, actionContract, input.toolRecords || [], actionText);
-  const unsupportedOngoingExecution = unsupportedOngoingExecutionClaim(
-    input,
-    !guard.blocked && !hasGroundedCoreAction,
-  );
-  if (unsupportedOngoingExecution) {
-    return {
-      text: unsupportedOngoingExecution,
-      blocked: true,
-      reason: 'Response claimed ongoing execution without a current-turn tool receipt.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Response claimed ongoing execution without a current-turn tool receipt.',
-      },
-    };
   }
   // Ordinary conversation has no execution contract. Keep it natural after
   // the protocol/evidence sanity checks above instead of forcing it through a
@@ -897,6 +844,8 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   } : undefined;
   if (groundedArtifact?.blocked) return { ...groundedArtifact, ...(combinedArtifactProgress ? { progress: combinedArtifactProgress } : {}) };
   const artifactDelivery = groundedArtifact && resolveArtifactDelivery(input.toolRecords || [], record => isVerifiedCurrentTurnRecord(input, record));
+  const hasGroundedCoreAction = actionContract.applies
+    && hasResultCoreActionEvidence(input, actionContract, input.toolRecords || [], actionText);
   const deliveredSourceBody = groundedArtifact && !guard.blocked && hasGroundedCoreAction
     && input.requestId && input.taskId && artifactDelivery && isCanonicalToolExecutionRecord(artifactDelivery.producer)
     && (!artifactDelivery.readback || isCanonicalToolExecutionRecord(artifactDelivery.readback))
@@ -1021,10 +970,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const finalized = finalizeActionCompletionClaims(input, actionText, actionContract, guard, responseClaimsIncomplete, Boolean(groundedArtifact || groundedPause));
   const grounded = groundedArtifact || groundedPause;
   if (!grounded) return finalized;
-  const modelText = groundedArtifact && !groundedArtifact.blocked && !finalized.blocked
-    ? withoutUnsupportedOngoingExecutionTail({ ...input, responseText: finalized.text },
-      [...verifiedSourceBodies, ...extractExplicitArtifactTextRequirements(actionText)])
-    : finalized.text;
+  const modelText = finalized.text;
   const text = deliveredSourceBody && !finalized.blocked ? modelText
     : [...new Set([grounded.text, modelText].filter(Boolean))].join('\n');
   return { ...grounded, ...finalized, text, ...(combinedArtifactProgress ? { progress: combinedArtifactProgress } : {}) };

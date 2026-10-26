@@ -71,27 +71,9 @@ describe('chat and voice tool-call stability', () => {
     }
   });
 
-  it('keeps legal entry prompts in the shared execution decision instead of per-channel scripts', () => {
-    const executionDecision = readImplementationSource(path.join(process.cwd(), 'server/cognition/execution_decision.ts'), 'utf8');
-    const legalEntry = readImplementationSource(path.join(process.cwd(), 'server/cognition/legal_entry.ts'), 'utf8');
-
-    expect(executionDecision).toContain('buildUnifiedLegalEntryPrompt');
-    expect(legalEntry).toContain('Unified Legal Casework Entry');
-    expect(legalEntry).toContain('Execution order');
-    expect(legalEntry).toContain('major premise -> minor premise -> conclusion/subsumption');
-    expect(legalEntry).toContain('Current-law gate');
-    expect(legalEntry).toContain('External legal platforms');
-    expect(legalEntry).toContain('authorized-collaboration surfaces');
-    expect(legalEntry).toContain('Remote bot intake must resolve the organization/case binding first');
-    expect(legalEntry).toContain('archive into the organization case workspace and organization knowledge base');
-    expect(legalEntry).toContain('personal chat, company/work chat, voice, task center');
-  });
-
-  it('keeps REST chat on the same legal entry and finalizer path', () => {
+ it('keeps REST chat on the normal model and finalizer path', () => {
     const restChat = readImplementationSource(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
 
-    expect(restChat).toContain('buildUnifiedLegalEntryPrompt');
-    expect(restChat).toContain('buildRestChatSystemInstruction');
     expect(restChat).toContain('buildRestProviderMessages');
     expect(restChat).toContain('buildRestConversationMessages');
     expect(restChat).toContain('runLumiEntryTurn({');
@@ -151,12 +133,11 @@ describe('chat and voice tool-call stability', () => {
     expect(voice).toContain('onProgress');
   });
 
-  it('keeps personal and organization knowledge retrieval aligned across text and voice', () => {
+  it('keeps explicit voice and messaging knowledge retrieval available', () => {
     const root = process.cwd();
-    const chat = readFileSync(path.join(root, 'server/socket/chat/context_retrieval.ts'), 'utf8');
     const voice = readFileSync(path.join(root, 'server/socket/voice/turn/prepare_voice_context_and_routing.ts'), 'utf8');
     const common = readFileSync(path.join(root, 'server/knowledge/conversation_retrieval.ts'), 'utf8');
-    for (const source of [chat, voice]) expect(source).toContain('retrieveConversationKnowledge');
+    expect(voice).toContain('retrieveConversationKnowledge');
     expect(common).toContain('searchKnowledgeBase');
     expect(common).toContain("scope.domain === 'work'");
     expect(common).toContain("getMember(scope.orgId, scope.userId)?.status !== 'active'");
@@ -209,7 +190,6 @@ describe('chat and voice tool-call stability', () => {
     expect(chat).not.toContain('shouldRunLegacyDirectExecution() && !responseText');
     expect(chat).toContain('toolPolicy: modelCapabilityPolicy');
     expect(chat).toContain('recognition and legacy quick matches are advisory inputs');
-    expect(chat).toContain('buildRecentFailureExplanation');
     expect(chat).toContain('## Grounded current-turn evidence');
     expect(chat).not.toContain('recent_failure_explanation');
   });

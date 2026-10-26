@@ -1,5 +1,5 @@
 import type { NormalizedMessage } from './providers';
-import { estimateModelRequestInputTokens, prepareModelRequestContext, resolveAnnotatedSourceUserIndex, resolveModelRequestInputBudget, type PreparedModelRequestContext } from './request_context_budget';
+import { ModelRequestSourceProvenanceError, estimateModelRequestInputTokens, prepareModelRequestContext, resolveAnnotatedSourceUserIndex, resolveModelRequestInputBudget, type PreparedModelRequestContext } from './request_context_budget';
 export { estimateModelRequestInputTokens as estimateLocalRequestInputTokens, estimateModelRequestTextTokens as estimateLocalTextTokens } from './request_context_budget';
 
 export interface LocalContextToolDeclaration {
@@ -134,8 +134,19 @@ export function prepareLocalModelRequest(input: {
   const toolDeclarations = input.compactToolDeclarations ? compactLocalToolDeclarations(input.toolDeclarations, inputBudgetTokens, contextTokens, input.requiredToolNames, continuationTokens + systemTokens + protectedUserTokens) : input.toolDeclarations;
   const toolTokens = declarationTokens(toolDeclarations);
   if (toolTokens > inputBudgetTokens - 384) throw new LocalModelContextBudgetError('Local model preflight blocked tool declarations exceeding the available input context.', contextTokens, toolTokens);
-  const prepared = prepareModelRequestContext({ messages: original, toolDeclarations, inputTokenBudget: input.inputTokenBudget, maxInputTokens: inputBudgetTokens, atomicToolProtocol: true,
-    protectedToolNames: input.compactToolDeclarations ? toolDeclarations.map(tool => tool.function.name) : input.requiredToolNames });
+  let prepared: PreparedModelRequestContext;
+  try {
+    prepared = prepareModelRequestContext({ messages: original, toolDeclarations, inputTokenBudget: input.inputTokenBudget, maxInputTokens: inputBudgetTokens, atomicToolProtocol: true,
+      protectedToolNames: input.compactToolDeclarations ? toolDeclarations.map(tool => tool.function.name) : input.requiredToolNames });
+  } catch (error) {
+    if (error instanceof ModelRequestSourceProvenanceError && error.capacityExceeded) {
+      throw new LocalModelContextBudgetError(
+        'Local model context capacity cannot retain complete original user input, required prompt blocks, and the complete assistant tool_call/tool receipt boundary.',
+        contextTokens, toolTokens,
+      );
+    }
+    throw error;
+  }
   if (prepared.currentInputCompacted) throw new LocalModelContextBudgetError('Local model context capacity cannot retain complete original user input.', contextTokens, toolTokens);
   const maxTokens = Math.min(requestedMaxTokens, contextTokens - safetyTokens - prepared.estimatedInputTokens);
   const droppedToolNames = input.toolDeclarations.map(tool => tool.function.name).filter(name => !prepared.toolDeclarations.some(tool => tool.function.name === name));

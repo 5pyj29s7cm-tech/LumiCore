@@ -1678,3 +1678,15 @@ describe('completion evidence retains a later external final action', () => {
     expect(buildActionContract(text)).toEqual(accepted);
   });
 });
+
+describe('procedural questions do not invent message delivery', () => {
+  it.each(['这个文件在其他文件夹，我怎么找到它并发给你', '我如何通过微信把文件发给你？', 'How can I send this file to you?'])('has no sending contract for %s', text => {
+    expect(buildActionContract(text)).toMatchObject({ applies: false, kind: 'none' });
+  });
+  it('does not let a question override the following search instruction', () => {
+    expect(buildActionContract('我怎么找到文件并发给你？请先帮我搜索桌面的文件')).not.toMatchObject({ kind: 'messaging_send' });
+  });
+  it.each(['我怎么发附件？请把桌面的报价单.pdf发给张三', '给张三发送操作说明：怎么找文件'])('retains real third-party delivery for %s', text => {
+    expect(buildActionContract(text)).toMatchObject({ applies: true, kind: 'messaging_send' });
+  });
+});
