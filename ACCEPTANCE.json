@@ -1,12 +1,12 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-26T11:49:26.093Z",
+  "updatedAt": "2026-10-26T11:49:26.893Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": 18,
-    "title": "继续第18项",
+    "id": 19,
+    "title": "继续第19项",
     "status": "ready",
     "instruction": "已过不重验；保留项不重开；逐项封存、本地提交"
   },
@@ -49,9 +49,9 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-17",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-17/evidence-seal.json",
-    "sha256": "af4018429141604047708bf246dbb4ab05327c3258e38b68dd2ed3019a899412",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-18",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/item-18/evidence-seal.json",
+    "sha256": "c892c0a6f027bb243f1cd64cb5fedc95fff9cfc7cf9a5abebeca7a97c4ec39ce",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -67,18 +67,18 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "54fd0712650057ed598af3f9f2e8ac4eec035c58",
+    "baseCommit": "d58835a1ff12f30166c93f1a7a4db2257c0dd41a",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
-    "item": 17,
-    "title": "本地模型刑事材料及图片资料",
-    "status": "blocked",
+    "item": 18,
+    "title": "API服务与所有功能在聊天执行",
+    "status": "partial",
     "wholeItemPassed": false,
     "notes": [
-      "旧本地刑事8通过/2部分和云OCR正文结果沿用；PNG图片目标关联已修，离线45/45通过。",
-      "本地服务/多模态、LC01/LC05语义与原生交付缺口保留；不把已修PNG问题列为当前未修。"
+      "已有官方API适配、正常产物GET字节SHA相同及普通Socket全文/DB/终态通过沿用；语音结构终态离线55/55通过。",
+      "复合final_reply误阻、目录+创建误判及账号/设备/发布等已保留；不恢复相关修复。"
     ],
     "scope": "existing-evidence-review",
     "effectiveEvidence": [
@@ -109,9 +109,10 @@
       14,
       15,
       16,
-      17
+      17,
+      18
     ],
-    "next": 18
+    "next": 19
   },
   "currentCheckpointValidation": {
     "jsonParsed": true,
