@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-27T12:54:01.108Z",
+  "updatedAt": "2026-10-27T13:13:39.162Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "local-progress-checkpoint",
   "currentItem": {
-    "id": 11,
-    "title": "直接股东表格与原始来源展开",
-    "status": "user-reported-displayed-independent-value-comparison-retained",
-    "instruction": "用户已反馈展开；原值独立核对保留，不重复查询；继续下一非保留小项"
+    "id": null,
+    "title": "主程序优化",
+    "status": "starting-main-development-runtime",
+    "instruction": "使用D:/lumiOS主程序开发版；律师验收已封存，暂不恢复"
   },
   "acceptedWholeItems": [
     3,
@@ -68,7 +68,7 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "d4eae7127bcd12241aac1f58a81cf13741a1ebd2",
+    "baseCommit": "9123f445a60fe23e9eefa712a398238e976f094d",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
@@ -278,5 +278,45 @@
       "sha256": "48c0ed53ad3399c17b8118846b5d775d8a3600a1408e6bc55b7d223db58e546d",
       "files": 7
     }
+  },
+  "workFocus": {
+    "area": "main-program-optimization",
+    "sourceRoot": "D:/lumiOS",
+    "requestedByUser": true,
+    "lawyerDevelopmentArchived": true,
+    "lawyerArchiveTag": "archive/legal-development-20261027",
+    "status": "prepare-and-start-main-development-runtime"
+  },
+  "archivedLegalDevelopment": {
+    "at": "2026-10-27T13:13:39.160Z",
+    "status": "sealed-with-retained-acceptance-issues",
+    "tag": "archive/legal-development-20261027",
+    "branch": "contrib/installer-inputs-20260915-legal",
+    "remote": "legal-client",
+    "baseSourceCommit": "e6e0572f0fbed06e5f5e18b70fa6f0ade1d63a3f",
+    "evidenceDirectory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/lawyer-sealed-main-transition-20261027-1793106688685",
+    "developmentExecutableSHA256": "8cebe76a95629abf09be7a4723c7484f8276245ac0e37ebfcb00a1c1db7bf6a0",
+    "counts": {
+      "passed": 3,
+      "partial": 18,
+      "blocked": 4,
+      "failed": 1,
+      "deferred": 1
+    },
+    "acceptedWholeItems": [
+      3,
+      15,
+      16
+    ],
+    "wholeApplicationAccepted": false,
+    "resumeOnlyOnUserRequest": true
+  },
+  "remotePushAuthorization": {
+    "at": "2026-10-27T13:13:39.162Z",
+    "authorized": true,
+    "targetRemote": "origin",
+    "targetBranch": "feature/chat-song-workbench-20260916",
+    "forcePush": false,
+    "receipt": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/lawyer-sealed-main-transition-20261027-1793106688685/remote-sync-result.json"
   }
 }

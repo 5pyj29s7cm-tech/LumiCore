@@ -1,3 +1,7 @@
+# Current work focus
+
+The user switched to main-program optimization on 2026-10-27. Work in this main checkout and launch the main development client. Lawyer acceptance is sealed under `archive/legal-development-20261027` and must not resume without a user request. Existing lawyer acceptance records remain historical evidence, not the current work queue.
+
 # Acceptance checkpoint workflow
 
 This repository is part of the ongoing Lumi acceptance work.
