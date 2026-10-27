@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-27T13:13:39.162Z",
+  "updatedAt": "2026-10-27T14:11:37.883Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
-  "kind": "local-progress-checkpoint",
+  "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序优化",
-    "status": "starting-main-development-runtime",
-    "instruction": "使用D:/lumiOS主程序开发版；律师验收已封存，暂不恢复"
+    "title": "主程序聊天历史与已读文件连续性清理",
+    "status": "tests-passed-scoped-baseline-failures-retained",
+    "instruction": "本轮变更仅Main；提交推送并正常重载，使新源生效；律师版维持封存"
   },
   "acceptedWholeItems": [
     3,
@@ -49,12 +49,12 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/native-shareholder-followup-20261027-1793105429402",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/native-shareholder-followup-20261027-1793105429402/evidence-seal.json",
-    "sha256": "48c0ed53ad3399c17b8118846b5d775d8a3600a1408e6bc55b7d223db58e546d",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-chat-context-optimization-20261027-1793109465916",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-chat-context-optimization-20261027-1793109465916/evidence-seal.json",
+    "sha256": "1abf5a67f0619ae8ebad787dc1852814a64296b7d47d006e5424ef722beeea82",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json",
-    "files": 7
+    "files": 24
   },
   "workflow": {
     "afterEachSubcase": [
@@ -68,7 +68,7 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "9123f445a60fe23e9eefa712a398238e976f094d",
+    "baseCommit": "ebf3dea8b22721b50634dad8affcc0dc2661f536",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
@@ -285,7 +285,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "prepare-and-start-main-development-runtime"
+    "status": "main-chat-context-cleanup-validated",
+    "priority": "聊天链路与上下文、旧代码清理"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -309,7 +310,15 @@
       16
     ],
     "wholeApplicationAccepted": false,
-    "resumeOnlyOnUserRequest": true
+    "resumeOnlyOnUserRequest": true,
+    "sourceCommit": "b3ba9f35c9d381374b0c644c5de136f41df48204",
+    "remoteVerified": true,
+    "evidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/lawyer-sealed-main-transition-20261027-1793106688685",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/lawyer-sealed-main-transition-20261027-1793106688685/evidence-seal.json",
+      "sha256": "48c61ab5d77c6bf1f2e9af9454ef2625b8ee200db65770ab033acb7c060617c4",
+      "files": 21
+    }
   },
   "remotePushAuthorization": {
     "at": "2026-10-27T13:13:39.162Z",
@@ -318,5 +327,39 @@
     "targetBranch": "feature/chat-song-workbench-20260916",
     "forcePush": false,
     "receipt": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/lawyer-sealed-main-transition-20261027-1793106688685/remote-sync-result.json"
+  },
+  "latestMainOptimization": {
+    "at": "2026-10-27T14:11:37.883Z",
+    "evidenceRoot": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-chat-context-optimization-20261027-1793109465916",
+    "sourceAndTestFiles": 13,
+    "removed": [
+      "unused client chat.history payload/helper/export/type fields",
+      "historical document last2/3000-char/CSV-only projection",
+      "readback 65536-char persistence and capsule clipping",
+      "tool-record80/task-merge40/resume-normalization40 clipping"
+    ],
+    "checks": {
+      "frontend": "49/49",
+      "fileReplay": "15/15",
+      "readPersistenceAndResume": "31/31",
+      "types": "passed",
+      "desktopBuild": "passed",
+      "relatedBaselineFailuresRetained": 2
+    },
+    "wholeApplicationAccepted": false,
+    "defaultModelChanged": false,
+    "newModelCalls": 0,
+    "lawyerSourceChanged": false,
+    "remaining": [
+      "archive-only source recovery and legacy compatibility projection",
+      "voice/platform/local model budget contraction",
+      "legacy action keyword/guard paths"
+    ],
+    "evidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-chat-context-optimization-20261027-1793109465916",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-chat-context-optimization-20261027-1793109465916/evidence-seal.json",
+      "sha256": "1abf5a67f0619ae8ebad787dc1852814a64296b7d47d006e5424ef722beeea82",
+      "files": 24
+    }
   }
 }

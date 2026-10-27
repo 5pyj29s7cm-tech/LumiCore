@@ -62,7 +62,6 @@ export interface UserFacingOutputProtectionOptions extends Pick<ToolContext, 're
   trustedConfirmationRequestText?: string;
 }
 
-const MAX_PERSISTED_TOOL_RECORDS = 80;
 const MAX_PERSISTED_STRING = 4_000;
 const MAX_PERSISTED_COLLECTION = 80;
 const MAX_PERSISTED_DESKTOP_ENTRIES = 32;
@@ -511,13 +510,13 @@ function compactToolRecordForPersistence(record: unknown): unknown {
 export function sanitizeToolRecordsForPersistence(value: unknown): any[] | undefined {
   const records = parseStoredArray(value, 2);
   if (records.length === 0) return undefined;
-  return records.slice(-MAX_PERSISTED_TOOL_RECORDS)
+  return records
     .map(record => {
       const candidate = compactToolRecordForPersistence(record) as ToolExecutionRecord;
       const compacted = compactPersistedToolValue(candidate) as ToolExecutionRecord;
       const readback = artifactReadbackMetadata(candidate);
       if (readback && typeof candidate.result === 'string' && !DATA_URL_RE.test(candidate.result) && !looksLikeLargeBase64(candidate.result)) {
-        compacted.result = redactSensitive(candidate.result).slice(0, 65_536);
+        compacted.result = redactSensitive(candidate.result);
         if (!candidate.receipt) compacted.receipt = readback;
       }
       return compacted;

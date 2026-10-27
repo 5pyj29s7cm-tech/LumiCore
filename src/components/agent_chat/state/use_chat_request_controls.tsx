@@ -2,7 +2,7 @@ import { chatRecoveryCopy } from '@/i18n/locales/chatRecovery';
 import { ChatExecutionWatch } from "@/lib/chatExecutionWatch";
 import { useConversationTransitions } from "../useConversationTransitions";
 import type { ChatAttachment, ChatSendOptions } from "../contracts";
-import { makeChatMessageId, buildChatHistoryPayload } from "../history";
+import { makeChatMessageId } from "../history";
 import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { formatUiMessage, uiMessage } from "../../../i18n/uiMessages";
@@ -267,7 +267,6 @@ export function useChatRequestControls(previousBindings: ReturnType<typeof useCh
     const chatPayload = {
       text: outgoingText,
       attachments: outgoingAttachments,
-      history: buildChatHistoryPayload(priorMessages),
       personalityId: 'lumi',
       category: agentCategory,
       agentId,

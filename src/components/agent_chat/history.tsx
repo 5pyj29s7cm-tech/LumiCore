@@ -18,16 +18,3 @@ export function getCustomerDisplayText(message: any, isZh: boolean): string {
     ? sanitizeAgentResponseTextForDisplay(text, isZh ? 'zh' : 'en')
     : text;
 }
-
-
-export function buildChatHistoryPayload(messages: any[]) {
-  return messages.flatMap((m) => {
-    const text = getDisplayText(m);
-    if (!text.trim()) return [];
-    if (m.type === 'tool') return [];
-    if (['error', 'proactive'].includes(m.source)) return [];
-    if (m.type === 'agent') return [{ role: 'assistant', content: text }];
-    if (m.type === 'user' || m.type === 'file_context') return [{ role: 'user', content: text }];
-    return [];
-  });
-}

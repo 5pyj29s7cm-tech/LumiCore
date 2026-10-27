@@ -17,8 +17,7 @@ export function normalizeConversationActionState(
     : value.unfinished ? 'blocked' : 'completed';
   const receipts = (Array.isArray(value.receipts) ? value.receipts : [])
     .map((receipt: any): ConversationTaskReceipt | null => normalizeConversationTaskReceipt(receipt))
-    .filter((receipt): receipt is ConversationTaskReceipt => Boolean(receipt))
-    .slice(-40);
+    .filter((receipt): receipt is ConversationTaskReceipt => Boolean(receipt));
   const storedCapsule = normalizeTaskCapsuleV1(value.taskCapsule);
   const receiptCompletion = receipts.length > 0
     ? taskCompletionFromReceipts(goal, receipts, storedCapsule)

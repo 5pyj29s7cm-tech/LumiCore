@@ -140,11 +140,11 @@ function compact(value: unknown, limit: number): string {
 }
 
 function persistableToolResult(name: string, value: unknown): string {
-  // Exact text and section boundaries are evidence. Store one bounded copy;
+  // Exact text and section boundaries are evidence. Store one complete copy;
   // readback metadata holds its digest so a truncated/legacy summary cannot
   // be mistaken for the original document during task hydration.
   return isArtifactReaderRecord({ name } as ToolExecutionRecord)
-    ? String(value ?? '').slice(0, 65_536) : compact(value, 3000);
+    ? String(value ?? '') : compact(value, 3000);
 }
 
 function stableValue(value: unknown, depth = 0): unknown {
@@ -535,8 +535,7 @@ export function mergeTaskReceipts(
   }
   return order
     .map(key => merged.get(key))
-    .filter((receipt): receipt is ConversationTaskReceipt => Boolean(receipt))
-    .slice(-40);
+    .filter((receipt): receipt is ConversationTaskReceipt => Boolean(receipt));
 }
 
 export function taskReceiptsToRecords(receipts: ConversationTaskReceipt[] = []): ToolExecutionRecord[] {

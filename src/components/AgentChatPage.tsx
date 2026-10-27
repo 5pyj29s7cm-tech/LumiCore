@@ -8,7 +8,6 @@ import { useChatMediaControls } from './agent_chat/state/use_chat_media_controls
 import { useChatUploadsAndView } from './agent_chat/state/use_chat_uploads_and_view';
 
 export { type AgentChatVoiceSession } from "./agent_chat/contracts";
-export { buildChatHistoryPayload } from "./agent_chat/history";
 export type { ChatStreamReceiverInput } from './agent_chat/state/shared';
 
 export function AgentChatPage(props: Parameters<typeof useChatIdentityAndState>[0]) {

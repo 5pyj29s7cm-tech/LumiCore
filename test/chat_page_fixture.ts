@@ -84,7 +84,7 @@ export function pageHarness(withOldAttachment = false, transport?: (url: string,
     setIsTyping: noop, clearChatProgress: noop, pushChatProgress: noop,
     setWorkflowStatus: noop, setWorkflowSteps: noop, persistActiveExecution: noop,
     clearPersistedExecution: noop, streamingMsgIdsRef: { current: new Map() }, streamingRawTextRef: { current: new Map() },
-    takeChatStreamBucket, setTimeout: () => 1, clearTimeout: noop, buildChatHistoryPayload: (rows: any[]) => rows,
+    takeChatStreamBucket, setTimeout: () => 1, clearTimeout: noop,
     makeChatMessageId: (prefix: string) => `${prefix}-${Math.random()}`,
     socket: { connected: true, on: noop, off: noop, emit: (event: string, payload: any) => { emitted.push({ event, payload }); } },
   };
