@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-27T16:03:00.578Z",
+  "updatedAt": "2026-10-27T16:15:14.926Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
     "title": "主程序局域网设备发现与打印机只读接入",
-    "status": "read-only-capabilities-tested-runtime-reload-pending",
-    "instruction": "电视实机连接保留，ESP32延期；等待正常退出后重载Main；不恢复律师验收"
+    "status": "read-only-capabilities-loaded-physical-control-pending",
+    "instruction": "主程序已加载；电视等待可开机，打印机网络查询超时和实际打印保留；ESP32延期"
   },
   "acceptedWholeItems": [
     3,
@@ -68,7 +68,7 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "e5429344f55161d97c5179fc9fe9a1e8edc81413",
+    "baseCommit": "88c4e38a495b4b6f9f8dd91954047c9a931ada81",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
@@ -288,7 +288,7 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "read-only-capabilities-tested-runtime-reload-pending",
+    "status": "read-only-capabilities-loaded-physical-control-pending",
     "priority": "先接电视和打印机；电脑作为局域网控制中心"
   },
   "archivedLegalDevelopment": {
@@ -391,7 +391,7 @@
   },
   "latestMainDeviceIntegration": {
     "updatedAt": "2026-10-27T16:03:00.578Z",
-    "status": "read-only-capabilities-tested-runtime-reload-pending",
+    "status": "read-only-capabilities-loaded-physical-control-pending",
     "scope": "control-center LAN discovery and Windows printer inventory/status",
     "wholeItemPassed": false,
     "physicalControlAccepted": false,
@@ -411,9 +411,24 @@
       "esp32": "deferred"
     },
     "runtime": {
-      "reload": "waiting for user normal exit; native window minimized and activation blocked by input protection",
-      "previousPid": 5492,
-      "previousBuildId": "e5429344f55161d97c5179fc9fe9a1e8edc81413"
+      "status": "loaded-and-backend-healthy",
+      "pid": 39348,
+      "startedAt": "2026-10-27T16:08:19.106Z",
+      "buildId": "88c4e38a495b4b6f9f8dd91954047c9a931ada81",
+      "sourceRoot": "D:/lumiOS",
+      "nativeExecutable": "D:/lumiOS/src-tauri/target/x86_64-pc-windows-gnu/debug/lumi-core.exe",
+      "nativeWindowId": 8129392,
+      "nativeServiceConnected": true,
+      "deviceToolsLoaded": [
+        "lan_discover_devices",
+        "printer_list",
+        "printer_status",
+        "printer_network_status"
+      ],
+      "nativeChatToolExecutionVerified": false,
+      "previousBackendSaved": true,
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-device-runtime-20261028-1793117271611/evidence-seal.json",
+      "sha256": "7f7b36a2dd686eaeadb7c09e1738786d893872d7fae99c94e786384031e0d7fd"
     },
     "evidence": {
       "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-lan-printer-integration-20261027-1793115246538",
@@ -423,6 +438,12 @@
     },
     "noDefaultModelChange": true,
     "noAddedSemanticRoutingRules": true,
-    "remotePush": "pending"
+    "remotePush": {
+      "status": "pushed-and-verified",
+      "head": "88c4e38a495b4b6f9f8dd91954047c9a931ada81",
+      "receipt": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-lan-printer-integration-20261027-1793115246538-push.json"
+    },
+    "sourceCommit": "88c4e38a495b4b6f9f8dd91954047c9a931ada81",
+    "note": "The following checkpoint changes metadata only. Running backend source/code baseline is the recorded buildId; no source changed after it started."
   }
 }
