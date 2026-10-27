@@ -5,6 +5,7 @@ import { ToolRegistry } from '../server/tools/registry';
 import { registerAllTools } from '../server/tools/definitions';
 import { executeToolCall } from '../server/tools/execution_engine';
 import { listWorkTakeoverTasks } from '../server/work_takeover/tasks';
+import { getPersonalClientSurfaceByAction, getPersonalClientSurfaceByTarget, PERSONAL_CLIENT_LAUNCHER_IDS, PERSONAL_CLIENT_SURFACE_ACTIONS } from '../shared/client_surfaces';
 import {
   hasMixedStatusExecutionIntent,
   isExplicitArtifactCreationText,
@@ -351,8 +352,15 @@ describe('normalized desktop intent priority', () => {
   });
 
   it.each([['打开社媒运营', 'business', 'open_business'], ['打开电商运营', 'business-ecommerce', 'open_ecommerce_workspace'],
-    ['打开财务', 'business-finance', 'open_finance_workspace'], ['打开任务与归档', 'business-archive', 'open_business_archive']])('opens each direct business destination through its registered metadata: %s', (text, target, clientAction) => {
+    ['打开财务', 'business-finance', 'open_finance_workspace']])('opens each direct business destination through its registered metadata: %s', (text, target, clientAction) => {
     expect(normalizeActionIntent(text)).toMatchObject({ kind: 'client_navigation', target, clientAction });
+  });
+  it.each(['打开任务与归档', 'open business archive'])('does not register the removed archive surface for typed or spoken navigation: %s', text => {
+    expect(getPersonalClientSurfaceByTarget('business-archive')).toBeUndefined();
+    expect(getPersonalClientSurfaceByAction('open_business_archive')).toBeUndefined();
+    expect(PERSONAL_CLIENT_LAUNCHER_IDS).not.toContain('business-archive');
+    expect(PERSONAL_CLIENT_SURFACE_ACTIONS).not.toContain('open_business_archive');
+    expect(normalizeActionIntent(text).clientAction).not.toBe('open_business_archive');
   });
   it('derives native navigation from the registered client surface map', () => {
     expect(normalizeActionIntent('进入灵息之境')).toMatchObject({

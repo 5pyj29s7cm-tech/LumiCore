@@ -67,7 +67,7 @@ export function renderDesktopWindows({ isWallpaperMode, sensorPrimerSeen, finish
                 t={t}
               >
                 <div className="os-window-body custom-scrollbar">
-                  {['business', 'business-ecommerce', 'business-finance', 'business-archive'].includes(windowId) ? (
+                  {['business', 'business-ecommerce', 'business-finance'].includes(windowId) ? (
                     <BusinessWorkbench section={(windowId === 'business' ? 'social' : windowId.slice('business-'.length)) as BusinessSection} lang={lang} domain={workDomain} onOpenSettings={() => toggleWindow('settings')} onOpenKnowledge={openKnowledgeBase} onOpenSkills={() => toggleWindow('skills')}
                       onOpenCreation={() => { setCreationRequestId(crypto.randomUUID()); openCommandCenter('office'); }}
                       onOpenDigitalHuman={() => { void openMemoryAvatar(undefined, 'home'); }} />

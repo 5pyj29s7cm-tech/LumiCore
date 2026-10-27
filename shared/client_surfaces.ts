@@ -164,12 +164,6 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     navigationAliases: ['财务管理', '财务', 'finance workspace'],
   },
   {
-    id: 'business-archive', label: 'Business tasks and archive', target: 'business-archive', actions: ['open_business_archive'],
-    useWhen: 'Open business tasks and archived deliveries directly from the personal desktop.',
-    launcherIds: ['business-archive'],
-    navigationAliases: ['任务与归档', 'business archive'],
-  },
-  {
     id: 'home',
     label: 'Home / desktop shell',
     target: 'home',

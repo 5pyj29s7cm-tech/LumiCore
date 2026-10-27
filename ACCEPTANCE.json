@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-27T14:11:37.883Z",
+  "updatedAt": "2026-10-27T14:38:56.313Z",
   "localDate": "2026-10-26",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序聊天历史与已读文件连续性清理",
-    "status": "tests-passed-scoped-baseline-failures-retained",
-    "instruction": "本轮变更仅Main；提交推送并正常重载，使新源生效；律师版维持封存"
+    "title": "主程序桌面任务与归档独立界面删除",
+    "status": "code-checks-passed-runtime-reload-pending",
+    "instruction": "本轮Main界面清理完成，正常重载；律师版保持封存"
   },
   "acceptedWholeItems": [
     3,
@@ -49,12 +49,12 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-chat-context-optimization-20261027-1793109465916",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-chat-context-optimization-20261027-1793109465916/evidence-seal.json",
-    "sha256": "1abf5a67f0619ae8ebad787dc1852814a64296b7d47d006e5424ef722beeea82",
+    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-desktop-archive-removal-20261027-1793111591896",
+    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-desktop-archive-removal-20261027-1793111591896/evidence-seal.json",
+    "sha256": "c5047c2b52c904c9ddcd16f137d767899b71a0ad78f4529ce43a1d9cc3e66729",
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json",
-    "files": 24
+    "files": 14
   },
   "workflow": {
     "afterEachSubcase": [
@@ -68,7 +68,7 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "ebf3dea8b22721b50634dad8affcc0dc2661f536",
+    "baseCommit": "e0939de96e6276c7fa59f6643f52b559f3f2f4f9",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
@@ -285,7 +285,7 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "main-chat-context-cleanup-validated",
+    "status": "main-chat-and-desktop-cleanup-validated",
     "priority": "聊天链路与上下文、旧代码清理"
   },
   "archivedLegalDevelopment": {
@@ -361,5 +361,23 @@
       "sha256": "1abf5a67f0619ae8ebad787dc1852814a64296b7d47d006e5424ef722beeea82",
       "files": 24
     }
+  },
+  "latestMainDesktopCleanup": {
+    "at": "2026-10-27T14:38:56.313Z",
+    "removed": "standalone Tasks and archive surface, desktop launcher, typed/spoken aliases and exclusive requests/state/copy",
+    "evidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-desktop-archive-removal-20261027-1793111591896",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-desktop-archive-removal-20261027-1793111591896/evidence-seal.json",
+      "sha256": "c5047c2b52c904c9ddcd16f137d767899b71a0ad78f4529ce43a1d9cc3e66729",
+      "files": 14
+    },
+    "sourceAndTestFiles": 9,
+    "tests": "213/213",
+    "derivedSurfaceChecks": "35/36; one existing baseline failure retained",
+    "typecheck": "passed",
+    "desktopBuild": "passed",
+    "independentReview": "passed",
+    "nativeUIAccepted": false,
+    "serverArchiveAndUserDataChanged": false
   }
 }

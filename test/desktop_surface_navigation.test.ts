@@ -118,7 +118,7 @@ it('Skill Hall opened from Breath Realm returns there after closing', () => {
   d.invoke('closeWindow', 'skills');
   expect(d.state.viewMode).toBe('world'); expect(d.state.activeTab).toBe('home');
 });
-it.each(['business', 'business-ecommerce', 'business-finance', 'business-archive'])('the %s workspace returns to its command-center origin', id => {
+it.each(['business', 'business-ecommerce', 'business-finance'])('the %s workspace returns to its command-center origin', id => {
   const d = desktop({ activeTab: 'command-center', chatOpen: true });
   d.invoke('openSurface', id);
   expect(d.state.chatOpen).toBe(false); expect(d.state.focusedWindow).toBe(id);
@@ -169,7 +169,7 @@ it.each([[0, 12], [1, 1], [2, 1]])('scrolling backward exits Breath Realm with n
   expect(action).not.toHaveBeenCalled(); expect(action.closeSurface).toHaveBeenCalledWith('nexus');
 });
 vi.mock('../src/contexts/AppContext', () => ({ useApp: () => ({ user: { uid: 'section-owner' }, workbenchDrafts: new Map() }) }));
-it.each([['social', '社媒运营'], ['ecommerce', '电商运营'], ['finance', '财务管理'], ['archive', '任务与归档']] as const)('renders the direct %s section with its own title and without aggregate tabs', (section, title) => {
+it.each([['social', '社媒运营'], ['ecommerce', '电商运营'], ['finance', '财务管理']] as const)('renders the direct %s section with its own title and without aggregate tabs', (section, title) => {
   const markup = renderToStaticMarkup(React.createElement(BusinessWorkbench, { section, lang: 'zh', domain: 'personal',
     onOpenSettings: vi.fn(), onOpenKnowledge: vi.fn(), onOpenSkills: vi.fn(), onOpenCreation: vi.fn(), onOpenDigitalHuman: vi.fn() }));
   expect(markup).toContain('>' + title + '</h2>'); expect(markup).not.toContain('<nav');

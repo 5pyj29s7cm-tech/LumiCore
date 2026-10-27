@@ -1,5 +1,5 @@
 import { businessWorkbenchCopy } from '../../../i18n/locales/businessWorkbench';
-import { Radio, ShoppingBag, Landmark, Archive } from 'lucide-react';
+import { Radio, ShoppingBag, Landmark } from 'lucide-react';
 import { useMeetingTranscript } from "../useMeetingTranscript";
 import { type DesktopIconDefinition, externalCapabilityDesktopIcon } from "../launcher";
 import { type ProactiveChatDetail, formatProactiveChatPrefill } from "../proactive_presentation";
@@ -181,7 +181,6 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
     { id: 'business', label: businessCopy.social, icon: <Radio size={24} />, colorClass: 'from-violet-500 to-fuchsia-600', windowId: 'business' },
     { id: 'business-ecommerce', label: businessCopy.commerce, icon: <ShoppingBag size={24} />, colorClass: 'from-emerald-500 to-cyan-600', windowId: 'business-ecommerce' },
     { id: 'business-finance', label: businessCopy.finance, icon: <Landmark size={24} />, colorClass: 'from-blue-500 to-indigo-600', windowId: 'business-finance' },
-    { id: 'business-archive', label: businessCopy.archive, icon: <Archive size={24} />, colorClass: 'from-amber-500 to-orange-600', windowId: 'business-archive' },
     ...reviewedExternalDesktopIcons,
   ];
   const desktopIconAreaHeight = Math.max(
