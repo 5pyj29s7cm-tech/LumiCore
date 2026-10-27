@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-27T14:38:56.313Z",
-  "localDate": "2026-10-26",
+  "updatedAt": "2026-10-27T16:03:00.578Z",
+  "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序桌面任务与归档独立界面删除",
-    "status": "code-checks-passed-runtime-reload-pending",
-    "instruction": "本轮Main界面清理完成，正常重载；律师版保持封存"
+    "title": "主程序局域网设备发现与打印机只读接入",
+    "status": "read-only-capabilities-tested-runtime-reload-pending",
+    "instruction": "电视实机连接保留，ESP32延期；等待正常退出后重载Main；不恢复律师验收"
   },
   "acceptedWholeItems": [
     3,
@@ -68,7 +68,7 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "e0939de96e6276c7fa59f6643f52b559f3f2f4f9",
+    "baseCommit": "e5429344f55161d97c5179fc9fe9a1e8edc81413",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
@@ -127,12 +127,15 @@
   "currentCheckpointValidation": {
     "jsonParsed": true,
     "gitDiffCheck": "passed",
-    "sourceChanged": false,
+    "sourceChanged": true,
     "existingPassedOperationsReplayed": false,
     "priorSealedFilesVerified": "135/135",
     "currentSubsealFilesVerified": "56/56",
     "protectedAcceptedStateUnchanged": true,
-    "wholeApplicationAccepted": false
+    "wholeApplicationAccepted": false,
+    "deviceAndManifestTests": "72/72",
+    "relatedRoutingTests": "196/200; four existing failures retained",
+    "typecheck": "passed"
   },
   "orderedPassSummary": {
     "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/acceptance-summary.json",
@@ -285,8 +288,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "main-chat-and-desktop-cleanup-validated",
-    "priority": "聊天链路与上下文、旧代码清理"
+    "status": "read-only-capabilities-tested-runtime-reload-pending",
+    "priority": "先接电视和打印机；电脑作为局域网控制中心"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -378,6 +381,48 @@
     "desktopBuild": "passed",
     "independentReview": "passed",
     "nativeUIAccepted": false,
-    "serverArchiveAndUserDataChanged": false
+    "serverArchiveAndUserDataChanged": false,
+    "runtime": {
+      "status": "backend-reloaded-and-healthy",
+      "pid": 5492,
+      "buildId": "e5429344f55161d97c5179fc9fe9a1e8edc81413",
+      "nativeVisualAccepted": false
+    }
+  },
+  "latestMainDeviceIntegration": {
+    "updatedAt": "2026-10-27T16:03:00.578Z",
+    "status": "read-only-capabilities-tested-runtime-reload-pending",
+    "scope": "control-center LAN discovery and Windows printer inventory/status",
+    "wholeItemPassed": false,
+    "physicalControlAccepted": false,
+    "sourceEdition": "main",
+    "tests": {
+      "deviceAndManifest": "72/72",
+      "related": "196/200; four existing fixed-declaration router failures retained",
+      "typecheck": "passed",
+      "independentReview": "passed"
+    },
+    "actual": {
+      "lanPrinterServiceObserved": true,
+      "installedPrinterQueues": 7,
+      "networkIppStatus": "timed out; retained",
+      "television": "awaiting availability; user cannot turn it on",
+      "physicalPrinting": "not executed",
+      "esp32": "deferred"
+    },
+    "runtime": {
+      "reload": "waiting for user normal exit; native window minimized and activation blocked by input protection",
+      "previousPid": 5492,
+      "previousBuildId": "e5429344f55161d97c5179fc9fe9a1e8edc81413"
+    },
+    "evidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-lan-printer-integration-20261027-1793115246538",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-lan-printer-integration-20261027-1793115246538/evidence-seal.json",
+      "sha256": "704b700424cc5fe74f1533d13eaf4cfb5cd00aec0dceba0140f289779ef8d58e",
+      "files": 27
+    },
+    "noDefaultModelChange": true,
+    "noAddedSemanticRoutingRules": true,
+    "remotePush": "pending"
   }
 }

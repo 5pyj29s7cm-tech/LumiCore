@@ -48,6 +48,7 @@ import { registerMessagingTools } from './messaging_tools';
 import { registerModelConfigurationTools } from './model_configuration_tools';
 import { registerDesktopWechatWatchTools } from './desktop_wechat_watch_tools';
 import { registerNetworkDiagnosticTools } from './network_diagnostic_tools';
+import { registerLocalDeviceTools } from './local_device_tools';
 import { registerRuntimeWorkTools } from './runtime_work_tools';
 import { registerCadWorkflowTools } from './cad_workflow_tools';
 import { registerExtensionRegistryTools } from './extension_registry_tools';
@@ -106,6 +107,7 @@ registerChatSongTools(registry);
   registerMessagingTools(registry);
   registerDesktopWechatWatchTools(registry);
   registerNetworkDiagnosticTools(registry);
+  registerLocalDeviceTools(registry);
   registerRuntimeWorkTools(registry);
   registerExtensionRegistryTools(registry);
   if (llmGetters) {
