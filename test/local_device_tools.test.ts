@@ -10,6 +10,7 @@ function fixture() {
     printers: vi.fn(async () => ({ supported: true, status: 'ok', platform: 'win32', observedAt: 'test-time', printers: [], ports: [], errors: [] })),
     printerStatus: vi.fn(async () => ({ supported: true, status: 'ok', platform: 'win32', observedAt: 'test-time', printer: { name: 'Test queue', workOffline: true, queueStatus: 'Normal' }, ports: [], errors: [] })),
     networkPrinterStatus: vi.fn(async () => ({ ok: false, status: 'unavailable', observedAt: 'test-time', error: 'Timed out' })),
+    usbSerial: vi.fn(async () => ({ supported: true, status: 'ok', platform: 'win32', observedAt: 'test-time', devices: [], errors: [], limitations: ['A USB bridge does not prove an MCP connection.'] })),
   };
   const registry = new ToolRegistry();
   registerLocalDeviceTools(registry, adapters as unknown as LocalDeviceAdapters);
@@ -46,7 +47,7 @@ describe('Lumi control-center device tools', () => {
   it('preserves source and metadata contracts without granting remote access', async () => {
     const { registry, adapters } = fixture();
     const manifest = registry.getCapabilityManifest();
-    expect(manifest).toHaveLength(4);
+    expect(manifest).toHaveLength(5);
     for (const entry of manifest) {
       expect(entry).toMatchObject({ family: 'devices', operation: 'observe', permission: 'user', assurance: 'observed', risk: 'low' });
       expect(entry.sideEffects.every(effect => ['local_read', 'network_read'].includes(effect.type))).toBe(true);
@@ -54,6 +55,8 @@ describe('Lumi control-center device tools', () => {
     }
     await expect(registry.execute('printer_list', {}, { ...native, executionBoundary: 'remote_restricted', source: 'rest_chat' })).rejects.toThrow(/remote execution/);
     expect(adapters.printers).not.toHaveBeenCalled();
+    await expect(registry.execute('usb_serial_list', {}, { ...native, executionBoundary: 'remote_restricted', source: 'rest_chat' })).rejects.toThrow(/remote execution/);
+    expect(adapters.usbSerial).not.toHaveBeenCalled();
   });
   it('does not convert partial inventory into successful full status', async () => {
     const { tools, adapters } = fixture();
@@ -61,4 +64,28 @@ describe('Lumi control-center device tools', () => {
     const result = JSON.parse(await tools.find(x => x.name === 'printer_list')!.handler({}, native));
     expect(result).toMatchObject({ ok: false, status: 'partial', errors: [{ code: 'job_read_failed' }] });
   });
+  it('returns USB metadata without converting COM presence into firmware or MCP connection proof', async () => {
+    const { tools, adapters } = fixture();
+    adapters.usbSerial.mockResolvedValueOnce({ supported: true, status: 'ok', platform: 'win32', observedAt: 'test-time', devices: [
+      { instanceId: 'USB\\VID_1234&PID_ABCD\\sample', portName: 'COM7', problemCode: 0, configManagerErrorCode: 28 },
+    ], errors: [], limitations: ['A USB bridge does not prove an MCP connection.'] } as never);
+    const tool = tools.find(item => item.name === 'usb_serial_list')!;
+    const result = JSON.parse(await tool.handler({}, native));
+    expect(result).toMatchObject({ ok: true, status: 'ok', executionHost: 'lumi_backend_host', source: 'windows_pnp_serial',
+      devices: [{ portName: 'COM7', problemCode: 0, configManagerErrorCode: 28 }] });
+    expect(result).not.toHaveProperty('connected');
+    expect(result).not.toHaveProperty('firmware');
+    expect(result).not.toHaveProperty('mcp');
+    expect(tool.parameters).toEqual({ type: 'object', properties: {}, additionalProperties: false });
+    expect(tool.capability?.verification?.limitations).toEqual(result.limitations.length ? expect.arrayContaining([expect.stringMatching(/does not.*MCP/)]) : []);
+    expect(adapters.usbSerial).toHaveBeenCalledTimes(1);
+  });
+  it('keeps partial USB metadata and its source error visible without marking it complete', async () => {
+    const { tools, adapters } = fixture();
+    adapters.usbSerial.mockResolvedValueOnce({ supported: true, status: 'partial', platform: 'win32', observedAt: 'test-time',
+      devices: [], errors: [{ code: 'port_name_query_failed', message: 'Access denied' }], limitations: [] } as never);
+    const result = JSON.parse(await tools.find(item => item.name === 'usb_serial_list')!.handler({}, native));
+    expect(result).toMatchObject({ ok: false, status: 'partial', source: 'windows_pnp_serial', errors: [{ code: 'port_name_query_failed' }] });
+  });
+
 });

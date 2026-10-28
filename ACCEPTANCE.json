@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T03:54:51.579Z",
+  "updatedAt": "2026-10-28T06:30:24.237Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序网络打印机状态链路",
-    "status": "read-only-discovery-and-live-status-passed-answer-wording-retained",
-    "instruction": "发现与实时状态通过；完整答复措辞保留，实际出纸未验。律师保留项不动。"
+    "title": "主程序电视与ESP32接入",
+    "status": "usb-observation-source-passed-runtime-chat-pending",
+    "instruction": "USB元数据能力与真实驱动修复通过，待加载正常聊天；电视身份与MCP控制仍未通过，律师保留项不动"
   },
   "acceptedWholeItems": [
     3,
@@ -133,7 +133,7 @@
     "currentSubsealFilesVerified": "56/56",
     "protectedAcceptedStateUnchanged": true,
     "wholeApplicationAccepted": false,
-    "deviceAndManifestTests": "93/93",
+    "deviceAndManifestTests": "110/110",
     "relatedRoutingTests": "196/200; four existing failures retained",
     "typecheck": "passed",
     "checkpointOnly": true
@@ -289,8 +289,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "read-only-discovery-and-live-status-passed-answer-wording-retained",
-    "priority": "先接电视和打印机；电脑作为局域网控制中心"
+    "status": "usb-observation-source-passed-runtime-chat-pending",
+    "priority": "局域网电视、打印机与USB/MCP设备接入"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -577,5 +577,48 @@
       "sha256": "bf3ac460e05046fb7f90059157059ebdc4b83427bcff69a88fc42936462e15b7",
       "files": 11
     }
+  },
+  "latestMainTvEsp32Integration": {
+    "updatedAt": "2026-10-28T06:30:24.237Z",
+    "status": "usb-observation-source-passed-runtime-chat-pending",
+    "sourceRoot": "D:/lumiOS",
+    "capability": "usb_serial_list",
+    "tests": "110/110",
+    "typecheck": "passed",
+    "independentReview": "passed",
+    "actualUsb": {
+      "presentPorts": 2,
+      "driverProblemsResolved": true,
+      "officialSignedDriverInstalled": "WCH4.0.2026.2",
+      "mainboardSeparated": true,
+      "firmwareConfirmedForOneDevice": "ESP32-S3/xiaozhi2.0.1",
+      "otherFirmwareUnconfirmed": true
+    },
+    "tv": {
+      "userReportsPoweredOnAndSameWifi": true,
+      "identified": false,
+      "controlConnected": false
+    },
+    "esp32": {
+      "mcpConnected": false,
+      "existingBackendConfigurationChanged": false,
+      "compatibilityBridgeRequiredForExistingFirmware": true
+    },
+    "noBrandSpecificRouting": true,
+    "noDefaultModelChange": true,
+    "physicalControlAccepted": false,
+    "evidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/tv-esp32-connectivity-1793167221565",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/tv-esp32-connectivity-1793167221565/evidence-seal.json",
+      "sha256": "19b369c0f3edc1b2ebb925ec046765035f96af48bfdc446b9462e238fca66609",
+      "files": 26
+    },
+    "sourceValidation": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/usb-serial-validation-1793168901662",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/usb-serial-validation-1793168901662/evidence-seal.json",
+      "sha256": "f53dabaecf5f5e6472a830c3def962ccf5beb5ca41870a0eb6ca4cca557f937a",
+      "files": 9
+    },
+    "lawyerHeldUnchanged": true
   }
 }

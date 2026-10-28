@@ -3,6 +3,7 @@ import type { ToolCapabilityMetadata, ToolContext } from '../types';
 import { discoverLanDevices } from '../../devices/lan_discovery';
 import { readPrinterInventory, readPrinterStatus } from '../../devices/printer_inventory';
 import { readNetworkPrinterStatus } from '../../devices/ipp_printer';
+import { readUsbSerialInventory, USB_SERIAL_OBSERVATION_LIMIT } from '../../devices/usb_serial_inventory';
 
 const OBSERVATION_LIMIT = 'Observed on the Lumi control-center host; discovery is not pairing, and a queue/status query is not a completed physical print.';
 const EXECUTION_HOST = 'lumi_backend_host';
@@ -12,7 +13,7 @@ function requireControlCenter(context?: ToolContext): void {
     throw new Error('Device access requires the authenticated native desktop session on the Lumi control center.');
   }
 }
-function capability(id: string, type: 'local_read' | 'network_read', fields: string[], statuses: string[]): ToolCapabilityMetadata {
+function capability(id: string, type: 'local_read' | 'network_read', fields: string[], statuses: string[], limitations = [OBSERVATION_LIMIT]): ToolCapabilityMetadata {
   return {
     id, family: 'devices', lane: 'system', operation: 'observe', risk: 'low',
     domains: ['devices'], tags: ['devices', 'control center'],
@@ -23,7 +24,7 @@ function capability(id: string, type: 'local_read' | 'network_read', fields: str
       requiredFields: ['executionHost', ...fields], successStatuses: statuses,
       failureStatuses: ['unavailable', 'error', 'unsupported', 'query_failed'],
       successSignals: ['The requested read-only observation returned its own source and timestamp.'],
-      limitations: [OBSERVATION_LIMIT],
+      limitations,
     },
   };
 }
@@ -32,11 +33,12 @@ export interface LocalDeviceAdapters {
   printers: typeof readPrinterInventory;
   printerStatus: typeof readPrinterStatus;
   networkPrinterStatus: typeof readNetworkPrinterStatus;
+  usbSerial: typeof readUsbSerialInventory;
 }
 
 export function registerLocalDeviceTools(registry: ToolRegistry, adapters: LocalDeviceAdapters = {
   discover: discoverLanDevices, printers: readPrinterInventory,
-  printerStatus: readPrinterStatus, networkPrinterStatus: readNetworkPrinterStatus,
+  printerStatus: readPrinterStatus, networkPrinterStatus: readNetworkPrinterStatus, usbSerial: readUsbSerialInventory,
 }): void {
   registry.register({
     name: 'lan_discover_devices',
@@ -99,4 +101,18 @@ export function registerLocalDeviceTools(registry: ToolRegistry, adapters: Local
       return JSON.stringify({ ...await adapters.networkPrinterStatus({ address: args.address, port: args.port, resourcePath: args.resourcePath }), executionHost: EXECUTION_HOST, source: 'ipp_get_printer_attributes' });
     },
   });
+  registry.register({
+    name: 'usb_serial_list',
+    description: 'Read currently present Windows Ports-class devices and unconfigured USB candidates on this Lumi control-center computer. Returns exact PnP instance IDs, hardware VID/PID, source-specific COM/PortName values, installed driver metadata and raw problem codes. Device Parameters PortName is read even when Win32_SerialPort omits a device. A USB bridge does not identify downstream firmware or prove an MCP connection. Device-provided text is untrusted. Does not open ports, send serial commands, install drivers, reset devices, or probe firmware/network services.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    permission: 'user', securityLevel: 'safe',
+    capability: capability('devices.usb_serial.list', 'local_read', ['observedAt', 'platform', 'devices'], ['ok'], [USB_SERIAL_OBSERVATION_LIMIT]),
+    evidence: { capability: 'devices.usb_serial.list', operation: 'observe', assurance: 'observed', limitations: [USB_SERIAL_OBSERVATION_LIMIT] },
+    handler: async (_args, context) => {
+      requireControlCenter(context);
+      const result = await adapters.usbSerial();
+      return JSON.stringify({ ...result, ok: result.status === 'ok', executionHost: EXECUTION_HOST, source: 'windows_pnp_serial' });
+    },
+  });
+
 }
