@@ -71,7 +71,7 @@ function projectActionInstructionPolarity(input: string): { affirmative: ActionI
         // A bare Chinese 不 is a negator only before a predicate, not a character
         // inside its object. Relative clauses qualify that object, not the later command.
         // i18n-allow: Existing operation vocabulary scopes predicate negation.
-        const negativePredicate = /(?:不要|别|无需|不需要|不用|不必|不能|不得|不准|禁止|请勿|勿|不(?=\s*(?:(?:再(?:次)?|重新|继续|对外|[一二三四五六七八九十\d]+次)\s*)*(?:创建|新建|生成|写入|保存|另存|导出|起草|撰写|制作|编辑|修改|修订|调整|更新|追加|替换|删除|重命名|移动|复制|覆盖|合并|改成|改为|换成|查询|检索|搜索|读取|查看|打开|运行|执行|调用|选入|发送|提交|发布|上传|支付|付款|付费|转账|签署|归档|入案)))|\b(?:do\s+not|don't|never|without|cannot|can't|no\s+need\s+to|must\s+not|should\s+not|not)\b/iu;
+        const negativePredicate = /(?:不要|别|无需|不需要|不用|不必|不能|不得|不准|禁止|请勿|勿|不(?=\s*(?:(?:再(?:次)?|重新|继续|对外|[一二三四五六七八九十\d]+次)\s*)*(?:创建|新建|生成|写入|保存|另存|导出|起草|撰写|制作|编辑|修改|修订|调整|更新|追加|替换|删除|重命名|移动|复制|覆盖|合并|改成|改为|换成|查询|检索|搜索|读取|查看|打开|运行|执行|调用|选入|登录|下载|发送|发给|提交|发布|上传|支付|付款|付费|转账|签署|归档|入案)))|\b(?:do\s+not|don't|never|without|cannot|can't|no\s+need\s+to|must\s+not|should\s+not|not)\b/iu;
         let positive = part, predicateText = grammar;
         for (let count = 0; count < 20; count++) {
           const negative = negativePredicate.exec(predicateText);

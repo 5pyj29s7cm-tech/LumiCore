@@ -1,7 +1,7 @@
 import { requestedArtifactInstructions, artifactInstructionClauses } from './artifact_progress';
 import { affirmativeActionInstructionClauses } from './action_instruction_clauses';
 import { buildMediaGenerationContract } from './contracts/media_contract';
-import { isExplicitArtifactCreationText, isExternalCommitConfirmationOnlyRequest, normalizeActionIntent } from "./normalized_action_intent";
+import { isExplicitArtifactCreationText, normalizeActionIntent } from "./normalized_action_intent";
 import { isLegalEntryTurn } from "./legal_entry";
 import type { ActionIntentAnalysis } from "./normalized_action_intent";
 import { hasExplicitNoToolInstruction, isInformationOnlyQuestion, hasRequestedArtifactMutation } from "./tool_intent";
@@ -16,7 +16,7 @@ import { isMediaPauseRequest } from "./media_intent";
 import { CN_RESULT_GROUNDING_MESSAGES } from "../regions/messages/voice_fast_path_messages";
 import { isRuntimeCleanupOfferAcceptanceText } from "./pending_assistant_offer";
 import { compact, matches } from "./action_contract_support";
-import { extractPrimaryTaskText, isBrowserSessionInspection, requiresCurrentAppUiMutation, CURRENT_TURN_ATTACHMENTS_RE, requiresVisualModelAvailabilityCheck, requestsBlankAutoCadDocument, isDesktopLaunchVerificationOnly, hasNegatedMessagingSendIntent, requiresCurrentAuthoringDocumentInspection, requiresDesktopAiRequest, requiresDesktopAiAnswerReadback, requiresMediaPlaybackAction, isSimpleDesktopOpenRequest, requiresCadGeometryExtractionOnly, isDesignDeliveryTurn, isEcommerceOperationsTurn, isCustomerOperationsTurn, requiresVisibleAutoCadExecution, requiresAutoCadMcpPlayback, requestedDesktopWindowAction } from "./action_request";
+import { extractPrimaryTaskText, isBrowserSessionInspection, requiresCurrentAppUiMutation, CURRENT_TURN_ATTACHMENTS_RE, requiresVisualModelAvailabilityCheck, requestsBlankAutoCadDocument, isDesktopLaunchVerificationOnly, requiresCurrentAuthoringDocumentInspection, requiresDesktopAiRequest, requiresDesktopAiAnswerReadback, requiresMediaPlaybackAction, isSimpleDesktopOpenRequest, requiresCadGeometryExtractionOnly, isDesignDeliveryTurn, isEcommerceOperationsTurn, isCustomerOperationsTurn, requiresVisibleAutoCadExecution, requiresAutoCadMcpPlayback, requestedDesktopWindowAction } from "./action_request";
 import { requestsExactReadOnlyArtifactInspection } from "./action_desktop_evidence";
 import type { LumiActionContract } from './contracts/contracts';
 import { NONE_CONTRACT, withDefaults } from './contracts/contracts';
@@ -210,24 +210,9 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
   if (isDesktopLaunchVerificationOnly(text, normalizedIntent)) {
     return buildSimpleDesktopOpenContract();
   }
-  const confirmationOnlyExternalCommit = isExternalCommitConfirmationOnlyRequest(text);
-  const negatedMessagingSend = hasNegatedMessagingSendIntent(rawInput) && !confirmationOnlyExternalCommit;
   const appInventoryInspection = /\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
   const desktopObservationInspection = desktopObservationPlan.length > 0;
   const currentAuthoringDocumentInspection = requiresCurrentAuthoringDocumentInspection(rawInput);
-  const messagingActionText = affirmativeActionInstructionClauses(rawInput)
-    .filter(clause => !isInformationOnlyQuestion(clause.probe, analysis))
-    .map(clause => clause.probe).join('\n');
-  const directedMessageSend = normalizedIntent.kind === 'messaging_send' || (
-    normalizedIntent.kind !== 'messaging_read'
-    && (
-      matches(messagingActionText, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[^,\uFF0C\u3002\uFF01\uFF1F!?;\uFF1B\u3001\n]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u)
-      || matches(messagingActionText, /\b(?:send\s+(?:a\s+)?(?:message|note|reply)\s+to|send\s+(?:him|her|them|the\s+(?:client|customer|contact|group))|message\s+(?:him|her|them|the\s+(?:client|customer|contact|group)|@?(?!(?:has|have|had|is|was|were|contains?|includes?|body|content|attachment|file|text)\b)[\p{L}\p{N}_.'-]{1,40})|reply\s+to)\b/iu)
-    )
-  );
-  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  const directedMessagingInquiry = /(?:问(?:一下|问)?|询问)\s*[^\s，。！？,.!?:：;；、]{1,24}?(?:在干嘛|在做什么|干嘛|做什么|忙什么|现在怎么样|有没有空)/u.test(messagingActionText);
-
   const externalHistory = buildExternalHistoryActionContract(text);
   if (externalHistory) return externalHistory;
 
@@ -251,12 +236,7 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
     });
   }
 
-  if (
-    !readOnlyArtifactInspection &&
-    normalizedIntent.kind === 'messaging_read' &&
-    !directedMessageSend &&
-    !matches(text, /\u53d1\u9001|\u53d1\u7ed9|\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\bsend\b/i)
-  ) {
+  if (!readOnlyArtifactInspection && normalizedIntent.kind === 'messaging_read') {
     return withDefaults({
       kind: 'messaging_read',
       label: '\u524d\u53f0\u6d88\u606f\u8bfb\u53d6/\u804a\u5929\u67e5\u770b',
@@ -278,18 +258,8 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
     });
   }
 
-  if (
-    (
-      directedMessageSend ||
-      directedMessagingInquiry ||
-      (
-        matches(messagingActionText, /wechat|weixin|\u5fae\u4fe1|\u6d88\u606f|\u8054\u7cfb\u4eba|\u7fa4|message|messaging\s+app|chat\s+app/i) &&
-        matches(messagingActionText, /\u53d1\u9001|\u53d1\u7ed9|\u53d1\u4e00\u6761|\u53d1\u4e00\u4e0b|\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u665a\u5b89|\bsend\b|\breply\b/i)
-      )
-    ) &&
-    !negatedMessagingSend &&
-    (!matches(messagingActionText, /\u8349\u7a3f|\u5148\u5199|\u4e0d\u8981\u53d1|\bdraft\b/i) || confirmationOnlyExternalCommit)
-  ) {
+  // The canonical owner binds an affirmative send to its recipient and payload.
+  if (normalizedIntent.kind === 'messaging_send') {
     return withDefaults({
       kind: 'messaging_send',
       label: 'Verified message/file delivery',

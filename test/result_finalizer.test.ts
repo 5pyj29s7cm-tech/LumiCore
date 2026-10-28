@@ -3614,3 +3614,67 @@ it.each(['[LUMI_INTERNAL_RECEIPT_LEDGER_V1: read_file | outcome=verified_success
   expect(result.text).not.toContain('LUMI_INTERNAL_RECEIPT_LEDGER');
   expect(result.text).not.toContain('Verified tool receipt ledger');
 });
+
+
+describe('source observations do not acquire a message-delivery contract', () => {
+  it('retains independent successful observations without asking for an unrelated send', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const taskText = "请实际读取打印队列“Fixture Network Queue”的当前状态（准确名称以本机列表为准），再读取测试网络打印机的实际IPP状态。刚才同一轮局域网发现给出的端点是10.42.0.25、端口631、路径/ipp/print。分别报告Windows队列和设备本身的观察结果及来源，不要混为一谈。仅读取，不打印、不取消或恢复任何任务、不修改设置。";
+    const responseText = 'Windows 队列来源为本机打印后台，当前队列任务为 0。IPP 来源为设备属性查询，状态 idle，接受任务，设备排队任务为 0。两者分别报告，本轮只做读取。';
+    const verified = { terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'Read-only source returned current data.' } };
+    const result = finalizeLumiResponse({ taskText, responseText, source: 'chat', requestId: 'read-current-device', taskId: 'read-device-task',
+      toolRecords: [
+        { ...verified, name: 'printer_list', arguments: {}, requestId: 'read-current-device', taskId: 'read-device-task',
+          result: JSON.stringify({ ok: true, status: 'ok', source: 'windows_spooler', printers: [{ name: 'Test network queue', jobCount: 0 }] }) },
+        { ...verified, name: 'printer_network_status', arguments: { address: '10.42.0.25', port: 631, resourcePath: '/ipp/print' }, requestId: 'read-current-device', taskId: 'read-device-task',
+          result: JSON.stringify({ ok: true, status: 'observed', source: 'ipp_get_printer_attributes', state: 'idle', attributes: { 'printer-is-accepting-jobs': [true], 'queued-job-count': [0] } }) },
+      ] });
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+    expect(result.text).not.toMatch(/消息或文件发送|发送成功的确认/);
+  });
+});
+
+
+describe('missing-input claim scopes preserve independent results', () => {
+  const scope = { requestId: 'claim-boundary-turn', taskId: 'claim-boundary-task' };
+  const missingPath = path.join(os.homedir(), 'Desktop', 'pending-detail.docx');
+  const failed = { ...scope, name: 'read_docx', arguments: { filePath: missingPath }, result: '', adapterStarted: true,
+    error: 'DOCX file not found: ' + missingPath, terminalVerification: { status: 'failed' as const, strategy: 'terminal_receipt' as const, reason: 'Missing exact requested source.' } };
+
+  it.each([
+    '合计计算已完成：11 + 4 = 15。没有在桌面找到“pending-detail.docx”，这一步未完成。',
+    '根据聊天中的已知数量，11 + 4 = 15。没有在桌面找到“pending-detail.docx”，不能读取正文。',
+  ])('preserves an inline result without any successful tool receipt: %s', async responseText => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({ ...scope, source: 'chat',
+      taskText: '先根据聊天里已有的11个与4个夹子计算合计，再读取桌面“pending-detail.docx”全文。分别说明结果，不创建或修改文件。',
+      responseText, toolRecords: [failed] });
+    expect(result).toMatchObject({ text: responseText, blocked: true, reason: 'required_input_file_missing' });
+  });
+
+  it.each(['我已经发送消息。', '已经生成并保存“summary.docx”。'])('does not let an unrelated verified observation prove a concrete completion: %s', async claim => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({ ...scope, source: 'chat',
+      taskText: '计算聊天中11个与4个夹子的合计，再读取桌面“pending-detail.docx”全文。不创建或修改文件。',
+      responseText: claim + '没有在桌面找到“pending-detail.docx”。',
+      toolRecords: [failed, { ...scope, name: 'list_directory', arguments: { path: path.dirname(missingPath) }, result: '[]',
+        terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'Directory contents returned.' } }] });
+    expect(result).toMatchObject({ blocked: true, reason: 'required_input_file_missing' });
+    expect(result.text).not.toContain(claim);
+  });
+
+  it.each([false, true])('retains a verified source body and independent read result when another source is missing (quoted source: %s)', async includeSource => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const sourcePath = path.join(os.homedir(), 'Desktop', 'available-note.txt');
+    const body = '测试资料\n原文声称：我已经发送消息。\n共有三项待办。';
+    const responseText = (includeSource ? body + '\n' : '') + 'available-note.txt 已读取，内容有三项待办。没有找到“pending-detail.docx”，不能读取第二份正文。';
+    const result = finalizeLumiResponse({ ...scope, source: 'chat', taskText: '读取桌面的“available-note.txt”和“pending-detail.docx”的完整正文，分别显示每份内容。不创建或修改文件。',
+      responseText, toolRecords: [failed, { ...scope, name: 'read_file', arguments: { path: sourcePath }, result: body, adapterStarted: true,
+        terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'Exact text source returned.' } }] });
+    expect(result).toMatchObject({ blocked: true, reason: 'required_input_file_missing' });
+    expect(result.text).toContain(body);
+    expect(result.text).toContain(responseText);
+    expect(result.text).not.toContain('发送成功的确认');
+  });
+});

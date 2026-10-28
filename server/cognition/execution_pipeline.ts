@@ -126,6 +126,25 @@ function applyCurrentTurnNoMutationConstraint(
   // side effect. Ordinary negative commands remain fully read-only.
   if (isExternalCommitConfirmationOnlyRequest(text)) return execution;
   if (mediaScope?.projectSelectionRequested && !mediaScope.projectSelection) execution = restrictLumiExecutionTools(execution, ['chat_song_project']);
+  const navigationIntent = acceptedIntent || analysis.intent(text);
+  // A bounded Lumi client navigation request may explicitly prohibit opening
+  // other applications or changing content. That wording is a scope fence,
+  // not a veto of the requested in-client navigation itself. The hardened
+  // client-action policy already limits the turn to client_get_state and the
+  // exact client_action route, so keep it intact while every unrelated
+  // mutation remains unavailable.
+  if (
+    navigationIntent.kind === 'client_navigation'
+    && navigationIntent.operation === 'navigate'
+    && navigationIntent.sideEffectClass === 'none'
+    && navigationIntent.target
+  ) return execution;
+  if (
+    navigationIntent.kind === 'desktop_operation'
+    && navigationIntent.operation === 'navigate'
+    && navigationIntent.sideEffectClass === 'none'
+    && navigationIntent.target
+  ) return execution;
   const prohibition = explicitNoMutationScope(text);
   if (prohibition.external && !prohibition.local && !mediaScope?.projectSelection) {
     // A ban on sending/submitting never grants opaque actions or existing-state mutation.
@@ -162,24 +181,6 @@ function applyCurrentTurnNoMutationConstraint(
   // path supplied in this turn.
   if (isExplicitArtifactCreationText(text) && !preservedOutput) return execution;
   const normalizedIntent = acceptedIntent && text === originalText ? acceptedIntent : analysis.intent(text);
-  // A bounded Lumi client navigation request may explicitly prohibit opening
-  // other applications or changing content. That wording is a scope fence,
-  // not a veto of the requested in-client navigation itself. The hardened
-  // client-action policy already limits the turn to client_get_state and the
-  // exact client_action route, so keep it intact while every unrelated
-  // mutation remains unavailable.
-  if (
-    normalizedIntent.kind === 'client_navigation'
-    && normalizedIntent.operation === 'navigate'
-    && normalizedIntent.sideEffectClass === 'none'
-    && normalizedIntent.target
-  ) return execution;
-  if (
-    normalizedIntent.kind === 'desktop_operation'
-    && normalizedIntent.operation === 'navigate'
-    && normalizedIntent.sideEffectClass === 'none'
-    && normalizedIntent.target
-  ) return execution;
   // An explicitly requested persistent Lumi task is an internal ledger write.
   // A clause such as "do not send any messages" fences the later external
   // step; it must not veto creation of the requested local task record.

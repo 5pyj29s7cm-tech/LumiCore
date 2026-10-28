@@ -400,14 +400,11 @@ export function isDesktopLaunchVerificationOnly(
     || normalizedIntent.operation !== 'navigate'
     || normalizedIntent.sideEffectClass !== 'none'
   ) return false;
-  // A file mentioned only in a prohibition is not a file-reading task.
-  // Stop at commas so a following affirmative operation stays visible.
-  const withoutExclusions = text
-    .replace(/(?:\u7981\u6b62|\u4e0d\u8981|\u4e0d\u51c6|\u4e0d\u5f97|\u4e0d\u7528|\u65e0\u9700|\u907f\u514d|\u52ff|\u522b)[^\u3002\uFF0C\uFF1B,;.!?\n\r]*/giu, ' ')
-    .replace(/\b(?:do\s+not|don't|never|must\s+not|without)\b[^,.;!?\n\r]*/giu, ' ');
+  // Inspect action predicates through the shared polarity/location projection.
+  const withoutExclusions = affirmativeActionClauses(withoutLocationLiterals(text)).join('\n');
   if (isDocumentOpenAndReviewRequest(withoutExclusions)) return false;
   const target = compact(normalizedIntent.target);
-  if (!target || /(?:https?:|www\.|\u7f51\u7ad9|\u7f51\u9875|\u6d4f\u89c8\u5668)/iu.test(target)) return false;
+  if (!target) return false;
   if (/(?:\u767b\u5f55|\u641c\u7d22|\u67e5\u627e|\u627e\u4e00\u4e0b|\u8be2\u95ee|\u95ee\u4e00\u4e0b|\u56de\u590d|\u8f93\u5165|\u7f16\u8f91|\u53d1\u9001|\u64ad\u653e|\u521b\u5efa|\u751f\u6210|\u7ed8\u5236|\u753b\u56fe|\u70b9\u51fb|\u62d6\u62fd|\u9f20\u6807|\u952e\u76d8|\u5199\u5165|\u4fdd\u5b58|\u5bfc\u51fa|\u53d1\u5e03)|\b(?:login|search|find|ask|message|reply|type|edit|send|play|create|generate|draw|operate|mouse|keyboard|cursor|click|drag|write|save|export|publish)\b/iu.test(withoutExclusions)) {
     return false;
   }

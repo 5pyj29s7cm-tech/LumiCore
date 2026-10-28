@@ -1,3 +1,4 @@
+import { isDesktopLaunchVerificationOnly } from '../server/cognition/action_request';
 import { foregroundPipeline } from './foreground_pipeline_fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { readDB } from '../db_layer';
@@ -798,3 +799,100 @@ describe('fresh source status reads do not become previous Lumi task status', ()
 });
 
 it('does not map an English external task status request onto the Lumi runtime ledger', () => { expect(normalizeActionIntent('Query the external fulfillment task status for order ORD-9841 from its supplied source.')).not.toMatchObject({kind:'status_query',target:'runtime_work'}); });
+
+
+describe('fresh navigation does not become a named desktop status fragment', () => {
+  it.each([
+    ['请用系统浏览器打开 https://www.python.org/ ，停在首页，告诉我实际打开的结果。不登录、不下载、不提交任何表单。', 'https://www.python.org/'],
+    ['请用系统浏览器打开 https://developer.mozilla.org/zh-CN/，报告实际打开的结果。', 'https://developer.mozilla.org/zh-CN/'],
+    ['请用系统浏览器打开 https://www.w3.org/standards/，停在首页，然后说明实际打开的结果。不要登录或提交表单。', 'https://www.w3.org/standards/'],
+    ['请打开 Windows 计算器，告诉我实际打开的结果。不要输入或保存。', 'Windows 计算器'],
+  ])('retains the affirmative current target: %s', (text, target) => {
+    expect(normalizeActionIntent(text)).toMatchObject({ kind: 'desktop_operation', operation: 'navigate', target, relation: 'new', sideEffectClass: 'none' });
+  });
+  it.each([
+    ['打开 Windows 计算器的任务最终状态是什么？请只根据持久任务账本回答，不要执行任何新工具。', 'Windows 计算器'],
+    ['启动记事本的结果如何？', '记事本'],
+  ])('keeps an independent named receipt question bound to its target: %s', (text, target) => {
+    expect(normalizeActionIntent(text)).toMatchObject({ kind: 'status_query', operation: 'status', target, relation: 'status', sideEffectClass: 'none' });
+  });
+});
+
+describe('canonical outgoing roles keep complete recipient operands', () => {
+  it.each([
+    ['把领航员计划2026发给我', '我', '领航员计划2026'],
+    ['请把桌面的报价单.pdf发给张三', '张三', '桌面的报价单.pdf'],
+    ['将完整说明发送给陈小明', '陈小明', '完整说明'],
+    ['发送给张三 操作说明', '张三', '操作说明'],
+    ['发给张三', '张三', ''],
+    ['发送给李小明', '李小明', ''],
+  ])('binds the supplied audience and content without splitting the name: %s', (text, target, payload) => {
+    expect(normalizeActionIntent(text)).toMatchObject({ kind: 'messaging_send', operation: 'mutate', target, payload, sideEffectClass: 'external_commit' });
+  });
+  it.each([
+    '不要发给张三。',
+    '不发给张三。',
+    '我没让你发给张三。',
+    '我怎么把完整说明发给陈小明？请先讲操作步骤。',
+    '原文写着“把报价单发给张三”。只解释这句话。',
+  ])('does not promote prohibited, denied or explained sends into an external action: %s', text => {
+    expect(normalizeActionIntent(text).kind).not.toBe('messaging_send');
+  });
+});
+
+
+describe('one polarity projection owns launch verification and message authoring', () => {
+  it.each([
+    '请用系统浏览器打开 https://www.python.org/，停在首页，告诉我实际打开的结果。不登录、不下载、不提交任何表单。',
+    '请用系统浏览器打开 https://example.org/login/search/send，报告实际打开的结果。不要登录或提交表单。',
+  ])('does not turn URL operands or exclusions into follow-up account work: %s', text => {
+    expect(isDesktopLaunchVerificationOnly(text, normalizeActionIntent(text))).toBe(true);
+  });
+  it.each([
+    '请用系统浏览器打开 https://example.org/，然后登录我的账号。',
+    '请打开 https://example.org/，搜索今天的公开公告。',
+  ])('keeps real account and search operations beyond a launch receipt: %s', text => {
+    expect(isDesktopLaunchVerificationOnly(text, normalizeActionIntent(text))).toBe(false);
+  });
+  it('keeps a send mentioned as the object of writing in the draft authoring scope', () => {
+    expect(normalizeActionIntent('先写一条给林森发送的消息草稿：下午三点开会').kind).not.toBe('messaging_send');
+    expect(normalizeActionIntent('给林森发送这份草稿')).toMatchObject({ kind: 'messaging_send', target: '林森', payload: '这份草稿' });
+    expect(normalizeActionIntent('发送这份草稿给林森')).toMatchObject({ kind: 'messaging_send', target: '林森', payload: '这份草稿' });
+  });
+});
+
+
+describe('existing polite delivery and historical receipt phrasing', () => {
+  it.each([
+    ['Can you send a message to Alice: I will arrive at three?', 'Alice'],
+    ['Could you message Alice that I will arrive at three?', 'Alice'],
+    ['微信帮我给林森发下午三点开会', '林森'],
+    ['用微信给林森发下午三点开会', '林森'],
+  ])('keeps the actual recipient through the outer request or instrument prefix: %s', (text, target) => {
+    expect(normalizeActionIntent(text)).toMatchObject({ kind: 'messaging_send', target, sideEffectClass: 'external_commit' });
+  });
+  it.each([
+    ['请告诉我打开 Windows 计算器的任务最终状态是什么？', 'Windows 计算器'],
+    ['刚才打开 Windows 计算器的结果怎么样？', 'Windows 计算器'],
+    ['请问启动记事本的结果如何？', '记事本'],
+    ['我刚才让你打开记事本的结果是什么？', '记事本'],
+  ])('preserves the named historical target rather than the most recent task: %s', (text, target) => {
+    expect(normalizeActionIntent(text)).toMatchObject({ kind: 'status_query', operation: 'status', target, relation: 'status' });
+  });
+});
+
+
+describe('delivery predicates do not split discovery prose or lose quoted content', () => {
+  it.each([
+    '使用本次发现给出的端点读取设备状态',
+    '通过局域网发现给出的节点查看状态',
+  ])('does not derive a send from adjacent word fragments: %s', text => {
+    expect(normalizeActionIntent(text).kind).not.toBe('messaging_send');
+  });
+  it.each([
+    ['给张勇发「明天见」', '张勇'],
+    ['给林森发送“明天见”', '林森'],
+  ])('restores a literal payload only for the outer addressed send: %s', (text, target) => {
+    expect(normalizeActionIntent(text)).toMatchObject({ kind: 'messaging_send', target, payload: '明天见', sideEffectClass: 'external_commit' });
+  });
+});

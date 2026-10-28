@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T10:32:19.588Z",
+  "updatedAt": "2026-10-28T11:15:26.311Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序外部链接与设备测试、旧桌面端清理",
-    "status": "partial-known-routing-failures-retained-cleanup-completed",
-    "instruction": "保留真实失败及ComputerUse停止边界；旧客户端和闲置程序产物清理已完成。"
+    "title": "主程序网页与设备查询误判修复",
+    "status": "software-scope-validated-normal-chat-replay-pending",
+    "instruction": "重复关键词投影和不正确的权限裁剪已修正；保持默认DeepSeek，原会话完整复测待验，不重印或发送消息。"
   },
   "acceptedWholeItems": [
     3,
@@ -289,7 +289,7 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "external-links-devices-tested-known-routing-blockers-retained-old-client-uninstalled",
+    "status": "routing-owner-repair-software-validated-replay-pending",
     "priority": "USB/LAN观察可用；IPP实际待机但组合聊天被旧发送合同误判；外链打开存在状态投影和工具裁剪问题，准确网址核对因ComputerUse安全停止未通过；旧桌面端已卸载，用户数据保留"
   },
   "archivedLegalDevelopment": {
@@ -1500,5 +1500,41 @@
       "sha256": "f8be3c58cc17c9072e0d5beacb6593f2c77cfc7c905ce8bcc5559644c7edbb56",
       "files": 14
     }
+  },
+  "latestMainRoutingOwnerRepair": {
+    "at": "2026-10-28T11:15:26.311Z",
+    "status": "software-scope-validated-normal-chat-replay-pending",
+    "sourceEvidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-routing-owner-repair-1793184771614/software-source",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-routing-owner-repair-1793184771614/software-source/evidence-seal.json",
+      "sha256": "c6b0cefb36dffa7fd525892477827d0c9a48972a307d59213f96473e7e55d5c5",
+      "files": 13
+    },
+    "validation": {
+      "at": "2026-10-28T11:15:26.305Z",
+      "normalizer": {
+        "tests": "202/202",
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-url-send-normalizer-repair-1793184883252/sidecar-send-role-1793185905509",
+        "manifestSha256": "8e73eddf75737e3c70b0b06d73bdd2c8bf50d41f5968b7b2ffe36abe1d2116ff"
+      },
+      "contractAndClaim": {
+        "scopeNewTests": "13/13",
+        "related": "319/360;41 same HEAD baseline failures; no new failures",
+        "types": "passed",
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-action-contract-projection-1793184794575"
+      },
+      "pipeline": {
+        "regressions": "5/5",
+        "related": "152/156;4 previously independently reproduced HEAD failures; one former messaging fixture now passes",
+        "tests": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-routing-owner-repair-1793184771614/final-check-0.json",
+        "types": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-routing-owner-repair-1793184771614/final-check-1.json"
+      },
+      "scope": "Only misrouting and associated compatibility; no hardware writes or real messaging"
+    },
+    "defaultModelChanged": false,
+    "newVerificationLayer": false,
+    "fixedAnswers": false,
+    "printSubmissions": 0,
+    "wholeApplicationAccepted": false
   }
 }

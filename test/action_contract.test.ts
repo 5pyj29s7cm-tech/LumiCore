@@ -1690,3 +1690,38 @@ describe('procedural questions do not invent message delivery', () => {
     expect(buildActionContract(text)).toMatchObject({ applies: true, kind: 'messaging_send' });
   });
 });
+
+
+describe('canonical messaging and navigation contracts', () => {
+  it.each([
+    '请查看局域网发现给出的端点状态。',
+    '按监控系统发现给出的节点地址读取当前状态。',
+    "请实际读取打印队列“Fixture Network Queue”的当前状态（准确名称以本机列表为准），再读取测试网络打印机的实际IPP状态。刚才同一轮局域网发现给出的端点是10.42.0.25、端口631、路径/ipp/print。分别报告Windows队列和设备本身的观察结果及来源，不要混为一谈。仅读取，不打印、不取消或恢复任何任务、不修改设置。",
+  ])('does not invent message delivery from descriptive source prose: %s', text => {
+    expect(buildActionContract(text).kind).not.toBe('messaging_send');
+  });
+
+  it.each([
+    ["请用系统浏览器打开 https://www.python.org/ ，停在首页，告诉我实际打开的结果。不登录、不下载、不提交任何表单。", 'https://www.python.org/'],
+    ['打开 https://example.org/status ，停在首页。不要登录、下载或提交表单。', 'https://example.org/status'],
+  ])('uses the accepted pure navigation intent without adding account work: %s', (text, target) => {
+    const intent = { kind: 'desktop_operation', operation: 'navigate', subject: 'user', target,
+      payload: '', sideEffectClass: 'none', relation: 'new', confidence: 1, rule: 'explicit-local-desktop-operation' } as const;
+    const contract = buildActionContract(text, intent);
+    expect(contract).toMatchObject({ kind: 'desktop_operation', label: 'Desktop target launch/open' });
+    expect(contract.requiredEvidence.join(' ')).not.toMatch(/logged.in|account|session/i);
+    expect(contract.preferredTools).not.toContain('web_login_run');
+    expect(hasCoreActionEvidence(contract, [{ name: 'browser_open_task', arguments: { url: target, open: true },
+      result: JSON.stringify({ opened: true, url: target }) }], text)).toBe(true);
+  });
+});
+
+
+describe('messaging contract follows the requested operation', () => {
+  it('separates drafting a future message from sending a draft', () => {
+    expect(buildActionContract('先写一条给林森发送的消息草稿：下午三点开会').kind).not.toBe('messaging_send');
+    const send = buildActionContract('给林森发送这份草稿');
+    expect(send.kind).toBe('messaging_send');
+    expect(hasCoreActionEvidence(send, [], '给林森发送这份草稿')).toBe(false);
+  });
+});

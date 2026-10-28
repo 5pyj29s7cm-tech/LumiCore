@@ -1,3 +1,4 @@
+import { hasConcreteTerminalExecutionClaim } from './execution_claims';
 import { affirmativeActionInstructionClauses } from './action_instruction_clauses';
 import { CN_ACTION_CONTRACT_COPY } from '../regions/messages/action_contract_copy';
 import type { ToolExecutionRecord } from '../tools/types';
@@ -527,12 +528,18 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
         && documentReadMatchesRequestedTarget(record, actionText, input.flow?.acceptedTaskTarget, input.flow?.currentAttachmentPaths))
       .map(record => ({ path: artifactPathFromRecord(record), name: artifactPathFromRecord(record).split(/[\\/]/u).pop(), body: actualDocumentReadContent(record) })) : [];
     const claimText = availableSources.reduce((text, source) => source.body ? text.split(source.body).join('\n') : text, modelText);
-    const checked = affirmativeActionInstructionClauses(claimText).every(clause => !guardCompletionClaims({
-      task: clause.probe, response: clause.text,
-      toolCalls: buildActionContract(clause.probe).applies ? input.toolRecords || [] : [],
-      source: input.source, requestId: input.requestId, taskId: input.taskId,
-      acceptedTaskTarget: input.flow?.acceptedTaskTarget,
-    }).blocked);
+    const checked = affirmativeActionInstructionClauses(claimText).every(clause => {
+      const contract = buildActionContract(clause.probe);
+      // A completion statement is not a new instruction. If it has no bound
+      // action contract, unrelated successful reads cannot prove that claim.
+      if (!contract.applies && hasConcreteTerminalExecutionClaim(clause.probe)) return false;
+      return !guardCompletionClaims({
+        task: clause.probe, response: clause.text,
+        toolCalls: contract.applies ? input.toolRecords || [] : [],
+        source: input.source, requestId: input.requestId, taskId: input.taskId,
+        acceptedTaskTarget: input.flow?.acceptedTaskTarget,
+      }).blocked;
+    });
     const explanation = modelText && missingNames.length && missingNames.every(name => modelNames.includes(name.toLocaleLowerCase()))
       && checked
       ? modelText : missingInput.text;

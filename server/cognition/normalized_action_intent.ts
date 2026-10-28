@@ -748,23 +748,16 @@ function statusQuery(text: string): NormalizedActionIntent | null {
     };
   }
 
-  // A status question can name an exact desktop target while still containing
-  // an action verb, for example "打开 Windows 计算器的任务最终状态是什么".
-  // Preserve that target so the persistent ledger does not fall back to the
-  // most recently updated (and possibly unrelated) task.
-  const namedDesktopStatus = text.match(
-    /(?:\u6253\u5f00|\u542f\u52a8)\s*([^\u3002\uff01\uff1f\uff0c\uff1b,;?\n]{1,80}?)(?:\u7684)?(?:\u4efb\u52a1)?(?:\u6700\u7ec8)?(?:\u72b6\u6001|\u7ed3\u679c)(?:\u662f\u4ec0\u4e48|\u5982\u4f55|\u600e\u4e48\u6837|\u4e3a)?/iu,
-  )?.[1]?.trim();
-  if (namedDesktopStatus && !/(?:\u68c0\u67e5|\u67e5\u770b|\u767b\u5f55)/u.test(namedDesktopStatus)) {
+  // Bind a standalone named status question, not an action-shaped fragment
+  // inside a fresh instruction such as reporting the result after opening.
+  const namedDesktopStatus = actionInstructionClauses(text).map(({ probe }) => probe.match(
+    // i18n-allow: Existing named desktop receipt question, scoped to its clause.
+    /(?:^|[：:])\s*(?:请你?\s*)?(?:(?:告诉我|说明|报告|问)\s*)?(?:(?:我)?(?:刚才|刚刚|上次|上一轮)\s*(?:(?:让|叫|要求)你)?\s*)?(?:打开|启动)\s*([^。！？，；,;?\n]{1,80}?)(?:的)?(?:任务)?(?:最终)?(?:状态|结果)(?:是什么|如何|怎么样|为)?[。！？!?\s]*$/iu,
+  )?.[1]?.trim()).find(Boolean);
+  if (namedDesktopStatus && !/(?:检查|查看|登录)/u.test(namedDesktopStatus)) { // i18n-allow: Existing observation predicates are not saved launch targets.
     return {
-      kind: 'status_query',
-      operation: 'status',
-      subject: 'lumi',
-      target: namedDesktopStatus,
-      payload: '',
-      sideEffectClass: 'none',
-      relation: 'status',
-      confidence: 0.99,
+      kind: 'status_query', operation: 'status', subject: 'lumi', target: namedDesktopStatus,
+      payload: '', sideEffectClass: 'none', relation: 'status', confidence: 0.99,
       rule: 'named-desktop-status-before-action',
     };
   }
@@ -805,10 +798,6 @@ function statusQuery(text: string): NormalizedActionIntent | null {
   // "状态：..." or text mentioning a Lumi surface. Those nouns do not make
   // the turn a status follow-up; the explicit create/write action wins.
   if (isExplicitArtifactCreationText(text)) return null;
-
-  // A URL may contain an internal surface name (chat, files, etc.). Opening
-  // that URL and inspecting login state is new work, not prior-task status.
-  if (/(?:\u6253\u5f00|\bopen\b)\s+https?:\/\//iu.test(text)) return null;
 
   const registeredSurfaceStatus =
     /(?:进度(?:怎么样|如何|呢)|状态(?:是什么|怎么样|如何|呢)|结果呢|做到哪|到哪了|做完了吗|完成了吗|好了吗)/u.test(text) // i18n-allow: Reviewed Chinese status-follow-up input recognition.
@@ -1013,35 +1002,35 @@ function outgoingMessageSend(text: string): NormalizedActionIntent | null {
   const confirmationOnly = isExternalCommitConfirmationOnlyRequest(text);
   // i18n-allow: Chinese negative-send input recognition; not user-visible copy.
   if (!confirmationOnly && hasNegatedMessagingSendIntent(text)) return null;
-  const patterns = [ // i18n-allow: Chinese outbound-message semantic-role recognition; not user-visible copy.
-    /(?:请)?(?:准备)?给(?:测试联系人)?\s*[「『“"']([^」』”"']{1,32})[」』”"']\s*(?:发送消息|发消息|发)\s*[「『“"']([\s\S]{1,1000}?)[」』”"']/u, // i18n-allow: confirmation-only outbound-message semantic-role recognition.
-    /(?:发送|回复|发)给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})\s*[「『“"']([\s\S]{1,1000}?)[」』”"']/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
-    /(?:我|帮我|替我|麻烦你|请你|你)?\s*给\s*([^\s，。！？!?：:；;、]{1,32})\s*(?:发送|回复|告诉|发|说(?!明))\s*([\s\S]{1,1000})/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
-    /(?:我|帮我|替我|麻烦你|请你|你)?\s*(?:发送|回复|发)给\s*([^\s，。！？!?：:；;、]{1,32})\s*([\s\S]{1,1000})/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
-    /(?:微信\s*)?(?:问一下|问问|询问)\s*([^\s，。！？!?：:；;、]{1,32})\s*([\s\S]{1,1000})/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
-    /(?:send\s+(?:a\s+message\s+)?(?:to\s+)?|message\s+|reply\s+to\s+)(?!(?:has|have|had|is|was|were|contains?|includes?|with|body|content|attachment|file|text)\b)([\p{L}\p{N}_.'-]{1,40})\s*:?\s*([\s\S]{1,1000})/iu,
+  // The outer affirmative predicate owns delivery. An embedded send inside
+  // a request to write a draft is content, while sending that draft is work.
+  // i18n-allow: Shared Chinese imperative modifiers and foreground preparation.
+  const prefix = String.raw`^(?:(?:用|使用|通过)\s*[^，,。！？!?；;\n]{1,80}?\s*|[^\s，,。！？!?；;\n]{1,32}?(?=帮我|替我|请你))?(?:(?:我|帮我|替我|麻烦你?|请你?|你|现在|先|再|然后|接着|随后|并且|准备)\s*)*`;
+  const foreground = String.raw`(?:(?:打开|启动|切换到)\s*[^，,。！？!?；;\n]{1,80}?\s*(?:然后|并|再)?\s*)?`;
+  const patterns: Array<{ pattern: RegExp; payloadFirst?: boolean; recipientOnly?: boolean; allowPronoun?: boolean }> = [
+    // i18n-allow: Disposal/object-before-send and send-object-to-recipient roles.
+    { pattern: new RegExp(prefix + String.raw`(?:把|将)\s*([\s\S]{1,1000}?)\s*(?:发送|回复|发)给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})[。！？!?\s]*$`, 'u'), payloadFirst: true, allowPronoun: true },
+    { pattern: new RegExp(prefix + String.raw`(?:发送|回复)\s*(?!给)([\s\S]{1,1000}?)\s*给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})[。！？!?\s]*$`, 'u'), payloadFirst: true, allowPronoun: true },
+    { pattern: new RegExp(prefix + String.raw`给(?:测试联系人)?\s*[「『“"']([^」』”"']{1,32})[」』”"']\s*(?:发送消息|发消息|发)\s*[「『“"']([\s\S]{1,1000}?)[」』”"']`, 'u') },
+    { pattern: new RegExp(prefix + String.raw`(?:发送|回复|发)给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})\s*[「『“"']([\s\S]{1,1000}?)[」』”"']`, 'u'), allowPronoun: true },
+    { pattern: new RegExp(prefix + foreground + String.raw`给\s*([^\s，。！？!?：:；;、]{1,32})\s*(?:发送|回复|告诉|发|说(?!明))\s*([\s\S]{1,1000})`, 'u') },
+    { pattern: new RegExp(prefix + String.raw`(?:发送|回复|发)给\s*([^\s，。！？!?：:；;、]{1,32})(?:\s+|[：:])([\s\S]{1,1000})`, 'u'), allowPronoun: true },
+    { pattern: new RegExp(prefix + String.raw`(?:微信\s*)?(?:问一下|问问|询问)\s*([^\s，。！？!?：:；;、]{1,32})\s*([\s\S]{1,1000})`, 'u') },
+    { pattern: /^(?:(?:please|now|then|next|also)\s+|(?:can|could|would|will)\s+you\s+)*(?:send\s+(?:a\s+message\s+)?(?:to\s+)?|message\s+|reply\s+to\s+)(?!(?:has|have|had|is|was|were|contains?|includes?|with|body|content|attachment|file|text)\b)([\p{L}\p{N}_.'-]{1,40})\s*:?\s*([\s\S]{1,1000})/iu },
+    { pattern: new RegExp(prefix + String.raw`(?:发送|回复|发)给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})[。！？!?\s]*$`, 'u'), recipientOnly: true, allowPronoun: true },
   ];
   for (const { text: clauseText, probe } of affirmativeActionInstructionClauses(text)) {
-    // A quoted recipient is masked by the shared projection; the send predicate remains outside the literal.
-    // i18n-allow: Existing outbound predicate roles with a projected literal recipient.
-    if (!patterns.some(pattern => pattern.test(probe))
-      && !/^(?:(?:我|帮我|替我|麻烦你|请你?|你|准备)\s*)*(?:给\s*(?:发送消息|发消息|发送|回复|告诉|发|说)|(?:发送|回复|发)给)/u.test(probe)) continue;
-    for (const pattern of patterns) {
+    // Quoted recipients are masked; only an outer delivery predicate may restore them.
+    if (!patterns.some(({ pattern }) => pattern.test(probe))
+      && !new RegExp(prefix + foreground + String.raw`(?:给\s*(?:[^\s，。！？!?：:；;、「」『』“”"']{1,32}\s*)?(?:发送消息|发消息|发送|回复|告诉|发|说)|(?:发送|回复|发)给)`, 'u').test(probe)) continue;
+    for (const { pattern, payloadFirst, recipientOnly, allowPronoun } of patterns) {
       const match = clauseText.match(pattern);
-      const target = trimSlot(match?.[1] || '');
-      const payload = trimSlot(match?.[2] || '');
-      if (!target || !payload || /^(?:我|我们|你|你们)$/u.test(target)) continue; // i18n-allow: Chinese pronoun input recognition.
-      const requestPrefix = clauseText.slice(0, match?.index || 0).split(/[，,。！？!?；;\n]/u).pop() || '';
-      if (/(?:怎么|如何|怎样|教我|请教|不知道|不清楚|不懂)|\b(?:how|teach\s+me)\b/iu.test(requestPrefix)) continue; // i18n-allow: A send verb inside a how-to question is not an external command.
+      const target = trimSlot(match?.[payloadFirst ? 2 : 1] || '');
+      const payload = recipientOnly ? '' : trimSlot(match?.[payloadFirst ? 1 : 2] || '');
+      if (!target || !recipientOnly && !payload || !allowPronoun && /^(?:我|我们|你|你们)$/u.test(target)) continue; // i18n-allow: Conversational pronouns alone are not an addressed message.
       return {
-        kind: 'messaging_send',
-        operation: 'mutate',
-        subject: 'user',
-        target,
-        payload,
-        sideEffectClass: 'external_commit',
-        relation: 'new',
-        confidence: 0.97,
+        kind: 'messaging_send', operation: 'mutate', subject: 'user', target, payload,
+        sideEffectClass: 'external_commit', relation: 'new', confidence: 0.97,
         rule: 'messaging-outbound-role',
       };
     }

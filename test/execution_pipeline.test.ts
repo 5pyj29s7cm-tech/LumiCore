@@ -40,6 +40,43 @@ function createRegistry(): ToolRegistry {
 }
 
 describe('unified execution pipeline', () => {
+  it.each(['chat', 'voice'] as const)('keeps a complete URL launch request on the navigation owner for %s', channel => {
+    const text = '请用系统浏览器打开 https://example.org/ ，停在首页，告诉我实际打开的结果。不登录、不下载、不提交任何表单。';
+    const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'navigation-complete-scope', channel, source: channel,
+      operationMode: 'assistant', targetIsLumi: true, text }, registry: createRegistry(),
+      personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: ['desktop_open'], maxIterations: 10 } });
+    expect(pipeline.normalizedIntent).toMatchObject({ kind: 'desktop_operation', operation: 'navigate', target: 'https://example.org/' });
+    const contract = buildActionContract(text);
+    expect(contract.kind).toBe('desktop_operation');
+    expect(contract.preferredTools).toContain('desktop_open');
+    expect(contract.preferredTools).not.toContain('web_login_profile_list');
+    expect(pipeline.modelToolProjection.toolNames).toContain('desktop_open');
+    expect(pipeline.authorizationPolicy.forbiddenTools).not.toContain('desktop_open');
+    expect(pipeline.authorizationPolicy.requireConfirmation).toContain('desktop_open');
+    expect(pipeline.modelToolProjection.toolNames).not.toContain('send_email');
+  });
+
+  it.each(['chat', 'voice'] as const)('preserves canonical navigation with an external-commit fence for %s', channel => {
+    const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'navigation-fence', channel, source: channel,
+      operationMode: 'assistant', targetIsLumi: true,
+      text: '打开 https://example.org/。不要提交任何内容。' }, registry: createRegistry(),
+      personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: ['desktop_open'], maxIterations: 10 } });
+    expect(pipeline.normalizedIntent).toMatchObject({ kind: 'desktop_operation', operation: 'navigate', sideEffectClass: 'none' });
+    expect(pipeline.authorizationPolicy.forbiddenTools).not.toContain('desktop_open');
+    expect(pipeline.modelToolProjection.toolNames).toContain('desktop_open');
+    expect(pipeline.authorizationPolicy.requireConfirmation).toContain('desktop_open');
+    expect(pipeline.modelToolProjection.toolNames).not.toContain('send_email');
+    expect(pipeline.modelToolProjection.toolNames).not.toContain('submit_form');
+  });
+
+  it('keeps an explicit no-tool fence stronger than a navigation phrase', () => {
+    const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'navigation-no-tool', channel: 'chat', source: 'chat',
+      operationMode: 'assistant', targetIsLumi: true,
+      text: '不要调用任何工具。只解释如何打开 https://example.org/。' }, registry: createRegistry() });
+    expect(pipeline.executionRequested).toBe(false);
+    expect(pipeline.modelToolProjection.toolNames).not.toContain('desktop_open');
+  });
+
   it.each([
     ['chat', 'chat'], ['voice', 'voice'], ['task', 'task'],
     ['chat', 'rest_chat'], ['autonomy', 'autonomy'], ['chat', 'feishu'],
