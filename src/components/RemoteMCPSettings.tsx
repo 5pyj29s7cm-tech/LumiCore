@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Satellite, Plus, Trash2, Save, Globe, ExternalLink } from 'lucide-react';
+import { Satellite, Plus, Trash2, Save, Globe } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
@@ -79,7 +79,7 @@ function RemoteDeviceEditor({ t }: { t: any }) {
       <div className="space-y-8 animate-in fade-in duration-500">
         <div className="flex items-center gap-3">
           <Satellite className="text-celestial-saturn" />
-          <h3 className="text-xl font-bold uppercase tracking-tighter text-white/90">{t.remoteMCPDevices || 'Remote MCP Devices'}</h3>
+          <h3 className="text-xl font-bold uppercase tracking-tighter text-white/90">{t.remoteMCPDevices || 'Expose Lumi via remote MCP'}</h3>
         </div>
         <p className="text-white/40 text-sm">{t.loadingRemoteConfig || 'Loading remote device configuration...'}</p>
       </div>
@@ -92,11 +92,11 @@ function RemoteDeviceEditor({ t }: { t: any }) {
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center gap-3">
         <Satellite className="text-celestial-saturn" />
-        <h3 className="text-xl font-bold uppercase tracking-tighter text-white/90">{t.remoteMCPDevices || 'Remote MCP Devices'}</h3>
+        <h3 className="text-xl font-bold uppercase tracking-tighter text-white/90">{t.remoteMCPDevices || 'Expose Lumi via remote MCP'}</h3>
       </div>
 
       <p className="text-sm text-white/40 max-w-xl">
-        {t.remoteMCPDesc || 'Configure remote devices (e.g. XiaoZhi, smart speakers) that connect to Lumi via MCP over WebSocket. Changes take effect on server restart.'}
+        {t.remoteMCPDesc || 'Configure a WebSocket endpoint through which an external MCP client can call Lumi tools. Saving an endpoint does not connect Lumi to that device\'s control tools. Changes take effect on server restart.'}
       </p>
 
       {devices.length === 0 ? (
@@ -126,7 +126,7 @@ function RemoteDeviceEditor({ t }: { t: any }) {
                         disabled={saving}
                         value={device.name}
                         onChange={e => updateRow(i, 'name', e.target.value)}
-                        placeholder={t.deviceNamePlaceholder || 'Device name (e.g. xiaozhi)'}
+                        placeholder={t.deviceNamePlaceholder || 'Endpoint name'}
                         className="bg-white/5 border-white/10 rounded-xl py-2 text-sm font-bold"
                       />
                     ) : (
@@ -138,21 +138,12 @@ function RemoteDeviceEditor({ t }: { t: any }) {
                         disabled={saving}
                       value={device.url}
                       onChange={e => updateRow(i, 'url', e.target.value)}
-                      placeholder={t.deviceURLPlaceholder || 'wss://device-url/mcp/?token=...'}
+                      placeholder={t.deviceURLPlaceholder || 'wss://endpoint/mcp/'}
                       className="bg-white/5 border-white/10 rounded-xl py-2 text-xs font-mono"
                     />
                   ) : (
                     <div className="flex items-center gap-2">
                       <p className="text-xs text-white/55 font-mono truncate max-w-md">{device.url}</p>
-                      <a
-                        aria-label={`${t.desktopOpen || 'Open'} ${device.name}`}
-                        href={device.url.replace(/^ws(s?):\/\//, 'http$1://')}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-white/45 hover:text-white/60 flex-shrink-0"
-                      >
-                        <ExternalLink size={12} />
-                      </a>
                     </div>
                   )}
                 </div>
@@ -193,7 +184,7 @@ function RemoteDeviceEditor({ t }: { t: any }) {
           <h4 className="text-sm font-bold uppercase tracking-tight text-white">{t.howItWorks || 'How It Works'}</h4>
         </div>
         <p className="text-xs text-white/55 leading-relaxed">
-          {t.remoteMCPHowItWorks || 'Remote devices connect as MCP clients to Lumi\'s MCP server via WebSocket. Lumi initiates the WebSocket connection, the device sends an MCP initialize request, and Lumi responds as the server — exposing tools like lumi_chat, lumi_memory_search, and lumi_tool_execute that the device can invoke via voice or other input.'}
+          {t.remoteMCPHowItWorks || 'Lumi opens the configured WebSocket and acts as the MCP server. The external client initializes MCP and can call the Lumi tools exposed on that connection. This configuration does not import the external device\'s tools or establish device control; saved configuration is not a live connection status.'}
         </p>
       </div>
     </div>

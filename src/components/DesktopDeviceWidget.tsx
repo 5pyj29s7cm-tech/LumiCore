@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { ArrowUpRight, Monitor, Smartphone, Cpu, Radio } from 'lucide-react';
+import { ArrowUpRight, Monitor, Smartphone, Cpu, Radio, Usb, Printer } from 'lucide-react';
 import type { Socket } from 'socket.io-client';
 import { useApp } from '@/contexts/AppContext';
 import { apiFetch } from '@/services/apiClient';
 import { deviceWidgetCopy } from '@/i18n/locales/deviceWidget';
+import { useExternalDevices } from '@/services/externalDevices';
+import { getDomainReconciliation } from '@/lib/domainSession';
 
 type DevicePreview = { id: string; name: string; type: string; status: string };
 
@@ -12,27 +14,29 @@ export function DesktopDeviceWidget({ lang, socket, onOpen }: {
 }) {
   const { user, workDomain, orgConnection } = useApp();
   const copy = deviceWidgetCopy(lang);
-  const scope = `${user?.uid || ''}:${workDomain}:${orgConnection?.orgId || ''}`;
-  const [snapshot, setSnapshot] = useState<{ scope: string; devices: DevicePreview[]; failed: boolean } | null>(null);
+  const scope = user && getDomainReconciliation(workDomain, (user as any).orgId, orgConnection?.orgId) === 'none'
+    ? JSON.stringify([user.uid, user.role, workDomain, (user as any).orgId, orgConnection?.orgId]) : null;
+  const external = useExternalDevices(scope);
+  const [snapshot, setSnapshot] = useState<{ scope: string; devices: DevicePreview[]; error: string } | null>(null);
 
   useEffect(() => {
     let disposed = false;
     let controller: AbortController | undefined;
     let pending: ReturnType<typeof setTimeout> | undefined;
     const refresh = async () => {
-      if (document.hidden || !user?.uid) return;
+      if (document.hidden || !scope) return;
       controller?.abort();
       const request = new AbortController();
       controller = request;
       const timeout = setTimeout(() => request.abort(), 10000);
       try {
         const response = await apiFetch('/api/devices', { signal: request.signal });
-        if (!response.ok) throw new Error('Device status unavailable');
         const body = await response.json();
+        if (!response.ok) throw new Error(`HTTP ${response.status}${body?.error ? `: ${body.error}` : ''}`);
         if (!Array.isArray(body.devices)) throw new Error('Invalid device list');
-        if (!disposed && controller === request) setSnapshot({ scope, devices: body.devices, failed: false });
-      } catch {
-        if (!disposed && controller === request) setSnapshot({ scope, devices: [], failed: true });
+        if (!disposed && controller === request) setSnapshot({ scope, devices: body.devices, error: '' });
+      } catch (error) {
+        if (!disposed && controller === request) setSnapshot({ scope, devices: [], error: request.signal.aborted ? 'Device status request timed out (10000ms)' : error instanceof Error ? error.message : String(error) });
       } finally {
         clearTimeout(timeout);
       }
@@ -59,9 +63,10 @@ export function DesktopDeviceWidget({ lang, socket, onOpen }: {
 
   const current = snapshot?.scope === scope ? snapshot : null;
   const devices = current?.devices || [];
-  const available = Boolean(current && !current.failed);
+  const available = Boolean(current && !current.error);
   const online = devices.filter(device => device.status === 'online').length;
   const preview = [...devices].sort((a, b) => Number(b.status === 'online') - Number(a.status === 'online')).slice(0, 2);
+  const usb = external.data?.usb, lan = external.data?.lan, printers = external.data?.printers;
 
   return (
     <button type="button" data-lumi-target="devices" onClick={onOpen}
@@ -78,7 +83,7 @@ export function DesktopDeviceWidget({ lang, socket, onOpen }: {
           <span className="lumi-device-signal"><Radio size={15} /></span>
         </span>
         <span className="lumi-device-counts">
-          <span><strong>{available ? online : '—'}</strong><span>{copy.online}</span></span>
+          <span><strong>{available ? online : '—'}</strong><span>{copy.clientsOnline}</span></span>
           <span><strong>{available ? devices.length : '—'}</strong><span>{copy.registered}</span></span>
         </span>
       </span>
@@ -89,10 +94,22 @@ export function DesktopDeviceWidget({ lang, socket, onOpen }: {
             <Icon size={16} aria-hidden="true" />
             <span className="lumi-device-name">{device.name || device.type}</span>
             <span className="lumi-device-status" data-online={device.status === 'online'}>
-              <i />{device.status === 'online' ? copy.online : device.status === 'pairing' ? copy.pairing : copy.offline}
+              <i />{device.status === 'online' ? copy.online : copy.offline}
             </span>
           </span>;
-        }) : <span className="lumi-device-empty">{!current ? copy.loading : current.failed ? copy.unavailable : copy.empty}</span>}
+        }) : <span className="lumi-device-empty">{!current ? copy.loading : current.error || copy.empty}</span>}
+      </span>
+      <span className="block mt-3 text-xs text-white/60 space-y-2">
+        <span className="flex flex-wrap gap-x-4 gap-y-2">
+          <span className="inline-flex items-center gap-1.5"><Usb size={13} />{copy.usbPresent}: {usb && 'devices' in usb && ['ok', 'partial'].includes(usb.status) ? usb.devices.length : '—'}{usb && usb.status !== 'ok' ? ` (${usb.status})` : ''}</span>
+          <span className="inline-flex items-center gap-1.5"><Radio size={13} />{copy.lanCandidates}: {lan && 'candidates' in lan && ['completed', 'partial'].includes(lan.status) ? lan.candidates.length : '—'}{lan && lan.status !== 'completed' ? ` (${lan.status})` : ''}</span>
+          <span className="inline-flex items-center gap-1.5"><Printer size={13} />{copy.printQueues}: {printers && 'printers' in printers && ['ok', 'partial'].includes(printers.status) ? printers.printers.length : '—'}{printers && printers.status !== 'ok' ? ` (${printers.status})` : ''}</span>
+        </span>
+        <span className="block text-[10px] text-white/40">{external.data ? `${copy.observed}: ${external.data.observedAt}` : external.loading ? copy.observing : copy.unavailable}</span>
+        <span className="block text-[10px] text-white/40">{copy.externalHint}</span>
+        {external.error && <span role="alert" className="block text-amber-300 text-[11px] break-words">{external.error}</span>}
+        {external.data && (['usb', 'printers', 'lan'] as const).flatMap(source => external.data![source].errors.map((error, index) =>
+          <span role="alert" key={`${source}:${index}`} className="block text-amber-300 text-[11px] break-words">{source} · {error.code}: {error.message}</span>))}
       </span>
       <span className="lumi-device-footer">{copy.manage}<ArrowUpRight size={14} /></span>
     </button>

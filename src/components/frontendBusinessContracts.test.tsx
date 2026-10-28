@@ -39,6 +39,8 @@ vi.mock('@/services/socketService', () => ({ socketService: {
   subscribeDeviceRegistration: () => () => {},
 } }));
 vi.mock('./NodeDetailPanel', () => ({ NodeDetailPanel: () => null }));
+// External observations have endpoint-specific fixtures in externalDeviceViews.test.tsx.
+vi.mock('./ExternalDeviceCenter', () => ({ ExternalDeviceCenter: () => null }));
 vi.mock('./PersonalityEvolution', () => ({ PersonalityEvolution: ({ personalityId }: any) => <div data-testid="evolution-owner">{personalityId}</div> }));
 vi.mock('./MemoryTree', () => ({
   layoutTree3D: (_memories: any[], files: any[]) => ({ nodes: files.map(file => ({ id: file.id, name: file.name })), curves: [] }),
@@ -348,7 +350,7 @@ describe('business views wait for the owning backend result', () => {
 
   it.each(['web', 'electron', 'tauri'])('keeps removed kernel monitoring out of the %s device view without a separate vault or system query', async host => {
     if (host !== 'web') vi.stubGlobal(host === 'electron' ? 'lumiElectron' : '__TAURI_INTERNALS__', {});
-    mocks.fetch.mockImplementation(async (url: string) => reply({ devices: url.endsWith('/remote-devices') ? {} : [], pairedDeviceIds: [] }));
+    mocks.fetch.mockImplementation(async (url: string) => reply({ devices: url.endsWith('/remote-devices') ? {} : [] }));
     const listener = vi.fn(); window.addEventListener('lumi:client-action', listener);
     try {
       render(<DeviceSyncCenter t={{}} />); await screen.findByText('No remote devices configured'); const count = mocks.fetch.mock.calls.length;
@@ -501,7 +503,7 @@ describe('business views wait for the owning backend result', () => {
     vi.stubGlobal('navigator', { geolocation: { watchPosition, clearWatch }, userAgent: 'synthetic-browser', platform: 'web' });
     vi.stubGlobal('DeviceMotionEvent', Event);
     const subscribe = vi.spyOn(window, 'addEventListener'), unsubscribe = vi.spyOn(window, 'removeEventListener');
-    mocks.fetch.mockImplementation(async (url: string) => reply({ devices: url.endsWith('/remote-devices') ? {} : [], pairedDeviceIds: [] }));
+    mocks.fetch.mockImplementation(async (url: string) => reply({ devices: url.endsWith('/remote-devices') ? {} : [] }));
     const view = render(<DeviceSyncCenter t={{}} />); await screen.findByText('No remote devices configured');
     expect(watchPosition).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'ENABLE' })).toBeNull();
@@ -518,59 +520,31 @@ describe('business views wait for the owning backend result', () => {
     expect(screen.queryByText('No devices connected. Open the app on another device to see it here.')).toBeNull();
     const request = mocks.fetch.mock.calls.find(([url]) => url.endsWith('/devices'))!;
     expect(new URL(request[0]).pathname).toBe('/api/devices'); expect(new Headers(request[1].headers).get('Authorization')).toBe('Bearer synthetic-device-token');
-    mocks.fetch.mockResolvedValue(reply({ devices: [], pairedDeviceIds: [], sensoryContext: null }));
+    mocks.fetch.mockResolvedValue(reply({ devices: [], sensoryContext: null }));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await screen.findByText('No devices connected. Open the app on another device to see it here.'); expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('loads devices once when the socket hook initializes and does not reload for a new translation object', async () => {
+  it('loads client state without a socket and does not reload for a new translation object', async () => {
     socketState.enabled = false;
-    mocks.fetch.mockImplementation(async (url: string) => reply({ devices: url.endsWith('/remote-devices') ? {} : [], pairedDeviceIds: [] }));
+    mocks.fetch.mockImplementation(async (url: string) => reply({ devices: url.endsWith('/remote-devices') ? {} : [] }));
     const view = render(<DeviceSyncCenter t={{}} />); const reads = () => mocks.fetch.mock.calls.filter(([url]) => url.endsWith('/devices')).length;
-    expect(reads()).toBe(0); socketState.enabled = true; view.rerender(<DeviceSyncCenter t={{}} />);
+    expect(reads()).toBe(1);
     await screen.findByText('No devices connected. Open the app on another device to see it here.'); expect(reads()).toBe(1);
     view.rerender(<DeviceSyncCenter t={{ refreshBtn: 'Reload' }} />); expect(reads()).toBe(1);
-  });
-
-  it.each([{ success: false, error: 'Pair rejected' }, { success: true }, { success: true, pairedDeviceIds: [] }])('does not invent a paired device from an unconfirmed response %j', async result => {
-    mocks.fetch.mockImplementation(async (url: string, init: RequestInit) => reply(init.method ? result : url.endsWith('/remote-devices') ? { devices: {} } : { devices: [{ id: 'phone', name: 'Synthetic phone', status: 'online' }], pairedDeviceIds: [] }));
-    render(<DeviceSyncCenter t={{}} />); fireEvent.click(await screen.findByRole('button', { name: 'PAIR' }));
-    await waitFor(() => expect(mocks.error).toHaveBeenCalledOnce()); expect(mocks.success).not.toHaveBeenCalled();
-    await waitFor(() => expect((screen.getByRole('button', { name: 'PAIR' }) as HTMLButtonElement).disabled).toBe(false));
-    expect(screen.queryByRole('button', { name: 'PAIRED' })).toBeNull();
-  });
-
-  it('serializes device pairing and refreshes the confirmed snapshot after pairing and unpairing', async () => {
-    const write = deferred<any>(); let pairedDeviceIds: string[] = [];
-    mocks.fetch.mockImplementation(async (url: string, init: RequestInit) => {
-      if (init.method === 'POST') return write.promise;
-      if (init.method === 'DELETE') { pairedDeviceIds = []; return reply({ success: true, pairedDeviceIds }); }
-      return reply(url.endsWith('/remote-devices') ? { devices: {} } : { devices: ['phone', 'tablet'].map(id => ({ id, name: id, status: 'online' })), pairedDeviceIds });
-    });
-    render(<DeviceSyncCenter t={{}} />); await screen.findByText('phone');
-    const buttons = screen.getAllByRole('button', { name: 'PAIR' }); fireEvent.click(buttons[0]); fireEvent.click(buttons[1]);
-    expect(mocks.fetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
-    expect((buttons[1] as HTMLButtonElement).disabled).toBe(true);
-    act(() => mocks.on.mock.calls.find(([name]) => name === 'devices:update')![1]({}));
-    pairedDeviceIds = ['phone']; await act(async () => write.resolve(reply({ success: true, pairedDeviceIds })));
-    await waitFor(() => expect((screen.getByRole('button', { name: 'PAIRED' }) as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: 'PAIRED' })); await waitFor(() => expect(mocks.success).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getAllByRole('button', { name: 'PAIR' })).toHaveLength(2));
-    const deletion = mocks.fetch.mock.calls.find(([, init]) => init.method === 'DELETE')!;
-    expect(new URL(deletion[0]).pathname).toBe('/api/devices/pair/phone');
   });
 
   it('coalesces device events into one complete snapshot and releases subscriptions and sync timers', async () => {
     let next = false;
     mocks.fetch.mockImplementation(async (url: string) => reply(url.endsWith('/remote-devices') ? { devices: {} } : {
-      devices: [{ id: next ? 'new-device' : 'old-device', name: next ? 'New device' : 'Old device', status: 'online' }], pairedDeviceIds: next ? ['new-device'] : [],
+      devices: [{ id: next ? 'new-device' : 'old-device', name: next ? 'New device' : 'Old device', status: 'online' }],
       sensoryContext: { deviceCount: next ? 2 : 1, hasAudio: true, hasVideo: next },
     }));
     const view = render(<DeviceSyncCenter t={{}} />); await screen.findByText('Old device');
     const reads = () => mocks.fetch.mock.calls.filter(([url]) => url.endsWith('/devices')).length;
     next = true; act(() => { for (const event of ['device:registered', 'devices:update', 'device:removed', 'connect']) mocks.on.mock.calls.find(([name]) => name === event)![1]({ name: 'Untrusted event device' }); });
     await screen.findByText('New device'); expect(reads()).toBe(2); await waitFor(() => expect(screen.queryByText('Old device')).toBeNull());
-    expect(screen.getByText('2 online · Audio: yes · Video: yes')).toBeTruthy(); expect(screen.getByRole('button', { name: 'PAIRED' })).toBeTruthy();
+    expect(screen.getByText('2 online · Audio: yes · Video: yes')).toBeTruthy(); expect(screen.queryByRole('button', { name: 'PAIR' })).toBeNull();
     const timers = vi.spyOn(globalThis, 'setTimeout'), cancel = vi.spyOn(globalThis, 'clearTimeout');
     const onSync = mocks.on.mock.calls.find(([name]) => name === 'memories:changed')![1];
     act(() => { onSync({ timestamp: '2026-10-03T00:00:00Z' }); onSync({ timestamp: '2026-10-03T00:00:01Z' }); });
@@ -581,19 +555,9 @@ describe('business views wait for the owning backend result', () => {
     act(() => mocks.on.mock.calls.find(([name]) => name === 'connect')![1]()); expect(reads()).toBe(count);
   });
 
-  it.each([true, false])('ignores a late device pairing result (success=%s) after logout', async success => {
-    const pending = deferred<any>();
-    mocks.fetch.mockImplementation(async (url: string, init: RequestInit) => init.method ? pending.promise : reply(url.endsWith('/remote-devices') ? { devices: {} } : { devices: [{ id: 'phone', name: 'Phone', status: 'online' }], pairedDeviceIds: [] }));
-    const view = render(<DeviceSyncCenter t={{}} />); fireEvent.click(await screen.findByRole('button', { name: 'PAIR' }));
-    account.user = null; view.rerender(<DeviceSyncCenter t={{}} />); const calls = mocks.fetch.mock.calls.length;
-    await act(async () => pending.resolve(reply({ success, pairedDeviceIds: ['phone'], error: success ? undefined : 'Synthetic rejection' })));
-    expect(mocks.error).not.toHaveBeenCalled(); expect(mocks.success).not.toHaveBeenCalled(); expect(mocks.fetch).toHaveBeenCalledTimes(calls);
-    expect(mocks.fetch.mock.calls.every(([, init]) => init.signal.aborted)).toBe(true);
-  });
-
   it.each(['account', 'domain', 'logout'])('clears device state and ignores delayed reads on %s change', async change => {
     const held = deferred<any>(); let previous = true;
-    mocks.fetch.mockImplementation(async (url: string) => url.endsWith('/remote-devices') ? reply({ devices: {} }) : previous ? held.promise : reply({ devices: [{ id: 'new', name: 'New scope device', status: 'online' }], pairedDeviceIds: [] }));
+    mocks.fetch.mockImplementation(async (url: string) => url.endsWith('/remote-devices') ? reply({ devices: {} }) : previous ? held.promise : reply({ devices: [{ id: 'new', name: 'New scope device', status: 'online' }] }));
     const view = render(<DeviceSyncCenter t={{}} />); previous = false;
     if (change === 'domain') {
       account.workDomain = 'work'; account.orgConnection = { orgId: 'new-org' }; view.rerender(<DeviceSyncCenter t={{}} />);
@@ -601,7 +565,7 @@ describe('business views wait for the owning backend result', () => {
     } else account.user = change === 'logout' ? null : { uid: 'new-user', role: 'admin' };
     view.rerender(<DeviceSyncCenter t={{}} />);
     if (change !== 'logout') await screen.findByText('New scope device');
-    await act(async () => held.resolve(reply({ devices: [{ id: 'old', name: 'Old scope device', status: 'online' }], pairedDeviceIds: [] })));
+    await act(async () => held.resolve(reply({ devices: [{ id: 'old', name: 'Old scope device', status: 'online' }] })));
     expect(screen.queryByText('Old scope device')).toBeNull(); if (change === 'logout') expect(view.container.textContent).toBe('');
   });
 

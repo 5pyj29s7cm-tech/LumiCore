@@ -2,7 +2,7 @@ import type { NativeClientIdentity } from '../../shared/native_client_identity';
 
 export type DeviceType = 'desktop' | 'mobile' | 'ar_glasses' | 'holographic_prototype' | 'web';
 
-export type DeviceStatus = 'online' | 'offline' | 'pairing';
+export type DeviceStatus = 'online' | 'offline';
 export type DeviceDomain = 'personal' | 'work';
 
 export interface DeviceScope {

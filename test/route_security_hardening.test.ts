@@ -173,13 +173,8 @@ describe('route security hardening', () => {
     publicLookup.mockRestore();
   });
 
-  it('requires login for devices and isolates listing and pairing by owner and domain', async () => {
+  it('requires login for devices and isolates registered-client listing by owner', async () => {
     expect((await fetch(`${baseUrl}/api/devices`)).status).toBe(401);
-    expect((await fetch(`${baseUrl}/api/devices/pair`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceId: ownDeviceId }),
-    })).status).toBe(401);
 
     const list = await fetch(`${baseUrl}/api/devices`, { headers: auth(userToken) });
     expect(list.status).toBe(200);
@@ -188,30 +183,23 @@ describe('route security hardening', () => {
     expect(listBody.devices[0]).not.toHaveProperty('nativeClientIdentity');
     expect(JSON.stringify(listBody.devices[0])).not.toContain('executablePath');
     expect(listBody.devices.some((device: any) => device.id === otherDeviceId || device.id.startsWith('mcp_'))).toBe(false);
+    expect(listBody).not.toHaveProperty('pairedDeviceIds');
+    expect(listBody.devices[0]).not.toHaveProperty('paired');
 
-    const crossUserPair = await fetch(`${baseUrl}/api/devices/pair`, {
-      method: 'POST',
-      headers: auth(userToken, true),
-      body: JSON.stringify({ deviceId: otherDeviceId }),
-    });
-    expect(crossUserPair.status).toBe(404);
+    const otherList = await fetch(`${baseUrl}/api/devices`, { headers: auth(otherUserToken) });
+    expect((await otherList.json()).devices.map((device: any) => device.id)).toEqual([otherDeviceId]);
+  });
 
-    const paired = await fetch(`${baseUrl}/api/devices/pair`, {
+  it('does not expose the retired client-pairing mutation routes', async () => {
+    expect((await fetch(`${baseUrl}/api/devices/pair`, {
       method: 'POST',
       headers: auth(userToken, true),
       body: JSON.stringify({ deviceId: ownDeviceId }),
-    });
-    expect(paired.status).toBe(200);
-    expect((await paired.json()).pairedDeviceIds).toEqual([ownDeviceId]);
-
-    const otherList = await fetch(`${baseUrl}/api/devices`, { headers: auth(otherUserToken) });
-    expect((await otherList.json()).pairedDeviceIds).toEqual([]);
-
-    const unpaired = await fetch(`${baseUrl}/api/devices/pair/${encodeURIComponent(ownDeviceId)}`, {
+    })).status).toBe(404);
+    expect((await fetch(`${baseUrl}/api/devices/pair/${encodeURIComponent(ownDeviceId)}`, {
       method: 'DELETE',
       headers: auth(userToken),
-    });
-    expect(unpaired.status).toBe(200);
+    })).status).toBe(404);
   });
 
   it('keeps native process evidence behind local admin and desktop-session proof', async () => {

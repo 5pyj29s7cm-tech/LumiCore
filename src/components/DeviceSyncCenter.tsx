@@ -7,16 +7,15 @@ import {
   RefreshCcw,
   Zap,
   Search,
-  CheckCircle2,
   Glasses,
   Box,
   HardDrive,
 } from 'lucide-react';
-import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { GlassCard } from './SharedUI';
 import { RemoteMCPSettings } from './RemoteMCPSettings';
 import { ClientConnectionStatus } from './ClientConnectionStatus';
+import { ExternalDeviceCenter } from './ExternalDeviceCenter';
 import { apiJson } from '@/services/apiClient';
 import { useApp } from '@/contexts/AppContext';
 import { getDomainReconciliation } from '@/lib/domainSession';
@@ -24,7 +23,6 @@ import type { deviceRegistry, projectPublicDevice } from '../../server/devices';
 
 interface DeviceSnapshot {
   devices: ReturnType<typeof projectPublicDevice>[];
-  pairedDeviceIds: string[];
   sensoryContext: ReturnType<typeof deviceRegistry.getSensoryContext> | null;
 }
 
@@ -39,29 +37,29 @@ const DEVICE_TYPES = {
 export function DeviceSyncCenter({ t }: { t: any }) {
   const { user, workDomain, orgConnection } = useApp();
   if (!user || getDomainReconciliation(workDomain, (user as any).orgId, orgConnection?.orgId) !== 'none') return null;
-  return <DeviceSyncView key={JSON.stringify([user.uid, user.role, workDomain, (user as any).orgId])} t={t} />;
+  const scope = JSON.stringify([user.uid, user.role, workDomain, (user as any).orgId, orgConnection?.orgId]);
+  return <DeviceSyncView key={scope} scope={scope} t={t} />;
 }
 
-function DeviceSyncView({ t }: { t: any }) {
+function DeviceSyncView({ t, scope }: { t: any; scope: string }) {
   const socket = useSocket();
   const [isSearching, setIsSearching] = useState(true);
-  const [snapshot, setSnapshot] = useState<DeviceSnapshot>({ devices: [], pairedDeviceIds: [], sensoryContext: null });
-  const { devices: discoveredDevices, pairedDeviceIds: pairedDevices, sensoryContext: sensoryCtx } = snapshot;
-  const [pairing, setPairing] = useState('');
+  const [snapshot, setSnapshot] = useState<DeviceSnapshot>({ devices: [], sensoryContext: null });
+  const { devices: discoveredDevices, sensoryContext: sensoryCtx } = snapshot;
   const [loadError, setLoadError] = useState('');
-  const requests = useRef({ owner: null as AbortController | null, revision: 0, pairing: '' });
+  const requests = useRef({ owner: null as AbortController | null, revision: 0 });
   const [lastSync, setLastSync] = useState<string | null>(null);
 
   const fetchDevices = useCallback(async () => {
     const signal = requests.current.owner?.signal;
-    if (!signal || signal.aborted || requests.current.pairing) return;
+    if (!signal || signal.aborted) return;
     const revision = ++requests.current.revision;
     setIsSearching(true);
     setLoadError('');
     try {
       const data = await apiJson<DeviceSnapshot>('/api/devices', { signal });
       if (signal.aborted || revision !== requests.current.revision) return;
-      if (!Array.isArray(data?.devices) || !Array.isArray(data?.pairedDeviceIds)) throw new Error('Invalid device snapshot');
+      if (!Array.isArray(data?.devices)) throw new Error('Invalid device snapshot');
       setSnapshot(data);
     } catch (err: any) {
       if (!signal.aborted && revision === requests.current.revision) setLoadError(err?.message || 'Failed to fetch devices');
@@ -71,11 +69,8 @@ function DeviceSyncView({ t }: { t: any }) {
   }, []);
 
   useEffect(() => {
-    if (!socket) return;
     const owner = new AbortController();
     requests.current.owner = owner;
-    requests.current.pairing = '';
-    setPairing('');
     let refreshTimer: ReturnType<typeof setTimeout>, syncTimer: ReturnType<typeof setTimeout>;
     const refresh = () => {
       if (owner.signal.aborted) return;
@@ -99,44 +94,20 @@ function DeviceSyncView({ t }: { t: any }) {
     };
   }, [socket, fetchDevices]);
 
-  const pairDevice = async (id: string) => {
-    const signal = requests.current.owner?.signal;
-    if (!signal || signal.aborted || requests.current.pairing) return;
-    const isPaired = pairedDevices.includes(id);
-    requests.current.pairing = id; requests.current.revision++;
-    setPairing(id);
-    try {
-      const data = await apiJson(isPaired ? `/api/devices/pair/${encodeURIComponent(id)}` : '/api/devices/pair', {
-        signal,
-        method: isPaired ? 'DELETE' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: isPaired ? undefined : JSON.stringify({ deviceId: id }),
-      });
-      if (signal.aborted) return;
-      if (!Array.isArray(data?.pairedDeviceIds) || data.pairedDeviceIds.includes(id) === isPaired) throw new Error('Device pairing was not confirmed');
-      setSnapshot(current => ({ ...current, pairedDeviceIds: data.pairedDeviceIds }));
-      toast.success(isPaired ? (t.deviceUnpaired || 'Device unpaired') : (t.devicePaired || 'Device paired'));
-    } catch (err: any) {
-      if (!signal.aborted) toast.error(err?.message || 'Device pairing failed');
-    } finally {
-      if (!signal.aborted) { requests.current.pairing = ''; setPairing(''); void fetchDevices(); }
-    }
-  };
-
   return (
     <div className="space-y-8">
       {/* Device Discovery Section */}
-      <GlassCard className="p-8 space-y-6">
-        <div className="flex items-center justify-between">
+      <GlassCard className="p-4 sm:p-6 space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="space-y-1">
             <h3 className="text-xl font-bold flex items-center gap-2">
               <Wifi size={20} className="text-celestial-saturn" />
-              {t.deviceMeshNetwork || 'Device Mesh Network'}
+              {t.lumiClients || 'Lumi clients'}
             </h3>
             <p className="text-xs text-white/40">
               {sensoryCtx
                 ? `${sensoryCtx.deviceCount} ${t.sensorCtxOnline || 'online'} · ${t.sensorCtxAudio || 'Audio'}: ${sensoryCtx.hasAudio ? (t.sensorCtxYes || 'yes') : (t.sensorCtxNo || 'no')} · ${t.sensorCtxVideo || 'Video'}: ${sensoryCtx.hasVideo ? (t.sensorCtxYes || 'yes') : (t.sensorCtxNo || 'no')}`
-                : t.sensorPerceptionDesc || 'Real-time device discovery and synchronization.'}
+                : t.lumiClientsDesc || 'Lumi client registrations and their current connection state.'}
               {lastSync && (
                 <span className="text-celestial-saturn text-xs font-mono ml-2">
                   {t.syncedAt || 'Synced'} {new Date(lastSync).toLocaleTimeString()}
@@ -146,7 +117,7 @@ function DeviceSyncView({ t }: { t: any }) {
           </div>
           <button
             onClick={fetchDevices}
-            disabled={isSearching || Boolean(pairing)}
+            disabled={isSearching}
             className="px-4 py-2 bg-celestial-saturn/10 border border-celestial-saturn/30 text-celestial-saturn rounded-xl text-xs font-bold hover:bg-celestial-saturn/20 transition-all flex items-center gap-2 disabled:opacity-50"
           >
             {isSearching ? <RefreshCcw size={14} className="animate-spin" /> : <Search size={14} />}
@@ -156,11 +127,10 @@ function DeviceSyncView({ t }: { t: any }) {
 
         <ClientConnectionStatus />
         {loadError && <p role="alert" className="text-sm text-red-400">{loadError}</p>}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           <AnimatePresence>
             {discoveredDevices.map((device, idx) => {
               const type = Object.hasOwn(DEVICE_TYPES, device.type) ? DEVICE_TYPES[device.type] : { Icon: HardDrive, label: '', fallback: device.type };
-              const paired = pairedDevices.includes(device.id);
               return (
               <motion.div
                 key={device.id}
@@ -189,25 +159,11 @@ function DeviceSyncView({ t }: { t: any }) {
                   {t[type.label] || type.fallback}
                   {device.osInfo ? ` · ${device.osInfo}` : ''}
                 </div>
-                <div className="mt-4">
-                  <button
-                    onClick={() => pairDevice(device.id)}
-                    disabled={isSearching || Boolean(pairing) || (device.status !== 'online' && !paired)}
-                    className={`w-full py-2 rounded-lg text-xs font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed ${paired
-                      ? 'bg-green-500/10 border border-green-400/20 text-green-400 hover:bg-green-500/15'
-                      : 'bg-white/10 hover:bg-celestial-saturn hover:text-black'}`}
-                  >
-                    <span className="inline-flex items-center justify-center gap-2">
-                      {paired && <CheckCircle2 size={12} />}
-                      {pairing === device.id ? (t.saving || 'Saving...') : paired ? (t.pairedDevice || 'PAIRED') : (t.pairDevice || 'PAIR')}
-                    </span>
-                  </button>
-                </div>
               </motion.div>
             ); })}
           </AnimatePresence>
           {!isSearching && !loadError && discoveredDevices.length === 0 && (
-            <div className="col-span-3 py-12 text-center space-y-2 border-2 border-dashed border-white/5 rounded-3xl">
+            <div className="col-span-full py-8 text-center space-y-2 border-2 border-dashed border-white/5 rounded-3xl">
               <Zap size={32} className="mx-auto text-white/35" />
               <p className="text-sm text-white/45">{t.noDevicesConnected || 'No devices connected. Open the app on another device to see it here.'}</p>
             </div>
@@ -215,8 +171,10 @@ function DeviceSyncView({ t }: { t: any }) {
         </div>
       </GlassCard>
 
+      <ExternalDeviceCenter scope={scope} lang={t.langCode === 'zh' ? 'zh' : 'en'} />
+
       {/* Remote MCP Endpoints */}
-      <GlassCard className="p-8 space-y-6">
+      <GlassCard className="p-4 sm:p-6 space-y-6">
         <RemoteMCPSettings t={t} />
       </GlassCard>
     </div>

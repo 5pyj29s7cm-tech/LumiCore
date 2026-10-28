@@ -150,41 +150,25 @@ it('keeps a scoped deletion receipt through failed-save retries and restart with
   expect((await request('/memories/not-an-owned-id', 'DELETE', undefined, orgId)).status).toBe(404);
 });
 
-it('makes pair/unpair retries durable and serializes concurrent pairs without losing either device', async () => {
-  personal.emit('device:register', { name: 'Synthetic primary browser', type: 'web', capabilities: { audio: false } });
-  const second = await client('personal');
-  try {
-    // Different fingerprints are essential for distinct device registry entries.
-    second.auth = { token: token(), fingerprint: 'audit-second-device' };
-    second.disconnect().connect();
-    await new Promise<void>((resolve, reject) => { second.once('connect', resolve); second.once('connect_error', reject); });
-    second.emit('device:register', { name: 'Synthetic second browser', type: 'web', capabilities: { audio: false } });
-    await new Promise<void>(resolve => { second.once('pong', () => resolve()); second.emit('ping'); });
-    await settleEvents();
-    const listed = await request('/devices');
-    const ids = listed.body.devices.filter((d: any) => d.name.startsWith('Synthetic')).map((d: any) => d.id);
-    expect(ids).toHaveLength(2);
-    const key = `paired_devices_${uid}_personal`;
-    await flushDBOrThrow(); await runSQL('PRAGMA query_only=ON');
-    try {
-      expect((await request('/devices/pair', 'POST', { deviceId: ids[0] })).status).toBe(503);
-      expect(await querySQL('SELECT value FROM settings WHERE key=?', [key])).toHaveLength(0);
-      expect((await request('/devices/pair', 'POST', { deviceId: ids[0] }, '', 'round8-sync-other')).status).toBe(404);
-    } finally { await runSQL('PRAGMA query_only=OFF'); }
-    const paired = await Promise.all([ids[0], ids[1], ids[0]].map(deviceId => request('/devices/pair', 'POST', { deviceId })));
-    expect(paired.map(result => result.status)).toEqual([200, 200, 200]);
-    expect(new Set(JSON.parse((await querySQL('SELECT value FROM settings WHERE key=?', [key]))[0].value))).toEqual(new Set(ids));
-    await runSQL('PRAGMA query_only=ON');
-    try {
-      expect((await request(`/devices/pair/${encodeURIComponent(ids[0])}`, 'DELETE')).status).toBe(503);
-      expect((await request(`/devices/pair/${encodeURIComponent(ids[0])}`, 'DELETE')).status).toBe(503);
-      expect(JSON.parse((await querySQL('SELECT value FROM settings WHERE key=?', [key]))[0].value)).toContain(ids[0]);
-    } finally { await runSQL('PRAGMA query_only=OFF'); }
-    expect((await request(`/devices/pair/${encodeURIComponent(ids[0])}`, 'DELETE')).status).toBe(200);
-    await reopen();
-    expect((await request(`/devices/pair/${encodeURIComponent(ids[0])}`, 'DELETE')).status).toBe(200);
-    expect((await request('/devices')).body.pairedDeviceIds).toEqual([ids[1]]);
-  } finally { second.disconnect(); }
+it('keeps real client registration scoped to its socket owner and organization without pair state', async () => {
+  const clients = [
+    { socket: personal, name: 'Synthetic personal browser', user: uid, organization: '' },
+    { socket: work, name: 'Synthetic work browser', user: uid, organization: orgId },
+    { socket: workTwo, name: 'Synthetic second-org browser', user: uid, organization: orgTwo },
+    { socket: other, name: 'Synthetic other-user browser', user: 'round8-sync-other', organization: '' },
+    { socket: otherWork, name: 'Synthetic fellow-member browser', user: 'round8-sync-other', organization: orgId },
+  ];
+  for (const entry of clients) entry.socket.emit('device:register', {
+    name: entry.name, type: 'web', capabilities: { audio: false },
+  });
+  await settleEvents();
+  for (const entry of clients) {
+    const listed = await request('/devices', 'GET', undefined, entry.organization, entry.user);
+    expect(listed.status).toBe(200);
+    expect(listed.body.devices.map((device: any) => device.name)).toEqual([entry.name]);
+    expect(listed.body).not.toHaveProperty('pairedDeviceIds');
+    expect(listed.body.devices[0]).not.toHaveProperty('paired');
+  }
 });
 
 it('uses an explicit protection target for safe retry and does not advise blindly retrying the old toggle', async () => {

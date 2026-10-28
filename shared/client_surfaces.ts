@@ -250,10 +250,10 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
   },
   {
     id: 'devices',
-    label: 'Device sync center',
+    label: 'Device center',
     target: 'devices',
     actions: ['open_devices'],
-    useWhen: 'Inspect device pairing, synchronization, and connected-device state.',
+    useWhen: 'Inspect registered Lumi clients, observed USB ports and LAN services, and read supported device status.',
     launcherIds: ['devices', 'sync'],
   },
   {

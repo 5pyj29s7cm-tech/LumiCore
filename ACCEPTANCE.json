@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T06:38:20.418Z",
+  "updatedAt": "2026-10-28T07:08:38.129Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序电视与ESP32接入",
-    "status": "usb-metadata-main-chain-passed-answer-inferences-retained-tv-and-mcp-pending",
-    "instruction": "USB驱动、固件身份与正常聊天元数据读取已核对；回答推断、电视定位、MCP控制仍保留，现有小智后台未更改"
+    "title": "主程序外部设备中心",
+    "status": "source-tests-build-passed-live-api-pending",
+    "instruction": "真实观察展示与支持的打印机状态读取；电视与ESP32控制仍待接入"
   },
   "acceptedWholeItems": [
     3,
@@ -289,7 +289,7 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "usb-metadata-main-chain-passed-answer-inferences-retained-tv-and-mcp-pending",
+    "status": "source-tests-build-passed-live-api-pending",
     "priority": "局域网电视、打印机与USB/MCP设备接入"
   },
   "archivedLegalDevelopment": {
@@ -676,5 +676,56 @@
     },
     "televisionControlAccepted": false,
     "wholeApplicationAccepted": false
+  },
+  "latestMainExternalDeviceCenter": {
+    "updatedAt": "2026-10-28T07:08:38.129Z",
+    "status": "source-tests-build-passed-live-api-pending",
+    "sourceRoot": "D:/lumiOS",
+    "tests": {
+      "scopedTests": "319/319 in17 files",
+      "groups": [
+        {
+          "tests": 248,
+          "files": 14
+        },
+        {
+          "tests": 18,
+          "files": 1
+        },
+        {
+          "tests": 53,
+          "files": 2
+        }
+      ],
+      "typecheck": "passed",
+      "desktopBuild": "passed",
+      "independentReview": "passed",
+      "oldPairingBookkeepingRemoved": true,
+      "modelCalls": 0,
+      "defaultModelChanged": false,
+      "hardwareControlAccepted": false,
+      "nativeUiAccepted": false
+    },
+    "sourceFiles": 20,
+    "evidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/device-center-external-1793169977582",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/device-center-external-1793169977582/evidence-seal.json",
+      "sha256": "4f474e74b74fcc2fa1179ff24d7fb6c4a86110e4840833efe2c85758f982af8e",
+      "files": 32
+    },
+    "deleted": "unused paired-device setting projection/routes/UI and fake WS-to-HTTP MCP open link",
+    "capabilities": [
+      "USB metadata",
+      "LAN advertised candidates",
+      "installed printer queues",
+      "supported network IPP status"
+    ],
+    "pending": [
+      "native UI acceptance",
+      "actual TV control",
+      "ESP32 MCP control",
+      "physical printing"
+    ],
+    "lawyerHeldUnchanged": true
   }
 }

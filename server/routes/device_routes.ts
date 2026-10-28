@@ -1,5 +1,5 @@
-import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
 import { Router } from "express";
+import { mountExternalDeviceRoutes } from './external_device_routes';
 import {
   deviceRegistry,
   projectPublicDevice,
@@ -9,75 +9,11 @@ import type { DeviceScope } from "../devices";
 import { DESKTOP_SESSION_HEADER, resolveDesktopSession } from "../config/desktop_bootstrap";
 import { requireAdmin, requireAuth, requireLocalRequest } from "../middleware/auth";
 
-import { serializedScopeRoute, sendDurableMutation } from './durable_mutation';
-import { readScopedDeletionReceipt, recordScopedDeletionReceipt } from '../persistence/durable_scope_mutation';
-
-function pairedKey(userId: string, scope: DeviceScope): string {
-  const scopeKey = scope.domain === 'work' ? `work_${scope.orgId}` : 'personal';
-  return `paired_devices_${userId}_${scopeKey}`;
-}
-
-function getPairedDeviceIds(userId: string, scope: DeviceScope): string[] {
-  try {
-    const row = readSettingRecord(pairedKey(userId, scope));
-    const value = row?.value ? JSON.parse(row.value) : [];
-    return Array.isArray(value) ? value.filter((id: any) => typeof id === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-function savePairedDeviceIds(userId: string, scope: DeviceScope, ids: string[]): string[] {
-  const unique = [...new Set(ids.filter(Boolean))];
-  writeSetting(pairedKey(userId, scope), JSON.stringify(unique));
-  return unique;
-}
-
 export function mountDeviceRoutes(router: Router, _jwtSecret: string) {
+  mountExternalDeviceRoutes(router);
   const requestScope = (req: any): DeviceScope => req.user?.orgId
     ? { domain: 'work', orgId: req.user.orgId }
     : { domain: 'personal', orgId: '' };
-
-  router.post("/devices/pair", requireAuth, serializedScopeRoute('devices', async (req, res) => {
-    const { deviceId } = req.body || {};
-    if (!deviceId) return res.status(400).json({ error: "deviceId required" });
-    const normalizedDeviceId = String(deviceId).trim();
-    if (!normalizedDeviceId || normalizedDeviceId.length > 512) {
-      return res.status(400).json({ error: 'deviceId must be 512 characters or fewer' });
-    }
-    const userId = req.user!.uid;
-    const scope = requestScope(req);
-    const visible = deviceRegistry.getUserDevices(userId, scope);
-    if (!visible.some(device => device.id === normalizedDeviceId)) {
-      return res.status(404).json({ error: 'Device not found in the active user and domain scope' });
-    }
-    const pairedDeviceIds = savePairedDeviceIds(
-      userId,
-      scope,
-      [...getPairedDeviceIds(userId, scope), normalizedDeviceId],
-    );
-    return sendDurableMutation(req, res, { success: true, paired: normalizedDeviceId, pairedDeviceIds, timestamp: new Date().toISOString() });
-  }));
-
-  router.delete("/devices/pair/:deviceId", requireAuth, serializedScopeRoute('devices', async (req, res) => {
-    const userId = req.user!.uid;
-    const scope = requestScope(req);
-    const current = getPairedDeviceIds(userId, scope);
-    const ownerScope = { userId, ...scope };
-    if (!current.includes(req.params.deviceId)) {
-      if (readScopedDeletionReceipt(ownerScope, 'device-pair', req.params.deviceId)) {
-        return sendDurableMutation(req, res, { success: true, unpaired: req.params.deviceId, pairedDeviceIds: current, timestamp: new Date().toISOString() });
-      }
-      return res.status(404).json({ error: 'Paired device not found in the active user and domain scope' });
-    }
-    const pairedDeviceIds = savePairedDeviceIds(
-      userId,
-      scope,
-      current.filter(id => id !== req.params.deviceId),
-    );
-    recordScopedDeletionReceipt(ownerScope, 'device-pair', req.params.deviceId, { success: true });
-    return sendDurableMutation(req, res, { success: true, unpaired: req.params.deviceId, pairedDeviceIds, timestamp: new Date().toISOString() });
-  }));
 
   // Formal acceptance needs an exact registry-bound Tauri identity, but that
   // process metadata must never ride the ordinary device API.  This separate
@@ -111,13 +47,8 @@ export function mountDeviceRoutes(router: Router, _jwtSecret: string) {
     // MCP devices are returned only when their registered owner and domain
     // match this exact request scope; the global MCP list is never merged in.
     const userDevices = deviceRegistry.getUserDevices(userId, scope);
-    const pairedDeviceIds = getPairedDeviceIds(userId, scope);
-    const pairedSet = new Set(pairedDeviceIds);
-    const devices = userDevices.map(device => ({
-      ...projectPublicDevice(device),
-      paired: pairedSet.has(device.id),
-    }));
+    const devices = userDevices.map(projectPublicDevice);
     const sensory = deviceRegistry.getSensoryContext(userId, scope);
-    res.json({ devices, pairedDeviceIds, sensoryContext: sensory });
+    res.json({ devices, sensoryContext: sensory });
   });
 }
