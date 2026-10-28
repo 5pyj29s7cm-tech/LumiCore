@@ -61,7 +61,7 @@ export function registerLocalDeviceTools(registry: ToolRegistry, adapters: Local
   });
   registry.register({
     name: 'printer_list',
-    description: 'Read installed Windows printer queues and their raw spooler/offline flags, default queue, driver, port and job counters on this Lumi control-center computer. Physical network devices and Windows queues are different observations. Does not print, cancel jobs, install, change defaults, or infer physical online state from queue flags.',
+    description: 'Read installed Windows printer queues and their raw spooler/offline flags, default queue, driver, port and job counters on this Lumi control-center computer. The deviceIdentity graph records OS PnP parent/container and cached association endpoints; each queue pnpIdentity points to exact OS queue nodes. observedAt is the read time, cacheUpdatedAt is unknown when null. Physical network devices and Windows queues are separate observations. Does not print, cancel jobs, install, change defaults, or infer physical online state from queue flags.',
     routingHints: ['打印机列表', '默认打印机', '打印队列', '连接的打印机', 'installed printers'],
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     permission: 'user', securityLevel: 'safe',
@@ -75,7 +75,7 @@ export function registerLocalDeviceTools(registry: ToolRegistry, adapters: Local
   });
   registry.register({
     name: 'printer_status',
-    description: 'Read the current raw status and restricted job counters for an exact installed Windows printer queue name returned by printer_list. This is a spooler observation, not a live network printer test. Does not print or change jobs.',
+    description: 'Read the current raw status and restricted job counters for an exact installed Windows printer queue name returned by printer_list. Includes the same source-bound OS PnP identity graph and cached endpoint metadata as printer_list. This is a spooler observation, not a live network printer test. Does not print or change jobs.',
     routingHints: ['打印机状态', '打印任务状态', 'printer queue status'],
     parameters: { type: 'object', properties: { printerName: { type: 'string', description: 'Exact installed queue name from printer_list or supplied by the user.' } }, required: ['printerName'], additionalProperties: false },
     permission: 'user', securityLevel: 'safe',

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { hasObservedBrowserPage } from '../desktop/browser_page';
 import { toolRecordSucceeded } from '../tools/receipt_payload';
 import type { ToolExecutionRecord } from '../tools/types';
 import { sameArtifactPath } from '../tools/artifact_evidence';
@@ -54,6 +55,11 @@ export function hasBlankAutoCadDocumentEvidence(records: ToolExecutionRecord[] =
 export function hasMatchingDesktopOpenEvidence(record: ToolExecutionRecord, requestedTarget: string): boolean {
   if (record.name !== 'desktop_open' || !toolRecordSucceeded(record)) return false;
   const payload = parseRecordJson(record);
+  const pageTarget = [requestedTarget, record.arguments?.url, record.arguments?.target, payload?.target]
+    .find(value => typeof value === 'string' && /^https?:\/\//iu.test(value));
+  if (pageTarget) return hasObservedBrowserPage(payload, pageTarget)
+    && (/^https?:\/\//iu.test(requestedTarget)
+      || [payload?.actualUrl, payload?.pageTitle, payload?.actualTarget?.processName].some(value => matchesRequestedDesktopTarget(value, requestedBrowserTargetAliases(requestedTarget))));
   const status = compact(payload?.status || payload?.verification?.status).toLowerCase();
   if (
     payload?.ok === false
@@ -126,6 +132,11 @@ export function hasMatchingDesktopObservationEvidence(record: ToolExecutionRecor
 export function hasMatchingBrowserOpenEvidence(record: ToolExecutionRecord, requestedTarget: string): boolean {
   if (record.name !== 'browser_open_task' || !toolRecordSucceeded(record)) return false;
   const payload = parseRecordJson(record);
+  const pageTarget = [requestedTarget, record.arguments?.url, record.arguments?.target, payload?.target]
+    .find(value => typeof value === 'string' && /^https?:\/\//iu.test(value));
+  if (pageTarget) return hasObservedBrowserPage(payload, pageTarget)
+    && (/^https?:\/\//iu.test(requestedTarget)
+      || [payload?.actualUrl, payload?.pageTitle, payload?.actualTarget?.processName].some(value => matchesRequestedDesktopTarget(value, requestedBrowserTargetAliases(requestedTarget))));
   const status = compact(payload?.status || payload?.verification?.status).toLowerCase();
   if (
     payload?.ok === false
@@ -165,6 +176,8 @@ function hasObservedMatchingTargetAfterOpenAttempt(
     || !/^(?:desktop_open|browser_open_task)$/i.test(String(record.name || ''))
     || !toolRecordHasTerminalPayload(record)
   ) return false;
+  if ([requestedTarget, record.arguments?.url, record.arguments?.target]
+    .some(value => typeof value === 'string' && /^https?:\/\//iu.test(value))) return false;
   const payload = parseRecordJson(record);
   const status = compact(payload?.status || record.envelope?.status).toLowerCase();
   // The desktop relay can report target_mismatch when it compared a URL or
@@ -214,6 +227,11 @@ export function hasRequestedDesktopOpenEvidence(
   );
   if (!requestedTarget) return false;
   const successful = expandSuccessfulRecords(records);
+  if (/^https?:\/\//iu.test(requestedTarget) || records.some(record =>
+    [record.arguments?.target, record.arguments?.url].some(value => typeof value === 'string' && /^https?:\/\//iu.test(value)))) {
+    return successful.some(record => hasMatchingDesktopOpenEvidence(record, requestedTarget)
+      || hasMatchingBrowserOpenEvidence(record, requestedTarget));
+  }
   if (successful.some(record => (
     hasMatchingDesktopOpenEvidence(record, requestedTarget)
     || hasMatchingBrowserOpenEvidence(record, requestedTarget)

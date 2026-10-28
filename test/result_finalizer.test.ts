@@ -2533,7 +2533,7 @@ describe('Lumi result finalizer', () => {
     expect(result.reason).toContain('Primary desktop-open verified');
   });
 
-  it('fuses the real Aliyun open observation and does not let later desktop pauses erase it', async () => {
+  it('does not promote a title-only mismatched browser attempt into an opened-page answer', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const result = finalizeLumiResponse({
       taskText: '\u6253\u5f00\u963f\u91cc\u4e91\u5b98\u7f51',
@@ -2602,8 +2602,8 @@ describe('Lumi result finalizer', () => {
       source: 'chat',
     });
 
-    expect(result.blocked).toBe(false);
-    expect(result.text).toContain('\u5df2\u6253\u5f00\u963f\u91cc\u4e91\u5b98\u7f51');
+    expect(result.blocked).toBe(true);
+    expect(result.text).not.toContain('\u5df2\u6253\u5f00\u963f\u91cc\u4e91\u5b98\u7f51');
     expect(result.text).not.toMatch(/\u72b6\u6001|\u8bc1\u636e|\u56de\u6267|target_mismatch|desktop_|browser_open_task/iu);
   });
 

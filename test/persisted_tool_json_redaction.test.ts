@@ -96,10 +96,10 @@ describe('persisted structured tool redaction', () => {
     expect(stored.result).not.toContain('BROKEN_SECRET');
   });
 
-  it('retains the existing bounded JSON summary and binary omission safeguards', () => {
+  it('retains complete long JSON and the existing binary omission safeguards', () => {
     const long = persist(record({ body: 'ordinary prose '.repeat(1000) }));
-    expect(JSON.parse(long.result)).toMatchObject({ kind: 'structured_result_summary', resultOmitted: true });
-    expect(long.result.length).toBeLessThanOrEqual(4000);
+    expect(JSON.parse(long.result)).toEqual({ body: 'ordinary prose '.repeat(1000) });
+    expect(long.envelope.result).toEqual(JSON.parse(long.result));
     const binary = persist(record({ image_base64: 'A'.repeat(20000), password: 'BINARY_SECRET' }));
     expect(binary.result).toContain('binary image omitted');
     expect(JSON.stringify(binary)).not.toMatch(/AAAAA|BINARY_SECRET/);

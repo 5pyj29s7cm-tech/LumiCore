@@ -63,7 +63,6 @@ export interface UserFacingOutputProtectionOptions extends Pick<ToolContext, 're
 }
 
 const MAX_PERSISTED_STRING = 4_000;
-const MAX_PERSISTED_COLLECTION = 80;
 const MAX_PERSISTED_DESKTOP_ENTRIES = 32;
 
 const DATA_URL_RE = /data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]+/iu;
@@ -255,13 +254,10 @@ function looksLikeLargeBase64(value: string): boolean {
     && /^[A-Za-z0-9+/]+={0,2}$/u.test(compacted);
 }
 
-function compactPersistedToolValue(value: unknown, key = '', depth = 0): unknown {
-  if (depth > 6) return '[nested value omitted]';
+function sanitizePersistedToolValue(value: unknown, key = '', ancestors = new WeakSet<object>()): unknown {
   if (key === 'hasPassword' && typeof value === 'boolean') return value;
   if (key && isSensitivePersistenceKey(key)) return '[redacted]';
-  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') {
-    return value;
-  }
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') return value;
   if (typeof value === 'string') {
     if (/(?:image_base64|base64_image|screenshot_base64|imageData|dataUrl)/iu.test(key)) {
       return `[binary image omitted: ${value.length} chars]`;
@@ -270,34 +266,22 @@ function compactPersistedToolValue(value: unknown, key = '', depth = 0): unknown
       return `[binary payload omitted: ${value.length} chars]`;
     }
     const parsed = parseJson(value);
-    if (parsed !== null) {
-      const compacted = compactPersistedToolValue(parsed, key, depth + 1);
-      const serialized = JSON.stringify(compacted);
-      if (serialized.length <= MAX_PERSISTED_STRING) return serialized;
-      return JSON.stringify({
-        kind: 'structured_result_summary',
-        originalChars: value.length,
-        resultOmitted: true,
-      });
-    }
-    const redacted = redactSensitive(value);
-    if (redacted.length <= MAX_PERSISTED_STRING) return redacted;
-    const tailLength = 400;
-    return `${redacted.slice(0, MAX_PERSISTED_STRING - tailLength - 48)}\n[stored result truncated: ${redacted.length} chars]\n${redacted.slice(-tailLength)}`;
+    return parsed !== null
+      ? JSON.stringify(sanitizePersistedToolValue(parsed, key, ancestors))
+      : redactSensitive(value);
   }
-  if (Array.isArray(value)) {
-    return value.slice(0, MAX_PERSISTED_COLLECTION)
-      .map(item => compactPersistedToolValue(item, key, depth + 1));
+  if (typeof value !== 'object') return String(value);
+  if (ancestors.has(value)) return '[circular value omitted]';
+  ancestors.add(value);
+  try {
+    return Array.isArray(value)
+      ? value.map(item => sanitizePersistedToolValue(item, key, ancestors))
+      : Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([nestedKey, nested]) => [
+          nestedKey, sanitizePersistedToolValue(nested, nestedKey, ancestors),
+        ]));
+  } finally {
+    ancestors.delete(value);
   }
-  if (typeof value !== 'object') return String(value).slice(0, MAX_PERSISTED_STRING);
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .slice(0, MAX_PERSISTED_COLLECTION)
-      .map(([nestedKey, nested]) => [
-        nestedKey,
-        compactPersistedToolValue(nested, nestedKey, depth + 1),
-      ]),
-  );
 }
 
 const DESKTOP_FILE_COLLECTION_KEYS = ['files', 'entries', 'items', 'children', 'results'] as const;
@@ -513,7 +497,7 @@ export function sanitizeToolRecordsForPersistence(value: unknown): any[] | undef
   return records
     .map(record => {
       const candidate = compactToolRecordForPersistence(record) as ToolExecutionRecord;
-      const compacted = compactPersistedToolValue(candidate) as ToolExecutionRecord;
+      const compacted = sanitizePersistedToolValue(candidate) as ToolExecutionRecord;
       const readback = artifactReadbackMetadata(candidate);
       if (readback && typeof candidate.result === 'string' && !DATA_URL_RE.test(candidate.result) && !looksLikeLargeBase64(candidate.result)) {
         compacted.result = redactSensitive(candidate.result);

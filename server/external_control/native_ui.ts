@@ -46,6 +46,9 @@ export async function captureNativeUiSnapshot(
   options: DesktopUiSnapshotOptions = {},
 ): Promise<unknown> {
   const adapter = getNativeUiAdapter();
+  if (options.browserPage && adapter?.id !== 'windows-uia') {
+    return { status:'not_supported', platform:process.platform, note:'Native browser Document observation is currently available through Windows UIA.' };
+  }
   if (!adapter) {
     return {
       status: 'not_supported',

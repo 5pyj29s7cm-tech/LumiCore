@@ -39,7 +39,7 @@ import { evaluateDesktopObservationEvidence } from './desktop_observation';
 import { hasContinuousStockWatchIntent, hasContinuousStockWatchEvidence, requiresLegalCurrentLawGate, claimsLegalDocumentCompletion, hasLegalDocumentProductionEvidence, hasLegalCurrentLawGateEvidence, hasLegalReasoningChainEvidence, hasLegalExternalPlatformSignal, describesAuthorizedLegalExternalHandoff, claimsExternalLegalPlatformFinalAction, claimsExternalLegalPlatformResult, hasLegalExternalPlatformResultEvidence } from './result_policy_evidence';
 import { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from "./result_finalizer_types";
 import { taskActionContract, isInternalRuntimeWorkNarration, resultTaskText, isChineseText, summarizeToolFailure, hasResultCoreActionEvidence, isVerifiedCurrentTurnRecord, requiresSourceGroundedArtifactContent, sanitizeInternalExecutionText } from "./result_finalizer_support";
-import { formatGroundedDesktopEvidence, formatGroundedSimpleDesktopOpenResult, formatGroundedClientActionResult, formatGroundedCurrentAuthoringDocumentResult, formatGoalSpecificDesktopResult, formatObservedDesktopOpenResult, formatGroundedPartialActionResult, formatCurrentAuthoringDocumentClarification, formatCreatedArtifactWithoutInAppCompletion } from "./result_desktop_presenter";
+import { formatGroundedDesktopEvidence, formatGroundedSimpleDesktopOpenResult, formatGroundedClientActionResult, formatGroundedCurrentAuthoringDocumentResult, formatGoalSpecificDesktopResult, formatGroundedPartialActionResult, formatCurrentAuthoringDocumentClarification, formatCreatedArtifactWithoutInAppCompletion } from "./result_desktop_presenter";
 import { leakedLegacyToolProtocol, groundedVerifiedDocumentObservation, VERIFIED_DOCUMENT_OBSERVATION_TOOL_RE } from "./result_claim_guards";
 import { groundedMediaGeneration, formatGroundedWorkflowProgress, formatGroundedSkillDraft, formatGroundedArtifactResult, formatGroundedCadRunResult, formatGroundedBlankAutoCadDocumentResult, formatGroundedWpsMutationResult, formatGroundedCadGeometryExtractionResult, formatExternalAiHistoryResult } from "./result_artifact_presenter";
 
@@ -325,7 +325,7 @@ function correctCurrentTurnContractDrift(
     && !record.error
     && String(record.result || '').trim()
   ));
-  if (requestedTarget && successfulOpen) {
+  if (requestedTarget && !/^https?:\/\//iu.test(requestedTarget) && successfulOpen) {
     return isChineseText(actionText)
       ? CN_VOICE_FAST_PATH_MESSAGES.opened(requestedTarget)
       : `Opened ${requestedTarget}.`;
@@ -865,8 +865,6 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   if (groundedSimpleOpen) {
     return groundedSimpleOpen;
   }
-  const observedDesktopOpen = formatObservedDesktopOpenResult(input);
-  if (observedDesktopOpen) return observedDesktopOpen;
   const groundedPartialAction = formatGroundedPartialActionResult(input);
   if (groundedPartialAction) return groundedPartialAction;
   const groundedDriftCorrection = correctCurrentTurnContractDrift(input, actionContract);
@@ -1096,7 +1094,8 @@ function finalizeActionCompletionClaims(
         },
       };
     }
-    return blockedCompletionClaim(input, `Missing core evidence for ${actionContract.kind}.`);
+    return blockedCompletionClaim(input, `Missing core evidence for ${actionContract.kind}.`,
+      responseClaimsIncomplete ? input.responseText : undefined);
   }
 
   if (!guard.blocked) {

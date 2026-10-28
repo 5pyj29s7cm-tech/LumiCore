@@ -4,6 +4,10 @@ import os from 'os';
 import path from 'path';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+function browserSnapshot(target: string) {
+  return JSON.stringify({status:'ok',pageObservation:{source:'windows-uia',observedAt:'2026-10-28T12:00:00Z',url:target,title:'Example domain',documentPresent:true,textSample:'Example page content.',loadingState:'unknown',processId:10,nativeWindowHandle:20,processName:'msedge',windowTitle:'Example domain'}});
+}
+
 describe('external app permission boundaries', () => {
   beforeEach(async () => {
     const { initDatabase } = await import('../db_layer');
@@ -34,7 +38,7 @@ describe('external app permission boundaries', () => {
       },
       desktopRelay: async (name, args) => {
         relayCalls.push({ name, args });
-        return `Opened: ${args.target}`;
+        return name === 'desktop_ui_snapshot' ? browserSnapshot(args.browserPage.targetUrl) : `Opened: ${args.target}`;
       },
     } as any);
 
@@ -42,7 +46,9 @@ describe('external app permission boundaries', () => {
     expect(result.target).toBe('https://example.com');
     expect(result.opened).toBe(true);
     expect(confirmationCalls).toBe(0);
-    expect(relayCalls).toEqual([{ name: 'desktop_open', args: { target: 'https://example.com' } }]);
+    expect(relayCalls.map(call => call.name)).toEqual(['desktop_open','desktop_ui_snapshot']);
+    expect(relayCalls[0].args).toEqual({target:'https://example.com',application:''});
+    expect(relayCalls[1].args.browserPage.targetUrl).toBe('https://example.com');
   });
 
   it('does not report a website as opened when the native receipt opened a same-named file', async () => {
@@ -53,7 +59,7 @@ describe('external app permission boundaries', () => {
     const result = JSON.parse(await registry.execute('browser_open_task', { url: 'https://chat.deepseek.com/', open: true }, {
       desktopRelay: async () => 'Opened: C:/Desktop/deepseek.txt',
     } as any));
-    expect(result).toMatchObject({ opened: false, navigationVerified: false, loginVerified: false, status: 'target_unverified' });
+    expect(result).toMatchObject({ opened: false, navigationVerified: false, loginVerified: false, status: 'unverified' });
   });
 
   it('allows draft clipboard preparation without treating it as external app automation or a permission popup', async () => {
@@ -103,13 +109,15 @@ describe('external app permission boundaries', () => {
       userConfirmed: true,
       desktopRelay: async (name, args) => {
         relayCalls.push({ name, args });
-        return `Opened: ${args.target}`;
+        return name === 'desktop_ui_snapshot' ? browserSnapshot(args.browserPage.targetUrl) : `Opened: ${args.target}`;
       },
     } as any);
 
     const result = JSON.parse(raw);
     expect(result.opened).toBe(true);
-    expect(relayCalls).toEqual([{ name: 'desktop_open', args: { target: 'https://example.com' } }]);
+    expect(relayCalls.map(call => call.name)).toEqual(['desktop_open','desktop_ui_snapshot']);
+    expect(relayCalls[0].args).toEqual({target:'https://example.com',application:''});
+    expect(relayCalls[1].args.browserPage.targetUrl).toBe('https://example.com');
   });
 
   it('still blocks autonomous work in reactive mode', async () => {

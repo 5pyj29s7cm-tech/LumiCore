@@ -1,6 +1,6 @@
 
 import type { ToolRegistry } from '../registry';
-import { requireDesktopRelay } from './external_app_shared';
+import { desktopOpen } from './desktop_tools';
 
 function normalizeUrl(args: Record<string, any>): string {
   const rawUrl = String(args.url || '').trim();
@@ -32,15 +32,7 @@ registry.register({
       if (!args.open) {
         return JSON.stringify({ target, opened: false, note: 'Set open=true to open the browser when the user wants visible browser work.' }, null, 2);
       }
-      const desktopRelay = requireDesktopRelay(context);
-      const browser = String(args.browser || '').trim();
-      const result = await desktopRelay('desktop_open', { target, ...(browser ? { application: browser } : {}) });
-      // The native launch receipt must identify this URL. A same-named app or
-      // file is not a browser-open success, and a launch alone proves no login.
-      const opened = String(result).includes(target) && !/"(?:ok|success)"\s*:\s*false/.test(String(result));
-      return JSON.stringify({ target, opened, ...(opened ? { status: 'launched' } : {}), navigationVerified: false, loginVerified: false,
-        ...(opened ? {} : { ok: false, status: 'target_unverified' }),
-        ...(browser ? { browser } : {}), result }, null, 2);
+      return desktopOpen({target, application:String(args.browser || '').trim()}, context);
     },
     permission: 'user',
     securityLevel: 'safe',
@@ -52,12 +44,14 @@ registry.register({
       risk: 'low',
       sideEffects: [{ type: 'desktop_control', scope: 'requested browser target', reversible: true }],
       verification: {
-        strategy: 'provider_ack',
+        strategy: 'state_diff',
         required: true,
-        requiredFields: ['target', 'opened'],
-        successStatuses: ['launched'],
-        successSignals: ['native launcher acknowledged the exact URL and browser'],
-        limitations: ['This receipt verifies URL launch only. Page navigation, login and subsequent work require fresh page evidence.'],
+        requiredFields: ['target', 'opened', 'navigationVerified', 'pageLoadVerified', 'actualUrl'],
+        requiredValues: { opened:true, navigationVerified:true, pageLoadVerified:true },
+        successStatuses: ['verified'],
+        failureStatuses: ['unverified', 'target_mismatch', 'cancelled'],
+        successSignals: ['the actual native browser Document exposes the exact URL, title and displayed content'],
+        limitations: ['document_observed verifies a displayed page, not that every network resource loaded, login, or subsequent work.'],
       },
       intents: ['prepare or visibly open a browser task'],
     },

@@ -1,6 +1,7 @@
 import type { LumiCapabilityLane, LumiCapabilitySelection } from './capability_selection';
 import type { LumiTurnChannel, LumiTurnFlow } from './turn_flow';
-import type { NormalizedActionIntent } from './normalized_action_intent';
+import { normalizeActionIntent, type NormalizedActionIntent } from './normalized_action_intent';
+import { isDesktopLaunchVerificationOnly } from './action_request';
 import {
   buildDesktopExecutionPlan,
   type DesktopExecutionPlan,
@@ -53,11 +54,17 @@ function inferReason(input: DesktopExecutionStabilityPolicyInput): string {
 export function buildDesktopExecutionStabilityPolicy(
   input: DesktopExecutionStabilityPolicyInput,
 ): DesktopExecutionStabilityPolicy {
-  const applies = VISIBLE_DESKTOP_LANES.has(input.capabilitySelection.lane);
+  const intent = input.actionIntent || normalizeActionIntent(input.text);
+  // The semantic open adapter already owns same-window URL/document observation.
+  // A foreground input plan would repeat that work against whichever app is
+  // active after Lumi restores its window, rather than the opened page.
+  const nativePageOpen = /^https?:\/\//iu.test(intent.target)
+    && isDesktopLaunchVerificationOnly(input.text, intent);
+  const applies = VISIBLE_DESKTOP_LANES.has(input.capabilitySelection.lane) && !nativePageOpen;
   if (!applies) {
     return {
       applies: false,
-      reason: 'no visible desktop lane selected',
+      reason: nativePageOpen ? 'native page open owns its measured result' : 'no visible desktop lane selected',
       evidenceTools: [],
       actuationTools: [],
       verificationTools: [],

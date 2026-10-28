@@ -139,12 +139,10 @@ function compact(value: unknown, limit: number): string {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
 }
 
-function persistableToolResult(name: string, value: unknown): string {
-  // Exact text and section boundaries are evidence. Store one complete copy;
-  // readback metadata holds its digest so a truncated/legacy summary cannot
-  // be mistaken for the original document during task hydration.
-  return isArtifactReaderRecord({ name } as ToolExecutionRecord)
-    ? String(value ?? '') : compact(value, 3000);
+function persistableToolResult(value: unknown): string {
+  // Every source result keeps its complete text and section boundaries.
+  // Canonical envelope metadata is stored separately without a second payload.
+  return String(value ?? '');
 }
 
 function stableValue(value: unknown, depth = 0): unknown {
@@ -293,7 +291,7 @@ export function normalizeConversationTaskReceipt(value: unknown): ConversationTa
     arguments: candidate.arguments && typeof candidate.arguments === 'object' && !Array.isArray(candidate.arguments)
       ? stableValue(candidate.arguments) as Record<string, unknown>
       : {},
-    result: persistableToolResult(name, candidate.result),
+    result: persistableToolResult(candidate.result),
     ...(candidate.receipt !== undefined ? { receipt: stableValue(candidate.receipt) } : {}),
     ...(candidate.adapterStarted === true ? { adapterStarted: true as const } : {}),
     ...(candidate.envelope ? { envelope: taskReceiptEnvelope(candidate) } : {}),
@@ -487,13 +485,11 @@ export function recordsToTaskReceipts(
     key: toolRecordKey(record),
     name: compact(record.name, 160),
     arguments: stableValue(record.arguments || {}) as Record<string, unknown>,
-    result: persistableToolResult(record.name, record.result),
+    result: persistableToolResult(record.result),
     ...(record.receipt !== undefined
       ? { receipt: stableValue(record.receipt) }
-      : structuredRecordPayload(record) !== null
-        ? { receipt: stableValue(structuredRecordPayload(record)) }
-        : textReadbackMetadata
-          ? { receipt: stableValue(textReadbackMetadata) }
+      : textReadbackMetadata
+        ? { receipt: stableValue(textReadbackMetadata) }
         : {}),
     ...(record.adapterStarted === true ? { adapterStarted: true as const } : {}),
     ...(record.envelope ? { envelope: taskReceiptEnvelope(record) } : {}),

@@ -44,7 +44,7 @@ describe('Windows readonly printer inventory', () => {
     const result = await readPrinterInventory({ platform: 'win32', execRunner });
     expect(result.status).toBe('ok');
     expect(result.printers).toHaveLength(2);
-    expect(result.printers[0]).toEqual({
+    expect(result.printers[0]).toMatchObject({
       name: 'Lab USB queue', isDefault: false, workOffline: true, cimPrinterStatus: 2,
       queueStatus: 'Normal', detectedErrorState: 0, portName: 'USB001', driverName: 'Test driver',
       isLocal: true, isNetwork: false, isShared: false, queueType: 'Local', jobCount: 1, jobsError: null,

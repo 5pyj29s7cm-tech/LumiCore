@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T11:28:09.385Z",
+  "updatedAt": "2026-10-28T12:06:00.678Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序网页与设备查询误判修复",
-    "status": "routing-fixed-live-replayed-page-and-answer-quality-held",
-    "instruction": "误路由修复已加载并复测；默认DeepSeek不变。保留网页页面核验及模型事实推断问题，不新增网页、不打印、不发送消息。"
+    "title": "主程序网页页面与设备观察证据修复",
+    "status": "software-reviewed-live-page-and-full-answer-replay-pending",
+    "instruction": "用户已恢复网页页面核验与打印答复推断修复。软件底层改动已封存；准备正常聊天完整复测不同网页/设备材料，不打印、不发送消息、不改默认模型，其余保留项及律师归档不动。"
   },
   "acceptedWholeItems": [
     3,
@@ -289,8 +289,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "routing-fixed-live-replayed-page-and-answer-quality-held",
-    "priority": "网页新打开/旧状态混淆、设备读取/发送混淆的重复投影已删除纠正，原会话及替代场景路由复测通过；网页加载/准确URL未通过，打印答复的设备身份推断仍保留。旧客户端已卸载，律师版及原保留项不动。"
+    "status": "software-reviewed-live-page-and-full-answer-replay-pending",
+    "priority": "用户已恢复网页页面核验与打印答复推断修复。软件底层改动已封存；准备正常聊天完整复测不同网页/设备材料，不打印、不发送消息、不改默认模型，其余保留项及律师归档不动。"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -1637,6 +1637,61 @@
       "newBrowserActionsStoppedAfterUserQuestion": true,
       "newVerificationLayer": false,
       "fixedAnswers": false,
+      "wholeApplicationAccepted": false
+    }
+  },
+  "latestMainPageDeviceEvidenceRepair": {
+    "at": "2026-10-28T12:06:00.678Z",
+    "status": "software-reviewed-live-page-and-full-answer-replay-pending",
+    "userResumed": true,
+    "sourceEvidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234/software-source",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234/software-source/evidence-seal.json",
+      "sha256": "6659483fb5f0bbad0da2dc0acd76d5b0905369cea6b1465ab9ee7e4dc6213c87",
+      "files": 27
+    },
+    "softwareValidation": {
+      "at": "2026-10-28T12:05:24.804Z",
+      "browserOwner": {
+        "tests": "36/36",
+        "typecheck": "passed",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/browser-native-page-owner-1793188252645/manifest.json",
+        "sha256": "55e784b044a321f6270ef6a0a0e760be46c37269c1f73db3d020157b5b82b1d4"
+      },
+      "printerOwner": {
+        "newTests": "9/9",
+        "related": "216/219;3 same HEAD baseline failures",
+        "databaseReopen": "passed",
+        "historicalSourceReplay": "5/5;not live hardware",
+        "sourceFreeze": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-device-observation-fidelity-1793187843701/source-freeze.json"
+      },
+      "root": {
+        "initialRelated": "475/520;38 previous same failures+3 independent known failures+4 stale launch-only fixtures",
+        "afterFixtureMaintenance": "104/107 action+navigation; only3 known baseline action failures",
+        "consumerAndPolicyReport": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234/browser-policy-consumer.json",
+        "relatedReport": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234/root-related.json",
+        "navigationFinalReport": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234/root-navigation-final.json",
+        "typecheck": "passed",
+        "typecheckOutput": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234/root-check-1.json"
+      },
+      "scope": "Software source only; real browser and full model/device replays pending",
+      "fixedAnswers": false,
+      "newVerificationLayer": false,
+      "defaultModelChanged": false,
+      "realPrintSubmissions": 0
+    },
+    "underlyingChanges": [
+      "Native browser Document observation belongs to the open adapter; removed launch echo and duplicate foreground plan for pure URL open.",
+      "Removed unconditional opened-page answer projection; existing result consumers use actual same-window page facts.",
+      "Windows printer observations now include PnP/parent/Container/AEP source fields; no driver/name-based physical identity guess.",
+      "Removed generic persisted tool/task body hard truncation and duplicate inferred JSON receipt."
+    ],
+    "boundaries": {
+      "defaultModelChanged": false,
+      "newVerificationRules": false,
+      "fixedAnswers": false,
+      "printSubmissions": 0,
+      "messageSends": 0,
       "wholeApplicationAccepted": false
     }
   }

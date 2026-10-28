@@ -40,10 +40,10 @@ export function buildSimpleDesktopOpenContract(): LumiActionContract {
     label: 'Desktop target launch/open',
     coreAction: 'Open or focus exactly the desktop app, file, folder, or URL named by the user',
     preparationIsNotCompletion: ['only listing installed apps', 'opening a different fallback app', 'planning a larger task inside the app'],
-    requiredEvidence: ['successful desktop_open or browser_open_task receipt for the requested target', 'or matching active-window/running-process evidence'],
+    requiredEvidence: ['native open receipt with the observed target identity: the exact app/file window, or the actual URL and rendered document in the same browser window'],
     preferredTools: ['desktop_list_apps', 'desktop_open', 'browser_open_task', 'desktop_active_window', 'desktop_running_processes'],
     verificationTools: ['desktop_active_window', 'desktop_running_processes'],
-    nextStep: 'Resolve the exact requested target, open it once, and verify the matching process or active window when needed.',
+    nextStep: 'Resolve the exact requested target and open it once. Report the native observation returned by the open operation; a browser process name establishes an app launch, while its page observation establishes the URL and displayed document.',
     caution: 'Do not reinterpret a launch request as content creation, and do not substitute a different application unless the user explicitly asks for a fallback.',
   });
 }

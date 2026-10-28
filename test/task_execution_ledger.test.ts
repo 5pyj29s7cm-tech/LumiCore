@@ -638,7 +638,7 @@ describe('durable conversation task execution ledger', () => {
     expect(toolRecordSucceeded(record)).toBe(true);
     const receipts = recordsToTaskReceipts([record]);
     expect(receipts[0].outcome).toBe('success');
-    expect(receipts[0].result.length).toBeLessThan(record.result.length);
+    expect(receipts[0].result).toBe(record.result);
     expect(toolRecordSucceeded(taskReceiptsToRecords(receipts)[0])).toBe(true);
   });
 });

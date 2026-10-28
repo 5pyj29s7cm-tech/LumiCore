@@ -1,4 +1,6 @@
 export interface DesktopUiSnapshotOptions {
+  /** Read a displayed browser document without focusing or opening another session. */
+  browserPage?: { targetUrl: string; processNames: string[] };
   root?: 'active' | 'focused' | 'desktop';
   /** Optional root selector used to inspect a native window without foregrounding it. */
   name?: string;

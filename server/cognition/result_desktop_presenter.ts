@@ -134,7 +134,9 @@ export function formatGroundedSimpleDesktopOpenResult(
     || (/^(?:你)?(?:直接)?(?:把)?(?:它|这个|那个|文件|文档)?(?:给我)?打开(?:一下)?[。！？.!?]*$/iu.test(primaryTask) // i18n-allow: Chinese referential-open recognition; not user-visible copy.
       ? String([...(input.toolRecords || [])].reverse().find(record => /^(?:desktop_open|browser_open_task)$/i.test(record.name))?.arguments?.target || '')
       : '');
-  if (!requestedTarget) return null;
+  // A native page observation belongs in the full model answer. The app/file
+  // acknowledgment below cannot represent an observed URL, title and content.
+  if (!requestedTarget || /^https?:\/\//iu.test(requestedTarget)) return null;
   const contract = taskActionContract(input);
   if (contract.kind !== 'desktop_operation') return null;
   const records = input.toolRecords || [];
@@ -148,6 +150,7 @@ export function formatGroundedSimpleDesktopOpenResult(
   if (openIndex < 0) return null;
   const successfulOpen = records[openIndex];
   const openPayload = parseDesktopOpenResult(successfulOpen);
+  if (/^https?:\/\//iu.test(String(openPayload.target || successfulOpen.arguments?.url || successfulOpen.arguments?.target || ''))) return null;
   const targetLabel = friendlyDesktopOpenTarget(requestedTarget, successfulOpen, openPayload);
   const laterObservationFailed = records.slice(openIndex + 1).some(isFailedOptionalPostOpenObservation);
 
@@ -331,7 +334,7 @@ export function formatGroundedPartialActionResult(
         normalizedTask.includes(normalizedTarget)
         || normalizedTarget.includes(normalizedTask.replace(/^(?:\u8bf7|\u5e2e\u6211)?(?:\u6253\u5f00|open)/iu, ''))
       );
-    if (target && targetMatchesTask) {
+    if (target && !/^https?:\/\//iu.test(target) && targetMatchesTask) {
       const zh = isChineseText(actionText);
       const text = zh
         ? CN_VOICE_FAST_PATH_MESSAGES.partialOpen(target)
@@ -472,32 +475,6 @@ export function formatGoalSpecificDesktopResult(
   }
 
   return null;
-}
-
-function friendlyObservedOpenLabel(target: string): string {
-  const raw = String(target || '').trim();
-  if (!raw) return '';
-  try {
-    const parsed = new URL(raw);
-    return parsed.hostname.replace(/^www\./i, '') || raw;
-  } catch {}
-  if (/[\\/]/u.test(raw)) return raw.split(/[\\/]/).pop() || raw;
-  return raw;
-}
-
-export function formatObservedDesktopOpenResult(
-  input: LumiResultFinalizerInput,
-): LumiResultFinalizerResult | null {
-  const taskText = resultTaskText(input);
-  const target = extractDesktopLaunchTarget(taskText) || extractSimpleDesktopOpenTarget(taskText);
-  if (!target || !hasRequestedDesktopOpenEvidence(input.toolRecords || [], taskText, target)) return null;
-  const label = friendlyObservedOpenLabel(target);
-  const zh = isChineseText(taskText) || isChineseText(input.responseText);
-  return {
-    text: zh ? CN_EXECUTION_EVIDENCE_MESSAGES.desktopObservedOpen(label) : `Opened ${label}.`,
-    blocked: false,
-    reason: zh ? CN_EXECUTION_EVIDENCE_MESSAGES.desktopObservedOpenReason : 'The requested page or window was observed in the same turn.',
-  };
 }
 
 export function formatCreatedArtifactWithoutInAppCompletion(input: LumiResultFinalizerInput): string | null {

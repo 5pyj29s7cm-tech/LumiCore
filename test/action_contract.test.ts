@@ -34,6 +34,15 @@ import {
   taskCompletionFromReceipts,
 } from '../server/cognition/task_execution_ledger';
 
+function nativeDisplayedBrowserResult(target: string, title = 'Observed page') {
+  return { target, opened: true, ok: true, status: 'verified', navigationVerified: true,
+    pageLoadVerified: true, pageLoadState: 'document_observed', actualUrl: target, pageTitle: title,
+    actualTarget: { processId: 42, nativeWindowHandle: 84, processName: 'chrome.exe', title },
+    pageObservation: { source: 'windows-uia', observedAt: '2026-10-28T12:00:00.000Z', url: target, title,
+      documentPresent: true, textSample: 'Observed page content.', loadingState: 'unknown',
+      processId: 42, nativeWindowHandle: 84, processName: 'chrome.exe', windowTitle: title } };
+}
+
 describe('Lumi action contract', () => {
   it('keeps delimiter-free long Chinese context classification bounded', () => {
     const text = `old-user ${'背景资料'.repeat(500)}`;
@@ -557,7 +566,7 @@ describe('Lumi action contract', () => {
       id: 'open-wenshu',
       name: 'browser_open_task',
       arguments: { url: 'https://wenshu.court.gov.cn/', open: true },
-      result: JSON.stringify({ opened: true, result: 'Opened: https://wenshu.court.gov.cn/' }),
+      result: JSON.stringify(nativeDisplayedBrowserResult('https://wenshu.court.gov.cn/', '中国裁判文书网')),
     }], task)).toBe(true);
   });
 
@@ -580,7 +589,7 @@ describe('Lumi action contract', () => {
     expect(hasCoreActionEvidence(buildActionContract(browserTask), [{
       name: 'browser_open_task',
       arguments: { url: 'https://www.google.com', open: true },
-      result: JSON.stringify({ opened: true, url: 'https://www.google.com' }),
+      result: JSON.stringify(nativeDisplayedBrowserResult('https://www.google.com')),
     }], browserTask)).toBe(true);
   });
 
@@ -1515,7 +1524,7 @@ describe('Lumi action contract', () => {
     expect(hasCoreActionEvidence(contract, [search, visual], text)).toBe(true);
   });
 
-  it('recognizes the observed Aliyun page when the process-name verifier reports target mismatch', () => {
+  it('does not turn a browser title after target mismatch into verified page navigation', () => {
     const text = '\u6253\u5f00\u963f\u91cc\u4e91\u5b98\u7f51';
     const records = [{
       name: 'desktop_open',
@@ -1537,8 +1546,8 @@ describe('Lumi action contract', () => {
       },
     }];
 
-    expect(hasRequestedDesktopOpenEvidence(records, text)).toBe(true);
-    expect(hasCoreActionEvidence(buildActionContract(text), records, text)).toBe(true);
+    expect(hasRequestedDesktopOpenEvidence(records, text)).toBe(false);
+    expect(hasCoreActionEvidence(buildActionContract(text), records, text)).toBe(false);
   });
 
   it('requires observed playing state after a generic NetEase key dispatch', () => {
@@ -1712,7 +1721,7 @@ describe('canonical messaging and navigation contracts', () => {
     expect(contract.requiredEvidence.join(' ')).not.toMatch(/logged.in|account|session/i);
     expect(contract.preferredTools).not.toContain('web_login_run');
     expect(hasCoreActionEvidence(contract, [{ name: 'browser_open_task', arguments: { url: target, open: true },
-      result: JSON.stringify({ opened: true, url: target }) }], text)).toBe(true);
+      result: JSON.stringify(nativeDisplayedBrowserResult(target)) }], text)).toBe(true);
   });
 });
 

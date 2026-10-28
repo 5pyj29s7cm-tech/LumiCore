@@ -34,7 +34,9 @@ export async function captureWindowsUiSnapshot(options: DesktopUiSnapshotOptions
   const includeOffscreen = options.includeOffscreen === true;
   const timeoutMs = clampInt(options.timeoutMs, 5000, 1000, 15000);
 
-  const script = buildUiaScript({
+  const script = options.browserPage
+    ? buildWindowsBrowserPageScript(options)
+    : buildUiaScript({
     ...options,
     root,
     maxDepth,
@@ -670,5 +672,155 @@ $result = [ordered]@{
   note = 'UI Automation action completed. Verify task-level result before claiming work is done.'
 }
 $result | ConvertTo-Json -Depth 24 -Compress
+`;
+}
+
+/** Build the same read-only page adapter used by desktop_open; exported for offline parser/interop checks. */
+export function buildWindowsBrowserPageScript(options: DesktopUiSnapshotOptions): string {
+  const page = options.browserPage;
+  if (!page || !/^https?:\/\//i.test(page.targetUrl)) throw new Error("A browser page snapshot requires an HTTP(S) target URL");
+  const processes = [...new Set(page.processNames.map(value => value.replace(/\.exe$/i, "").toLowerCase()).filter(value => /^[a-z0-9_-]+$/.test(value)))];
+  if (!processes.length) throw new Error("A browser page snapshot requires browser catalog processes");
+  return "$ErrorActionPreference = 'Stop'\n[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n$OutputEncoding = [Console]::OutputEncoding\n"
+    + "$TargetUrl = " + psLiteral(page.targetUrl) + "\n$ProcessNames = @(" + processes.map(psLiteral).join(",") + ")\n"
+    + "$TargetProcessId = " + optionalNumber(options.processId) + "\n$TargetNativeWindowHandle = " + optionalNumber(options.nativeWindowHandle) + "\n"
+    + String.raw`
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+# The managed UIA assembly does not expose the LegacyIAccessible Value or
+# AriaProperties IDs. Read those documented COM properties on the same HWND and
+# match the Document runtime ID before using managed TextPattern content.
+Add-Type @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+namespace LumiBrowserUia {
+ [ComImport, Guid("30cbe57d-d9d0-452a-ab13-7ac5ac4825ee"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+ interface IAutomation {
+  void CompareElements(); void CompareRuntimeIds(); void GetRootElement();
+  IElement ElementFromHandle(IntPtr hwnd);
+  void ElementFromPoint(); void GetFocusedElement(); void GetRootElementBuildCache();
+  void ElementFromHandleBuildCache(); void ElementFromPointBuildCache(); void GetFocusedElementBuildCache();
+  void CreateTreeWalker(); void ControlViewWalker(); void ContentViewWalker(); void RawViewWalker();
+  void RawViewCondition(); void ControlViewCondition(); void ContentViewCondition(); void CreateCacheRequest();
+  void CreateTrueCondition(); void CreateFalseCondition();
+  [return: MarshalAs(UnmanagedType.Interface)] object CreatePropertyCondition(int id, [MarshalAs(UnmanagedType.Struct)] object value);
+ }
+ [ComImport, Guid("d22108aa-8ac5-49a5-837b-37bbb3d7591e"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+ interface IElement {
+  void SetFocus();
+  [return: MarshalAs(UnmanagedType.SafeArray, SafeArraySubType=VarEnum.VT_I4)] int[] GetRuntimeId();
+  void FindFirst();
+  IElements FindAll(int scope, [MarshalAs(UnmanagedType.Interface)] object condition);
+  void FindFirstBuildCache(); void FindAllBuildCache(); void BuildUpdatedCache();
+  [return: MarshalAs(UnmanagedType.Struct)] object GetCurrentPropertyValue(int propertyId);
+ }
+ [ComImport, Guid("14314595-b4bc-4055-95f2-58f2e42c9855"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+ interface IElements { int Length { get; } IElement GetElement(int index); }
+ public static class DocumentProperties {
+  static void Release(object value) { if(value != null && Marshal.IsComObject(value)) Marshal.ReleaseComObject(value); }
+  public static Dictionary<string,string[]> Read(IntPtr hwnd) {
+   object instance=null, condition=null; IElement root=null; IElements documents=null;
+   var result=new Dictionary<string,string[]>();
+   try {
+    instance=Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("ff48dba4-60ef-4201-aa87-54103eef594e")));
+    var automation=(IAutomation)instance;
+    root=automation.ElementFromHandle(hwnd);
+    condition=automation.CreatePropertyCondition(30003, 50030); // Document control type
+    documents=root.FindAll(4, condition); // Descendants of this actual native window only
+    for(int i=0; i<Math.Min(documents.Length,64); i++) {
+     IElement doc=null;
+     try {
+      doc=documents.GetElement(i);
+      string url=doc.GetCurrentPropertyValue(30045) as string; // Value.Value
+      if(String.IsNullOrWhiteSpace(url)) url=doc.GetCurrentPropertyValue(30093) as string; // LegacyIAccessible.Value
+      string aria=doc.GetCurrentPropertyValue(30102) as string;
+      result[String.Join(",", doc.GetRuntimeId())]=new[]{url ?? "", aria ?? ""};
+     } catch {} finally { Release(doc); }
+    }
+   } finally { Release(documents); Release(condition); Release(root); Release(instance); }
+   return result;
+  }
+ }
+}
+"@
+
+function ReadBrowserDocument($window, $processName) {
+  $current = $window.Current
+  $hwnd = [int]$current.NativeWindowHandle
+  if ($current.IsOffscreen -or $hwnd -le 0) { return $null }
+  if ($TargetProcessId -gt 0 -and $current.ProcessId -ne $TargetProcessId) { return $null }
+  if ($TargetNativeWindowHandle -gt 0 -and $hwnd -ne $TargetNativeWindowHandle) { return $null }
+  $values = [LumiBrowserUia.DocumentProperties]::Read([IntPtr]$hwnd)
+  $condition = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Document)
+  $documents = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  $fallback = $null
+  $count = 0
+  foreach ($document in $documents) {
+    if (++$count -gt 64) { break }
+    try {
+      $dc = $document.Current
+      if ($dc.IsOffscreen -or $dc.BoundingRectangle.IsEmpty -or $dc.BoundingRectangle.Width -le 0 -or $dc.BoundingRectangle.Height -le 0) { continue }
+      # A nested iframe must not stand in for the top-level displayed page.
+      $parent = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($document)
+      $nested = $false
+      for ($depth=0; $null -ne $parent -and $depth -lt 32; $depth++) {
+        if ($parent.Current.ControlType -eq [System.Windows.Automation.ControlType]::Document) { $nested=$true; break }
+        if ($parent.Current.NativeWindowHandle -eq $hwnd) { break }
+        $parent=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($parent)
+      }
+      if ($nested) { continue }
+      $key = [string]::Join(',', $document.GetRuntimeId())
+      if (-not $values.ContainsKey($key)) { continue }
+      $url = $values[$key][0]
+      $uri = $null
+      if (-not [Uri]::TryCreate($url, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -notin @('http','https')) { continue }
+      $loading = 'unknown'
+      if ($values[$key][1] -match '(?:^|;)\s*busy\s*=\s*true\s*(?:;|$)') { $loading='loading' }
+      elseif ($values[$key][1] -match '(?:^|;)\s*busy\s*=\s*false\s*(?:;|$)') { $loading='not_loading' }
+      $observation = [ordered]@{
+        source='windows-uia'; observedAt=[DateTime]::UtcNow.ToString('o')
+        url=$uri.AbsoluteUri; title=[string]$dc.Name; documentPresent=$true
+        textSample=''; loadingState=$loading
+        processId=[int]$current.ProcessId; nativeWindowHandle=$hwnd
+        processName=$processName; windowTitle=[string]$current.Name
+      }
+      if ($uri.AbsoluteUri -ceq ([Uri]$TargetUrl).AbsoluteUri) {
+        $textPattern=$null
+        if ($document.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$textPattern)) {
+          $observation.textSample=[string]$textPattern.DocumentRange.GetText(4096)
+        }
+        return $observation
+      }
+      if ($null -eq $fallback) { $fallback=$observation }
+    } catch {}
+  }
+  return $fallback
+}
+
+$observation=$null
+$fallback=$null
+$errors=@()
+$windows=[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+$count=0
+foreach ($window in $windows) {
+  if (++$count -gt 128) { break }
+  try {
+    $current=$window.Current
+    $process=[System.Diagnostics.Process]::GetProcessById($current.ProcessId)
+    $processName=$process.ProcessName
+    if ($ProcessNames -notcontains $processName) { continue }
+    $candidate=ReadBrowserDocument $window $processName
+    if ($null -eq $candidate) { continue }
+    if ($candidate.url -ceq ([Uri]$TargetUrl).AbsoluteUri) { $observation=$candidate; break }
+    if ($null -eq $fallback) { $fallback=$candidate }
+  } catch { $errors += $_.Exception.Message }
+}
+if ($null -eq $observation) { $observation=$fallback }
+[ordered]@{
+  status=if ($null -eq $observation) {'empty'} else {'ok'}
+  platform='win32'; pageObservation=$observation; errors=$errors
+  note='Read-only observation of a displayed Document in the selected native browser. document_observed does not certify that every network resource finished loading.'
+} | ConvertTo-Json -Depth 12 -Compress
 `;
 }

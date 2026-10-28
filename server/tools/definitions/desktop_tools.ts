@@ -1,7 +1,8 @@
 import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { assertValidCommandForHost } from '../command_platform';
-import { desktopFingerprintMatchesRequestedTarget } from '../../desktop/execution_plan';
+import { desktopFingerprintMatchesRequestedTarget, resolveDesktopApplicationIdentity } from '../../desktop/execution_plan';
+import { browserPageUrlMatches, hasObservedBrowserPage, type BrowserPageObservation } from '../../desktop/browser_page';
 import { parseDesktopWindowFingerprint } from '../../desktop/execution_runtime';
 import crypto from 'node:crypto';
 import { assertTextFileFormat } from '../text_file_format';
@@ -78,13 +79,14 @@ async function desktopListApps(args: Record<string, any>, context?: any): Promis
   });
 }
 
-async function desktopOpen(args: Record<string, any>, context?: any): Promise<string> {
+export async function desktopOpen(args: Record<string, any>, context?: any): Promise<string> {
   if (!context?.desktopRelay) {
     throw new Error('Desktop tools require a Tauri frontend relay (not available in web mode)');
   }
   const target = String(args.target || '').trim();
   const application = String(args.application || args.browser || '').trim();
   const openResult = await context.desktopRelay('desktop_open', { target, application });
+  if (/^https?:\/\//i.test(target)) return observeOpenedBrowserPage(target, application, openResult, context);
   const focusedProcessId = focusedNativeProcessId(openResult);
   let lastFingerprint: ReturnType<typeof parseDesktopWindowFingerprint> = null;
   let observationError = '';
@@ -144,6 +146,53 @@ async function desktopOpen(args: Record<string, any>, context?: any): Promise<st
     openResult,
     error: 'The foreground application does not match the exact requested target.',
   });
+}
+
+async function observeOpenedBrowserPage(target: string, application: string, openResult: unknown, context: any): Promise<string> {
+  // These are native launch receipt grammars. URL text anywhere in a reply is not an acknowledgement.
+  const opened = typeof openResult === 'string' && (openResult === 'Opened: ' + target
+    || openResult.startsWith('Opened ' + target + ' in '));
+  const base = {target, application, opened, openResult, loginVerified: false};
+  if (!opened) return JSON.stringify({...base,ok:false,status:'unverified',targetMatched:false,
+    navigationVerified:false,pageLoadVerified:false,pageLoadState:'unknown',error:'The native launcher did not acknowledge this exact URL.'});
+  const identity = resolveDesktopApplicationIdentity(application || 'browser', 'web_or_account');
+  const processNames = identity.processPatterns;
+  let observation: BrowserPageObservation | undefined;
+  let observationError = '';
+  for (const delay of [0,250,750,1500]) {
+    if (context?.isCancelled?.()) return JSON.stringify({...base,ok:false,status:'cancelled',targetMatched:false,
+      navigationVerified:false,pageLoadVerified:false,pageLoadState:'unknown'});
+    if (delay) await wait(delay);
+    if (context?.isCancelled?.()) return JSON.stringify({...base,ok:false,status:'cancelled',targetMatched:false,
+      navigationVerified:false,pageLoadVerified:false,pageLoadState:'unknown'});
+    try {
+      const snapshot = parseRelayPayload(await context.desktopRelay('desktop_ui_snapshot', {
+        root:'desktop', browserPage:{targetUrl:target, processNames}, timeoutMs:5000,
+        ...(observation?.nativeWindowHandle && browserPageUrlMatches(observation.url,target) ? {nativeWindowHandle:observation.nativeWindowHandle,processId:observation.processId} : {}),
+      }));
+      observation = snapshot?.pageObservation || observation;
+      if (Array.isArray(snapshot?.errors) && snapshot.errors.length) observationError = snapshot.errors.join('; ');
+      const actualTarget = observation ? {
+        processId:observation.processId, nativeWindowHandle:observation.nativeWindowHandle,
+        processName:observation.processName, title:observation.windowTitle,
+      } : undefined;
+      const candidate = {...base,ok:true,status:'verified',targetMatched:true, navigationVerified:true,
+        pageLoadVerified:true,pageLoadState:'document_observed',actualUrl:observation?.url,
+        pageTitle:observation?.title,pageObservation:observation,actualTarget,verificationBasis:'native_browser_document'};
+      if (hasObservedBrowserPage(candidate,target)) return JSON.stringify(candidate);
+    } catch (error: any) {
+      if (error?.name === 'AbortError' || context?.isCancelled?.()) return JSON.stringify({...base,ok:false,status:'cancelled',targetMatched:false,
+        navigationVerified:false,pageLoadVerified:false,pageLoadState:'unknown'});
+      observationError = String(error?.message || error || 'Browser document observation failed.');
+    }
+  }
+  const navigationVerified = !!observation && browserPageUrlMatches(observation.url,target);
+  return JSON.stringify({...base,ok:false,status:observation && !navigationVerified?'target_mismatch':'unverified',
+    targetMatched:navigationVerified,navigationVerified,pageLoadVerified:false,
+    pageLoadState:observation?.loadingState==='loading'?'loading':'unknown',
+    actualUrl:observation?.url,pageTitle:observation?.title,pageObservation:observation,
+    actualTarget:observation?{processId:observation.processId,nativeWindowHandle:observation.nativeWindowHandle,processName:observation.processName,title:observation.windowTitle}:undefined,
+    error:observationError || 'The requested browser document and its displayed content could not both be observed.'});
 }
 
 async function desktopShowLumiWindow(_args: Record<string, any>, context?: any): Promise<string> {
