@@ -3,6 +3,8 @@ import { registerLocalDeviceTools, type LocalDeviceAdapters } from '../server/to
 import { ToolRegistry } from '../server/tools/registry';
 import type { ToolContext } from '../server/tools/types';
 import { getAdapterRetryPolicy } from '../server/tools/adapter_resilience';
+import { verifyCapabilityReceipt } from '../server/tools/capability_verification';
+import { readPrinterJobStatus } from '../server/devices/printer_jobs';
 
 const native: ToolContext = { userId: 'local-device-test', authenticated: true, localExecution: true, executionBoundary: 'trusted_local' };
 function fixture() {
@@ -12,7 +14,7 @@ function fixture() {
     printerStatus: vi.fn(async () => ({ supported: true, status: 'ok', platform: 'win32', observedAt: 'test-time', printer: { name: 'Test queue', workOffline: true, queueStatus: 'Normal' }, ports: [], errors: [] })),
     networkPrinterStatus: vi.fn(async () => ({ ok: false, status: 'unavailable', observedAt: 'test-time', error: 'Timed out' })),
     submitTestPage: vi.fn(async () => ({ ok: true, status: 'submitted', observedAt: 'test-time', printerName: 'Test queue', jobId: 73, physicalCompletionVerified: false, submission: { endDocSucceeded: true } })),
-    jobStatus: vi.fn(async () => ({ ok: false, status: 'not_observed', observedAt: 'test-time', printerName: 'Test queue', jobId: 73, job: null, physicalCompletionVerified: false })),
+    jobStatus: vi.fn(async () => ({ ok: true, status: 'not_observed', observedAt: 'test-time', printerName: 'Test queue', jobId: 73, job: null, physicalCompletionVerified: false })),
     usbSerial: vi.fn(async () => ({ supported: true, status: 'ok', platform: 'win32', observedAt: 'test-time', devices: [], errors: [], limitations: ['A USB bridge does not prove an MCP connection.'] })),
   };
   const registry = new ToolRegistry();
@@ -104,8 +106,28 @@ describe('Lumi control-center device tools', () => {
     expect(receipt).toMatchObject({ ok: true, status: 'submitted', jobId: 73, physicalCompletionVerified: false, executionHost: 'lumi_backend_host' });
     expect(adapters.submitTestPage).toHaveBeenCalledExactlyOnceWith('Test queue');
     const status = JSON.parse(await tools.find(tool => tool.name === 'printer_job_status')!.handler({ printerName: 'Test queue', jobId: 73 }, native));
-    expect(status).toMatchObject({ ok: false, status: 'not_observed', job: null, physicalCompletionVerified: false });
+    expect(status).toMatchObject({ ok: true, status: 'not_observed', job: null, physicalCompletionVerified: false });
     expect(adapters.jobStatus).toHaveBeenCalledExactlyOnceWith('Test queue', 73);
+  });
+
+  it.each([2,87])('verifies the exact native missing-job observation through the existing generic contract (Win32 %j)', async code => {
+    const { registry, tools, adapters } = fixture();
+    const execRunner=vi.fn(async()=>({stdout:JSON.stringify({Queue:{Name:'Test queue',DriverName:'Fixture driver',PortName:'WSD-fixture'},Submission:null,Error:null,Job:{Found:false,JobId:73,Win32ErrorCode:code}}),stderr:''}));
+    adapters.jobStatus.mockImplementationOnce((async()=>readPrinterJobStatus('Test queue',73,{platform:'win32',execRunner})) as never);
+    const result=await tools.find(tool=>tool.name==='printer_job_status')!.handler({printerName:'Test queue',jobId:73},native);
+    expect(JSON.parse(result)).toMatchObject({ok:true,status:'not_observed',job:null,win32ResultCode:code,errors:[],physicalCompletionVerified:false});
+    expect(verifyCapabilityReceipt(registry.getCapabilityManifestEntry('printer_job_status'),{result})).toMatchObject({status:'verified'});
+    expect(execRunner).toHaveBeenCalledOnce();
+    expect(adapters.submitTestPage).not.toHaveBeenCalled();
+  });
+  it('keeps an actual native query failure failed under the same contract', async()=>{
+    const {registry,tools,adapters}=fixture();
+    const execRunner=vi.fn(async()=>({stdout:JSON.stringify({Queue:{Name:'Test queue',DriverName:'Fixture driver',PortName:'WSD-fixture'},Submission:null,Job:null,Error:'GetJob access denied'}),stderr:''}));
+    adapters.jobStatus.mockImplementationOnce((async()=>readPrinterJobStatus('Test queue',73,{platform:'win32',execRunner})) as never);
+    const result=await tools.find(tool=>tool.name==='printer_job_status')!.handler({printerName:'Test queue',jobId:73},native);
+    expect(JSON.parse(result)).toMatchObject({ok:false,status:'unavailable',job:null,physicalCompletionVerified:false,errors:[{code:'job_query_failed'}]});
+    expect(verifyCapabilityReceipt(registry.getCapabilityManifestEntry('printer_job_status'),{result})).toMatchObject({status:'failed'});
+    expect(adapters.submitTestPage).not.toHaveBeenCalled();
   });
 
 });

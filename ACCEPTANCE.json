@@ -7,7 +7,7 @@
   "currentItem": {
     "id": null,
     "title": "主程序外部任务状态误路由修复",
-    "status": "source-and-socket-tested-live-model-replay-pending",
+    "status": "routing-four-model-cases-passed-observation-and-reply-cleanup-retest-pending",
     "instruction": "修复通用旧任务状态快捷投影；已过软件回归，默认模型原会话只读复测待验，不再打印。"
   },
   "acceptedWholeItems": [
@@ -289,7 +289,7 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "source-and-socket-tested-live-model-replay-pending",
+    "status": "routing-four-model-cases-passed-observation-and-reply-cleanup-retest-pending",
     "priority": "内置单页测试正常聊天确认后单次提交与用户出纸已通过；精确job2聊天回读/措辞保留；ESP真机及电视仍未通过"
   },
   "archivedLegalDevelopment": {
@@ -1118,7 +1118,7 @@
   },
   "latestMainTaskStatusRoutingRepair": {
     "at": "2026-10-28T09:28:15.378Z",
-    "status": "source-and-socket-tested-live-model-replay-pending",
+    "status": "routing-four-model-cases-passed-observation-and-reply-cleanup-retest-pending",
     "scope": "New external/source status read must not be projected onto old Lumi task ledger",
     "productionFiles": [
       "server/cognition/normalized_action_intent.ts",
@@ -1144,6 +1144,107 @@
     "defaultModelChanged": false,
     "printSubmissions": 0,
     "heldAcceptanceUnchanged": true,
-    "wholeApplicationAccepted": false
+    "wholeApplicationAccepted": false,
+    "replayV1": {
+      "routingPassed": 4,
+      "completeAnswersPassed": 1,
+      "printSubmissions": 0,
+      "defaultModelUnchanged": true,
+      "cases": [
+        {
+          "case": "printer-job2-original",
+          "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/chat-printer-job2-original-1793179770049",
+          "requestId": "device-control-harness-54ba223c-e588-4760-b87e-f01363ff578e",
+          "tools": [
+            {
+              "name": "printer_job_status",
+              "args": {
+                "printerName": "All-in-One Inkjet Printer PCL-3 (网络)",
+                "jobId": 2
+              },
+              "adapterStarted": true,
+              "status": "failed",
+              "attempts": 1
+            }
+          ],
+          "reason": "",
+          "defaultPreferenceUnchanged": true,
+          "sourceDirty": false
+        },
+        {
+          "case": "order-source-file",
+          "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/chat-order-source-file-1793179887909",
+          "requestId": "device-control-harness-553cdc16-6ba9-42e5-8d9d-92650fd8eb33",
+          "tools": [
+            {
+              "name": "read_file",
+              "args": {
+                "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/fixtures/order-status.json"
+              },
+              "adapterStarted": true,
+              "status": "verified_success",
+              "attempts": 1
+            }
+          ],
+          "reason": "execution_recovery_incomplete",
+          "defaultPreferenceUnchanged": true,
+          "sourceDirty": false
+        },
+        {
+          "case": "download-source-file",
+          "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/chat-download-source-file-1793179922810",
+          "requestId": "device-control-harness-ee2f872b-c2b9-4f87-b98c-0395a4e9bdb0",
+          "tools": [
+            {
+              "name": "read_file",
+              "args": {
+                "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/fixtures/download-status.json"
+              },
+              "adapterStarted": true,
+              "status": "verified_success",
+              "attempts": 1
+            }
+          ],
+          "reason": "",
+          "defaultPreferenceUnchanged": true,
+          "sourceDirty": false
+        },
+        {
+          "case": "prior-receipt-plus-new-read",
+          "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/chat-prior-receipt-plus-new-read-1793179956785",
+          "requestId": "device-control-harness-1bf3fd8b-2a5d-4f67-8aa0-292b746b9825",
+          "tools": [
+            {
+              "name": "read_file",
+              "args": {
+                "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/fixtures/order-status.json"
+              },
+              "adapterStarted": true,
+              "status": "verified_success",
+              "attempts": 1
+            }
+          ],
+          "reason": "execution_recovery_incomplete",
+          "defaultPreferenceUnchanged": true,
+          "sourceDirty": false
+        }
+      ],
+      "evidence": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/replay-v1-review.json"
+    },
+    "replyContractRepair": {
+      "evidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/observation-source",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/observation-source/evidence-seal.json",
+        "sha256": "fbe4f9adcdc2cb4b7162d8b1c9e8c8cee68cf2be1d48bb9a7662e414c3dc9aac",
+        "files": 11
+      },
+      "printerTests": "43/43",
+      "greenRelated": "78/78",
+      "markerTruth": "3/3",
+      "socketNewRead": "4/4",
+      "typecheck": "passed",
+      "newBaselineFailures": 0,
+      "completeModelReplay": "pending"
+    }
   }
 }

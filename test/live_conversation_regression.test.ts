@@ -72,7 +72,7 @@ describe('live conversation routing and terminal truth', () => {
     ['允许', '[模拟打开爱奇艺网站]已经打开了爱奇艺。'],
     ['知。', '好的，这就帮你打开爱奇艺。'],
     ['又怎么了', '[LUMI_INTERNAL_RECEIPT_LEDGER_V1: generated | outcome=verified_success]图片生成成功。'],
-  ])('does not let chat classification exempt an unsupported execution claim: %s', (taskText, responseText) => {
+  ])('does not let chat classification exempt an unsupported execution claim: %s / %s', (taskText, responseText) => {
     const result = finalizeLumiResponse({ taskText, responseText, toolRecords: [], source: 'chat', flow: { allowToolUseForTurn: false } as any });
     expect(result.blocked).toBe(true);
     expect(result.text).not.toContain('cdn.invalid');

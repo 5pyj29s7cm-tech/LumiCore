@@ -142,13 +142,13 @@ export function registerLocalDeviceTools(registry: ToolRegistry, adapters: Local
   });
   registry.register({
     name: 'printer_job_status',
-    description: 'Read the current Windows spooler receipt for an exact installed printer queue and positive job id returned by printer_print_test_page or supplied by the user. Returns raw job flags and page counters. A missing/disappearing job or PRINTED flag does not independently prove physical paper output. Does not submit, cancel, clear, restart or change any job.',
+    description: 'Read the current Windows spooler receipt for an exact installed printer queue and positive job id returned by printer_print_test_page or supplied by the user. Returns raw job flags and page counters. not_observed is a successful current observation, not permanent absence or a prohibition on a later query. A missing/disappearing job or PRINTED flag does not independently prove physical paper output. Does not submit, cancel, clear, restart or change any job.',
     parameters: { type: 'object', properties: {
       printerName: { type: 'string', description: 'Exact installed queue name from the submission receipt.' },
       jobId: { type: 'integer', minimum: 1, maximum: 2147483647, description: 'Exact Windows StartDoc/spooler job identifier.' },
     }, required: ['printerName', 'jobId'], additionalProperties: false },
     permission: 'user', securityLevel: 'safe',
-    capability: capability('devices.printers.job_status', 'local_read', ['observedAt', 'printerName', 'jobId', 'job'], ['job_observed'], [...PRINTER_JOB_LIMITATIONS]),
+    capability: capability('devices.printers.job_status', 'local_read', ['observedAt', 'printerName', 'jobId', 'job'], ['job_observed', 'not_observed'], [...PRINTER_JOB_LIMITATIONS]),
     evidence: { capability: 'devices.printers.job_status', operation: 'observe', assurance: 'observed', limitations: [...PRINTER_JOB_LIMITATIONS] },
     handler: async (args, context) => {
       requireControlCenter(context);

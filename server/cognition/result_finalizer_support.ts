@@ -79,7 +79,9 @@ export function sanitizeInternalExecutionText(value: string, chinese: boolean): 
   const raw = String(value || '').trim();
   if (!raw) return raw;
   const internalLine = /(?:No successful (?:current-turn )?tool execution|\ballowedTools\b|\bappTarget\b|\bUI\s*evidence\b|work product guard|action contract|Required completion evidence|Preferred tools|Verification tools|tool route|tool protocol|Maximum tool call iterations|execution_recovery_incomplete|desktop_control_paused_for_user_activity|target_mismatch|<\/?function_calls?>|<invoke\b|\[historical\s+source=[^\]]+\]|\[[^\]\r\n]{1,48}\]\s*[A-Za-z][A-Za-z0-9_.:-]{1,127}\s*\(|^\s*(?:\u72b6\u6001\s*[:\uff1a]\s*(?:\u5931\u8d25|\u53d7\u963b)|\u8bc1\u636e\s*[:\uff1a]|\u5177\u4f53\u963b\u585e\s*[:\uff1a]|\u6267\u884c\u53cd\u9988\s*$|\u5df2\u5b8c\u6210\u9879\s*$|\u673a\u5668\u8bc1\u636e\s*$|\u672a\u5b8c\u6210\u9879\s*$|\u963b\u585e\u9879\s*$|\u4e0b\u4e00\u6b65\s*$)|\u6211\u5df2\u4fdd\u7559\u539f\u76ee\u6807.{0,120}\u56de\u6267)/i;
-  const withoutHistoryMarkers = raw.replace(/\[historical\s+source=[^\]]+\]\s*/gi, '');
+  const withoutHistoryMarkers = raw
+    .replace(/\[historical\s+source=[^\]]+\]\s*/gi, '')
+    .replace(/\[(?:LUMI_INTERNAL_RECEIPT_LEDGER_V1|Verified tool receipt ledger):[^\]\r\n]*(?:\]|$)\s*/giu, '');
   if (!internalLine.test(withoutHistoryMarkers) && withoutHistoryMarkers === raw) return raw;
   const cleaned = withoutHistoryMarkers
     .split(/\r?\n/)

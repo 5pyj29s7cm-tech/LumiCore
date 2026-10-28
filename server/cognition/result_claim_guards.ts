@@ -4,8 +4,8 @@ import { documentReadMatchesRequestedTarget, isSuccessfulExactDocumentRead, extr
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from "../regions/messages/execution_evidence_messages";
 import { hasRequestedArtifactMutation } from './tool_intent';
 import { formatVerifiedTaskResultForReadability } from './reply_style';
-import { containsCompactToolEvidenceMarker } from '../conversation/summary_grounding';
 import { CN_RESULT_GROUNDING_MESSAGES } from "../regions/messages/voice_fast_path_messages";
+import { containsCompactToolEvidenceMarker } from '../conversation/summary_grounding';
 
 import { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from "./result_finalizer_types";
 import { resultTaskText, isVerifiedCurrentTurnRecord, taskActionContract, hasResultCoreActionEvidence, isChineseText, isInternalRuntimeWorkNarration } from "./result_finalizer_support";
@@ -69,13 +69,15 @@ export function groundedVerifiedDocumentObservation(
 
 export function leakedLegacyToolProtocol(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
   const raw = String(input.responseText || '').trim();
-  if (containsCompactToolEvidenceMarker(raw)) {
+  // A marker in model prose is not an execution receipt. With actual records,
+  // their existing current-turn/target validators own the result instead.
+  if (!(input.toolRecords || []).length && containsCompactToolEvidenceMarker(raw)) {
     return {
       text: isChineseText(resultTaskText(input)) || isChineseText(raw)
         ? CN_RESULT_GROUNDING_MESSAGES.actionNotStarted
         : 'No verified execution result supports this response.',
       blocked: true,
-      reason: 'Model output contained a reserved server receipt marker.',
+      reason: 'Model output contained a reserved server receipt marker without any tool records.',
     };
   }
   const hasXmlProtocol = /<(?:function_calls|tool_calls|invoke)\b/i.test(raw);

@@ -29,6 +29,8 @@ export interface PrinterTestPageResult extends PrinterJobBase {
 }
 export interface PrinterJobStatusResult extends PrinterJobBase {
   source: 'windows_spooler_getjob'; status: 'job_observed' | 'not_observed' | 'unavailable' | 'unsupported';
+  /** Raw GetJob result when supplied; an absence observation is not an operation failure. */
+  win32ResultCode: number | null;
   job: { id: number; statusFlags: number; statusText: string | null; totalPages: number; pagesPrinted: number; submittedAt: string | null } | null;
 }
 
@@ -336,7 +338,7 @@ export async function submitPrinterTestPage(printerName: string, options: Printe
 
 /** Observe one exact queue/job id; not_observed is never proof of physical completion. */
 export async function readPrinterJobStatus(printerName: string, jobId: number, options: PrinterJobOwnerOptions = {}): Promise<PrinterJobStatusResult> {
-  const result: PrinterJobStatusResult = { ...base(printerName, options), source: 'windows_spooler_getjob', status: 'unavailable', jobId, job: null };
+  const result: PrinterJobStatusResult = { ...base(printerName, options), source: 'windows_spooler_getjob', status: 'unavailable', jobId, job: null, win32ResultCode: null };
   if (!result.supported) { result.status = 'unsupported'; return result; }
   if (!validPrinterName(printerName) || !Number.isInteger(jobId) || jobId < 1 || jobId > 0x7fffffff) {
     result.errors.push({ code: 'invalid_job_target', message: 'An exact installed queue name and positive Windows job id are required.' }); return result;
@@ -348,8 +350,9 @@ export async function readPrinterJobStatus(printerName: string, jobId: number, o
     const job = reply.Job;
     if (!row(job) || !result.queue || typeof job.Found !== 'boolean' || job.JobId !== jobId) throw new Error('Invalid Windows print-job receipt.');
     if (!job.Found) {
+      result.win32ResultCode = integer(job.Win32ErrorCode) ? job.Win32ErrorCode as number : null;
       if (job.Win32ErrorCode !== 2 && job.Win32ErrorCode !== 87) throw new Error('Missing print job without an operating-system result code.');
-      result.status = 'not_observed'; result.errors.push({ code: 'job_not_observed', message: 'The specified job is not observable in this queue. This does not establish that the paper printed.', win32ErrorCode: job.Win32ErrorCode });
+      result.ok = true; result.status = 'not_observed';
       return result;
     }
     if (![job.StatusFlags, job.TotalPages, job.PagesPrinted].every(integer)) throw new Error('Invalid Windows print-job counters.');

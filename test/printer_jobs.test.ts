@@ -98,9 +98,17 @@ describe('exact Windows print-job observation', () => {
     expect(JSON.parse(config.env.LUMI_PRINTER_JOB_REQUEST)).toEqual({ Operation: 'status', PrinterName: queue.Name, JobId: 73 });
   });
 
-  it.each([2, 87])('keeps no-longer-observable jobs distinct from completed jobs (Win32 %j)', async code => {
+  it.each([2, 87])('treats a timestamped missing-job observation as valid without claiming completion (Win32 %j)', async code => {
     const { options } = fixture(reply({ Submission: null, Job: { Found: false, JobId: 73, Win32ErrorCode: code } }));
-    expect(await readPrinterJobStatus(queue.Name, 73, options)).toMatchObject({ ok: false, status: 'not_observed', job: null, physicalCompletionVerified: false, errors: [{ win32ErrorCode: code }] });
+    expect(await readPrinterJobStatus(queue.Name, 73, options)).toMatchObject({ ok: true, status: 'not_observed', job: null, physicalCompletionVerified: false, win32ResultCode: code, errors: [] });
+  });
+
+  it('allows a later fresh query after a job was not observed, without declaring permanent absence', async () => {
+    const { execRunner, options } = fixture(reply({ Submission: null, Job: { Found: false, JobId: 73, Win32ErrorCode: 87 } }));
+    expect(await readPrinterJobStatus(queue.Name, 73, options)).toMatchObject({ok:true,status:'not_observed',physicalCompletionVerified:false});
+    execRunner.mockResolvedValueOnce({ stdout: JSON.stringify(reply({ Submission:null, Job:{Found:true,JobId:73,StatusFlags:0,StatusText:null,TotalPages:1,PagesPrinted:0,SubmittedAt:null} })), stderr:'' });
+    expect(await readPrinterJobStatus(queue.Name, 73, options)).toMatchObject({ok:true,status:'job_observed',physicalCompletionVerified:false,job:{id:73,pagesPrinted:0}});
+    expect(execRunner).toHaveBeenCalledTimes(2);
   });
 
   it('keeps denied query and wrong-id receipts unavailable', async () => {

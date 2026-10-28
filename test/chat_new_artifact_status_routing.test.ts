@@ -367,9 +367,9 @@ describe('Chat new artifact routing after a completed task', () => {
         : kind === 'prior-receipt-and-file'
           ? '你上一轮用了哪个工具？现在读取本地文件“' + sourcePath + '”，给出订单 ORD-9841 的任务状态；订单状态以这次新读取的合成材料为准，不联系平台、不执行订单，不修改文件。'
           : '请只读取本地文件“' + sourcePath + '”，告诉我其中任务编号 17 的状态和已下载字节数，只以文件字段为准，不运行其他程序，不修改文件。';
-      mocks.printerJobRead.mockResolvedValue({ ok: false, supported: true, platform: 'win32', source: 'windows_spooler_getjob',
+      mocks.printerJobRead.mockResolvedValue({ ok: true, supported: true, platform: 'win32', source: 'windows_spooler_getjob',
         status: 'not_observed', observedAt: new Date().toISOString(), printerName: queue, jobId: 2, queue: null, job: null,
-        physicalCompletionVerified: false, errors: [{ code: 'job_not_observed', message: 'Fixture job is not observable.' }], limitations: ['Not proof of physical completion.'] });
+        physicalCompletionVerified: false, win32ResultCode: 87, errors: [], limitations: ['Not proof of physical completion.'] });
       mocks.runWithTools.mockReset();
       const executions: string[] = [];
       const modelInputs: Array<{taskId: unknown; actionIntent: unknown; routedTaskText: unknown}> = [];

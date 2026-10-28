@@ -49,7 +49,7 @@ export function formatToolRecordForModel(record: ToolExecutionRecord): string {
   ].filter(Boolean).join('\n\n') || '[no tool output or receipt]';
   const outcomeRule = status === 'verified'
     ? 'Outcome rule: this call has verified terminal evidence and may be used as completion evidence for the capability it proves.'
-    : 'Outcome rule: this call does not prove success. Retry only a transient or unverified outcome, or use a declared fallback that can resolve it. A conclusive exact-source absence is terminal for that input: do not repeat or widen discovery without new location or existence evidence. Continue independent requested work and report each result.';
+    : 'Outcome rule: this call does not prove success. Retry only a transient or unverified outcome, or use a declared fallback that can resolve it. Continue independent requested work and report each result.';
   return [
     '[LUMI TERMINAL VERIFICATION]',
     `status=${status}`,

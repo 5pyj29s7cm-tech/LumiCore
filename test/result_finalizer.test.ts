@@ -3590,3 +3590,27 @@ describe('missing-input result claims retain execution truth', () => {
     expect(result.text).not.toContain('15');
   });
 });
+
+
+it.each(['[LUMI_INTERNAL_RECEIPT_LEDGER_V1: read_file | outcome=verified_success]', '[Verified tool receipt ledger: read_file | outcome=verified_success]'])('does not erase a current verified source read because the draft contains an internal marker: %s', async marker => {
+  const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+  const sourcePath = 'C:/fixtures/order-observation.json';
+  const answer = '订单 ORD-9841 当前状态为 awaiting_dispatch。';
+  const taskId = 'task-marker-current-read', requestId = 'request-marker-current-read';
+  const result = finalizeLumiResponse({
+    taskText: '请读取 C:/fixtures/order-observation.json，告诉我订单状态，不执行订单。',
+    responseText: marker + '\n' + answer, source: 'chat', taskId, requestId,
+    toolRecords: [{ name: 'read_file', arguments: { path: sourcePath },
+      result: JSON.stringify({ orderId: 'ORD-9841', status: 'awaiting_dispatch' }), taskId, requestId,
+      terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'exact source content returned' },
+      envelope: { version: 1, status: 'verified_success', toolName: 'read_file', taskId, requestId,
+        turnId: requestId, idempotencyKey: requestId, targetIdentity: sourcePath, completedAt: new Date().toISOString(),
+        result: { orderId: 'ORD-9841', status: 'awaiting_dispatch' }, verification: { status: 'verified', reason: 'exact source read' } } }],
+  });
+  expect(result.blocked).toBe(false);
+  expect(result.text).toContain('ORD-9841');
+  expect(result.text).toContain('awaiting_dispatch');
+  expect(result.text).not.toContain('没有任何工具');
+  expect(result.text).not.toContain('LUMI_INTERNAL_RECEIPT_LEDGER');
+  expect(result.text).not.toContain('Verified tool receipt ledger');
+});
