@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T06:30:24.237Z",
+  "updatedAt": "2026-10-28T06:38:20.418Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
     "title": "主程序电视与ESP32接入",
-    "status": "usb-observation-source-passed-runtime-chat-pending",
-    "instruction": "USB元数据能力与真实驱动修复通过，待加载正常聊天；电视身份与MCP控制仍未通过，律师保留项不动"
+    "status": "usb-metadata-main-chain-passed-answer-inferences-retained-tv-and-mcp-pending",
+    "instruction": "USB驱动、固件身份与正常聊天元数据读取已核对；回答推断、电视定位、MCP控制仍保留，现有小智后台未更改"
   },
   "acceptedWholeItems": [
     3,
@@ -289,7 +289,7 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "usb-observation-source-passed-runtime-chat-pending",
+    "status": "usb-metadata-main-chain-passed-answer-inferences-retained-tv-and-mcp-pending",
     "priority": "局域网电视、打印机与USB/MCP设备接入"
   },
   "archivedLegalDevelopment": {
@@ -579,8 +579,8 @@
     }
   },
   "latestMainTvEsp32Integration": {
-    "updatedAt": "2026-10-28T06:30:24.237Z",
-    "status": "usb-observation-source-passed-runtime-chat-pending",
+    "updatedAt": "2026-10-28T06:38:20.418Z",
+    "status": "usb-metadata-main-chain-passed-answer-inferences-retained-tv-and-mcp-pending",
     "sourceRoot": "D:/lumiOS",
     "capability": "usb_serial_list",
     "tests": "110/110",
@@ -602,7 +602,11 @@
     "esp32": {
       "mcpConnected": false,
       "existingBackendConfigurationChanged": false,
-      "compatibilityBridgeRequiredForExistingFirmware": true
+      "compatibilityBridgeRequiredForExistingFirmware": true,
+      "actualBootIdentityVerified": true,
+      "protocol": "Existing xiaozhi firmware routes MCP over backend WebSocket/MQTT envelopes; no serial MCP endpoint verified",
+      "firmwareFlashed": false,
+      "serialCommandsWritten": 0
     },
     "noBrandSpecificRouting": true,
     "noDefaultModelChange": true,
@@ -619,6 +623,58 @@
       "sha256": "f53dabaecf5f5e6472a830c3def962ccf5beb5ca41870a0eb6ca4cca557f937a",
       "files": 9
     },
-    "lawyerHeldUnchanged": true
+    "lawyerHeldUnchanged": true,
+    "sourceCodeCommit": "645d0db89228819008f6023a67bc58d519eb12d5",
+    "sourceOwnerEvidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-usb-serial-tool-20261028-1793168333493",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-usb-serial-tool-20261028-1793168333493/evidence-seal.json",
+      "sha256": "564e24779254ea0671fe2a64c7e0cb607beb8ab6e82d2d34a60c870c70c37d4e",
+      "files": 17
+    },
+    "runtime": {
+      "pid": 14124,
+      "startedAt": "2026-10-28T06:31:39.598Z",
+      "buildId": "645d0db89228819008f6023a67bc58d519eb12d5",
+      "sourceRoot": "D:/lumiOS",
+      "nativeServiceConnected": true,
+      "nativeDesktopRegistered": true,
+      "evidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/usb-serial-runtime-1793169071827",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/usb-serial-runtime-1793169071827/evidence-seal.json",
+        "sha256": "d179f1d875651fdf65856032e9e1d1720cbbe9630a4067260c86997e712af322",
+        "files": 7
+      }
+    },
+    "normalChat": {
+      "scope": "normal Socket local_acceptance_harness; not native UI chat",
+      "oneUserTurn": true,
+      "finalized": true,
+      "blocked": false,
+      "conversationId": "conv_190c6b9b-231e-4320-be07-779c6544d561",
+      "requestId": "usb-serial-readonly-harness-fac6c672-2eeb-4ff2-b3b5-cf430f36dbce",
+      "tools": [
+        "usb_serial_list"
+      ],
+      "toolExecutions": 1,
+      "attempts": 1,
+      "toolStatus": "verified_success",
+      "model": "relay/aliyun/deepseek-v4-pro",
+      "routing": "2/2 succeeded without fallback",
+      "defaultPreferenceUnchanged": true,
+      "metadataReadPassed": true,
+      "completeAnswerPassed": false,
+      "retained": [
+        "Availability wording goes beyond metadata observation",
+        "Infers same physical two-port board from same USB VID/PID without physical topology evidence"
+      ],
+      "evidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-usb-serial-normal-chat-harness-20261028-1793168734622",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-usb-serial-normal-chat-harness-20261028-1793168734622/evidence-seal.json",
+        "sha256": "703db6cc1de84f6ab4922849913053b123c3ae5055f479421e63b8847c1a6313",
+        "files": 23
+      }
+    },
+    "televisionControlAccepted": false,
+    "wholeApplicationAccepted": false
   }
 }
