@@ -110,6 +110,8 @@ export type IppPrinterDependencies = {
 
 export async function readNetworkPrinterStatus(target: IppPrinterTarget, deps: IppPrinterDependencies = {}) {
   const observedAt = new Date().toISOString();
+  let phase: 'request' | 'headers' | 'body' | 'decode' = 'request';
+  let timeoutPhase: 'headers' | 'body' | undefined;
   const limitations = ['Read-only Get-Printer-Attributes; this does not prove a print job can complete.', 'Network printer state is separate from installed Windows queue state. A failed query does not establish that the physical device is offline.'];
   try {
     if (!target || typeof target.address !== 'string' || !Number.isInteger(target.port) || target.port < 1 || target.port > 65535
@@ -123,14 +125,20 @@ export async function readNetworkPrinterStatus(target: IppPrinterTarget, deps: I
     const printerUri = 'ipp://' + httpUrl.host + httpUrl.pathname;
     const requestId = (deps.requestId ?? (() => randomInt(1, 0x7fffffff)))();
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
+    const timer = setTimeout(() => {
+      timeoutPhase = phase === 'body' ? 'body' : 'headers';
+      controller.abort();
+    }, 5000);
     try {
+      phase = 'headers';
       const response = await (deps.fetch ?? fetch)(httpUrl, {
         method: 'POST', redirect: 'error', signal: controller.signal,
         headers: { 'content-type': 'application/ipp', accept: 'application/ipp' },
         body: encodePrinterAttributesRequest(printerUri, requestId) as unknown as BodyInit,
       });
-      if (response.status !== 200 || !/^application\/ipp(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) {
+      phase = 'body';
+      const contentType = response.headers.get('content-type');
+      if (response.status !== 200 || (contentType !== null && !/^application\/ipp(?:\s*;|$)/i.test(contentType))) {
         await response.body?.cancel();
         throw new Error('Printer returned HTTP ' + response.status + ' without a valid IPP response');
       }
@@ -147,16 +155,24 @@ export async function readNetworkPrinterStatus(target: IppPrinterTarget, deps: I
           chunks.push(Buffer.from(item.value));
         }
       } finally { await reader.cancel().catch(() => {}); }
+      phase = 'decode';
       const parsed = decodePrinterAttributesResponse(Buffer.concat(chunks), requestId);
+      // Some endpoints omit MIME metadata. Only a complete, strictly decoded IPP response can compensate for it.
+      const warnings = contentType === null ? [{ code: 'missing_content_type', message: 'Printer response omitted Content-Type; accepted only after complete HTTP body and IPP request-id validation.' }] : [];
       if (parsed.statusCode >= 0x0100) {
-        return { ok: false, status: 'query_failed', scope: 'control_center_lan', observedAt, target, ippStatusCode: parsed.statusCode, limitations };
+        return { ok: false, status: 'query_failed', scope: 'control_center_lan', observedAt, target, ippStatusCode: parsed.statusCode, warnings, limitations };
       }
       const stateValue = parsed.attributes['printer-state']?.[0];
       const state = ({ 3: 'idle', 4: 'processing', 5: 'stopped' } as Record<number, string>)[Number(stateValue)] ?? 'unknown';
-      return { ok: true, status: 'observed', scope: 'control_center_lan', observedAt, target, ippStatusCode: parsed.statusCode, state, attributes: parsed.attributes, limitations };
+      return { ok: true, status: 'observed', scope: 'control_center_lan', observedAt, target, ippStatusCode: parsed.statusCode, state, attributes: parsed.attributes, warnings, limitations };
     } finally { clearTimeout(timer); }
   } catch (error) {
+    const errorCode = timeoutPhase ? timeoutPhase + '_timeout'
+      : phase === 'request' || phase === 'headers' ? 'request_failed' : 'response_invalid';
+    const message = timeoutPhase
+      ? 'IPP query timed out after 5000ms while ' + (timeoutPhase === 'headers' ? 'waiting for response headers' : 'reading response body')
+      : error instanceof Error ? error.message : String(error);
     return { ok: false, status: 'unavailable', scope: 'control_center_lan', observedAt, target,
-      error: error instanceof Error && error.name === 'AbortError' ? 'IPP query timed out after 5000ms' : error instanceof Error ? error.message : String(error), limitations };
+      phase, errorCode, error: message, limitations };
   }
 }
