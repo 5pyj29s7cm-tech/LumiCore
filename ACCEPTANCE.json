@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T08:50:44.051Z",
+  "updatedAt": "2026-10-28T10:01:48.489Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
     "title": "主程序外部任务状态误路由修复",
-    "status": "routing-four-model-cases-passed-observation-and-reply-cleanup-retest-pending",
-    "instruction": "修复通用旧任务状态快捷投影；已过软件回归，默认模型原会话只读复测待验，不再打印。"
+    "status": "passed-four-case-original-conversation-routing-and-readonly-replies",
+    "instruction": "旧任务误路由及回执覆盖已修正；默认模型原会话四案例只读完整回答复测通过并封存，无重新打印。"
   },
   "acceptedWholeItems": [
     3,
@@ -289,8 +289,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "routing-four-model-cases-passed-observation-and-reply-cleanup-retest-pending",
-    "priority": "内置单页测试正常聊天确认后单次提交与用户出纸已通过；精确job2聊天回读/措辞保留；ESP真机及电视仍未通过"
+    "status": "passed-four-case-original-conversation-routing-and-readonly-replies",
+    "priority": "本次外部任务状态误路由修复已完成并复测；内置单页出纸通过，精确Job2聊天回读通过（措辞边界保留）；ESP真机及电视仍未通过"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -783,7 +783,7 @@
     "latestPhysicalPrintRecord": "latestMainPrinterJobs.normalChatPhysicalPrint"
   },
   "latestMainPrinterJobs": {
-    "status": "single-builtin-page-normal-chat-confirmed-submission-and-user-paper-output-passed",
+    "status": "single-builtin-page-output-and-exact-job-readback-routing-passed",
     "evidence": {
       "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-source",
       "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-source/evidence-seal.json",
@@ -828,9 +828,9 @@
       }
     },
     "actualSubmittedJobs": 1,
-    "latestPhysicalResult": "User confirmed one Lumi built-in test page output; normal chat confirmation submitted Windows GDI Job2 once, one page/one copy. Exact-job chat readback and answer wording remain retained.",
+    "latestPhysicalResult": "Original single built-in Lumi test page output remains user-confirmed; Job2 exact normal-chat status readback now passed within routing scope, with point-in-time wording boundary retained. No additional print submission.",
     "defaultModelChanged": false,
-    "updatedAt": "2026-10-28T08:50:44.051Z",
+    "updatedAt": "2026-10-28T10:01:48.489Z",
     "normalChatPhysicalPrint": {
       "updatedAt": "2026-10-28T08:50:44.051Z",
       "status": "single-builtin-page-normal-chat-confirmed-submission-and-user-paper-output-passed",
@@ -910,23 +910,40 @@
         }
       ],
       "exactJobChatReadback": {
-        "status": "not-passed-task-status-shortcut",
-        "requestId": "device-control-harness-4d922a7a-4a4a-4ca4-8b4f-0197ea522f47",
+        "status": "passed-scoped-with-point-in-time-wording-boundary",
+        "requestId": "device-control-harness-4c8fafff-e9bc-4912-a4de-2a9b3920e487",
         "conversationId": "conv_5e033903-384d-4631-ad2e-c6a0a5589422",
-        "reason": "task_status",
-        "toolExecutions": 0,
-        "modelRoutingReceipts": 0,
-        "printAdapterExecutions": 0,
-        "rootCause": {
-          "status": "located-not-repaired",
-          "owner": "server/cognition/normalized_action_intent.ts:842 plus prior_task_status shortcut",
-          "detail": "Unbound task plus status projection mapped the external printer Job2 request to a prior Lumi task; ledger shortcut returned before model or tools. No printer-specific exception was introduced."
+        "sourceCodeCommit": "fc052d93c29db287c2496ae1462d4cb11c8bdab5",
+        "runtime": {
+          "pid": 35860,
+          "startedAt": "2026-10-28T09:52:29.650Z",
+          "buildId": "fc052d93c29db287c2496ae1462d4cb11c8bdab5"
         },
+        "tool": "printer_job_status",
+        "arguments": {
+          "printerName": "All-in-One Inkjet Printer PCL-3 (网络)",
+          "jobId": 2
+        },
+        "toolExecutions": 1,
+        "canonicalStatus": "verified_success",
+        "blocked": false,
+        "resultStatus": "not_observed",
+        "win32ResultCode": 87,
+        "physicalCompletionVerified": false,
+        "printAdapterExecutions": 0,
+        "defaultPreferenceUnchanged": true,
+        "nativeUiAccepted": false,
         "evidence": {
-          "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-chat-job2-1793177293580",
-          "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-chat-job2-1793177293580/manifest.json",
-          "sha256": "cd1277a0eb06c435e357581addbb9180fed8f7d62ff80e260b3cdf9a2338da73"
-        }
+          "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/chat-printer-job2-original-1793181191339/manifest.json",
+          "sha256": "c787caae6486fc46d036ecb2dd447dfa3a1be45a84b1e015eee1a788596fcfa3"
+        },
+        "finalReview": {
+          "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/accepted-readonly-replay",
+          "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/accepted-readonly-replay/evidence-seal.json",
+          "sha256": "bd15c6799602cda410e0a08d5005732a5329c8039086117f2a89002ca99ff2b7",
+          "files": 2
+        },
+        "wordingBoundaryRetained": "First reply describes the current queue as having no record; the strict receipt establishes only not_observed at query time. No permanence or physical completion was inferred from that receipt."
       },
       "exactJobProductionOwnerReadback": {
         "status": "not_observed",
@@ -956,7 +973,28 @@
         "files": 3
       },
       "defaultModelUnchangedAcrossAllThreeChats": true,
-      "noPrintResubmission": true
+      "noPrintResubmission": true,
+      "initialExactJobChatReadback": {
+        "status": "not-passed-task-status-shortcut",
+        "requestId": "device-control-harness-4d922a7a-4a4a-4ca4-8b4f-0197ea522f47",
+        "conversationId": "conv_5e033903-384d-4631-ad2e-c6a0a5589422",
+        "reason": "task_status",
+        "toolExecutions": 0,
+        "modelRoutingReceipts": 0,
+        "printAdapterExecutions": 0,
+        "rootCause": {
+          "status": "located-not-repaired",
+          "owner": "server/cognition/normalized_action_intent.ts:842 plus prior_task_status shortcut",
+          "detail": "Unbound task plus status projection mapped the external printer Job2 request to a prior Lumi task; ledger shortcut returned before model or tools. No printer-specific exception was introduced."
+        },
+        "evidence": {
+          "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-chat-job2-1793177293580",
+          "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-chat-job2-1793177293580/manifest.json",
+          "sha256": "cd1277a0eb06c435e357581addbb9180fed8f7d62ff80e260b3cdf9a2338da73"
+        }
+      },
+      "exactJobChatReadbackPassed": true,
+      "latestReadbackAt": "2026-10-28T10:01:48.489Z"
     },
     "completeAnswerPassed": false,
     "finalEvidence": {
@@ -966,6 +1004,13 @@
       "seal": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/actual-single-page-closed-1793177466994/evidence-seal.json",
       "sealSha256": "4fa7ee5076e124ff5a66d03c4eb969916292e48f12eb4b3a85d914a17a82fe3f",
       "files": 3
+    },
+    "exactJobChatReadbackPassed": true,
+    "latestReadbackEvidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/accepted-readonly-replay",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/accepted-readonly-replay/evidence-seal.json",
+      "sha256": "bd15c6799602cda410e0a08d5005732a5329c8039086117f2a89002ca99ff2b7",
+      "files": 2
     }
   },
   "latestMainXiaozhiGateway": {
@@ -1050,9 +1095,9 @@
     "userRemoteOperationRequired": false
   },
   "latestMainExternalControlConnect": {
-    "updatedAt": "2026-10-28T08:50:44.051Z",
-    "status": "builtin-page-print-submission-and-user-output-passed-exact-job-chat-retained",
-    "priority": "Built-in print action and physical paper output accepted; exact job chat readback retained; TV/ESP hardware remain pending",
+    "updatedAt": "2026-10-28T10:01:48.489Z",
+    "status": "builtin-page-output-and-exact-job-status-routing-passed",
+    "priority": "Built-in print action and user paper output remain accepted; exact-job normal-chat readback routing passed. Earlier print-answer wording and TV/ESP hardware remain retained.",
     "wholeApplicationAccepted": false,
     "wholeItemPassed": false,
     "lawyerAcceptanceUnchanged": true,
@@ -1091,7 +1136,7 @@
     "newSummaryFileCreated": false,
     "normalChatConfirmedPrintSubmittedJobs": 1,
     "jobId": 2,
-    "exactJobChatReadbackPassed": false,
+    "exactJobChatReadbackPassed": true,
     "completePrintAnswerPassed": false,
     "runtime": {
       "pid": 33052,
@@ -1114,19 +1159,39 @@
       "sealSha256": "4fa7ee5076e124ff5a66d03c4eb969916292e48f12eb4b3a85d914a17a82fe3f",
       "files": 3
     },
-    "exactJobProductionOwnerReadbackStatus": "not_observed-win32-87-not-chat-or-physical-proof"
+    "exactJobProductionOwnerReadbackStatus": "not_observed-win32-87-not-chat-or-physical-proof",
+    "latestStatusRoutingRepair": {
+      "status": "passed-four-case-original-conversation-routing-and-readonly-replies",
+      "sourceCodeCommit": "fc052d93c29db287c2496ae1462d4cb11c8bdab5",
+      "evidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/accepted-readonly-replay",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/accepted-readonly-replay/evidence-seal.json",
+        "sha256": "bd15c6799602cda410e0a08d5005732a5329c8039086117f2a89002ca99ff2b7",
+        "files": 2
+      },
+      "printSubmissions": 0
+    }
   },
   "latestMainTaskStatusRoutingRepair": {
-    "at": "2026-10-28T09:28:15.378Z",
-    "status": "routing-four-model-cases-passed-observation-and-reply-cleanup-retest-pending",
+    "at": "2026-10-28T10:01:48.489Z",
+    "status": "passed-four-case-original-conversation-routing-and-readonly-replies",
     "scope": "New external/source status read must not be projected onto old Lumi task ledger",
     "productionFiles": [
       "server/cognition/normalized_action_intent.ts",
-      "server/cognition/runtime_work_intent.ts"
+      "server/cognition/runtime_work_intent.ts",
+      "server/devices/printer_jobs.ts",
+      "server/tools/definitions/local_device_tools.ts",
+      "server/llm/tool_loop/receipts.ts",
+      "server/cognition/result_claim_guards.ts",
+      "server/cognition/result_finalizer_support.ts"
     ],
     "testFiles": [
       "test/chat_new_artifact_status_routing.test.ts",
-      "test/normalized_desktop_intent.test.ts"
+      "test/normalized_desktop_intent.test.ts",
+      "test/printer_jobs.test.ts",
+      "test/local_device_tools.test.ts",
+      "test/result_finalizer.test.ts",
+      "test/live_conversation_regression.test.ts"
     ],
     "sourceEvidence": {
       "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/software-source",
@@ -1244,7 +1309,121 @@
       "socketNewRead": "4/4",
       "typecheck": "passed",
       "newBaselineFailures": 0,
-      "completeModelReplay": "pending"
+      "completeModelReplay": "passed4/4-in-original-conversation"
+    },
+    "sourceCodeCommit": "fc052d93c29db287c2496ae1462d4cb11c8bdab5",
+    "finalReplay": {
+      "at": "2026-10-28T10:01:48.489Z",
+      "status": "passed-scoped",
+      "scope": "Four normal Socket default-model replies in the original previously failed conversation; not native UI or external order/download platform acceptance",
+      "sourceCodeCommit": "fc052d93c29db287c2496ae1462d4cb11c8bdab5",
+      "runtime": {
+        "pid": 35860,
+        "startedAt": "2026-10-28T09:52:29.650Z",
+        "buildId": "fc052d93c29db287c2496ae1462d4cb11c8bdab5"
+      },
+      "routingPassed": 4,
+      "completeAnswersPassed": 4,
+      "cases": [
+        {
+          "case": "printer-job2-original",
+          "requestId": "device-control-harness-4c8fafff-e9bc-4912-a4de-2a9b3920e487",
+          "conversationId": "conv_5e033903-384d-4631-ad2e-c6a0a5589422",
+          "tool": "printer_job_status",
+          "arguments": {
+            "printerName": "All-in-One Inkjet Printer PCL-3 (网络)",
+            "jobId": 2
+          },
+          "adapterExecutions": 1,
+          "attempts": 1,
+          "canonicalStatus": "verified_success",
+          "blocked": false,
+          "defaultPreferenceUnchanged": true,
+          "sourceDirty": false,
+          "manifest": {
+            "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/chat-printer-job2-original-1793181191339/manifest.json",
+            "sha256": "c787caae6486fc46d036ecb2dd447dfa3a1be45a84b1e015eee1a788596fcfa3"
+          }
+        },
+        {
+          "case": "order-source-file",
+          "requestId": "device-control-harness-451a83d0-73ca-4ee2-ab68-639475851eb3",
+          "conversationId": "conv_5e033903-384d-4631-ad2e-c6a0a5589422",
+          "tool": "read_file",
+          "arguments": {
+            "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/fixtures/order-status.json"
+          },
+          "adapterExecutions": 1,
+          "attempts": 1,
+          "canonicalStatus": "verified_success",
+          "blocked": false,
+          "defaultPreferenceUnchanged": true,
+          "sourceDirty": false,
+          "manifest": {
+            "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/chat-order-source-file-1793181293610/manifest.json",
+            "sha256": "19641849309b60fc56a0177b3e2071088c023d4aad9555e480cd453f53be95ea"
+          }
+        },
+        {
+          "case": "download-source-file",
+          "requestId": "device-control-harness-c0575f5a-880d-43c1-ad5a-1a7a09c8af52",
+          "conversationId": "conv_5e033903-384d-4631-ad2e-c6a0a5589422",
+          "tool": "read_file",
+          "arguments": {
+            "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/fixtures/download-status.json"
+          },
+          "adapterExecutions": 1,
+          "attempts": 1,
+          "canonicalStatus": "verified_success",
+          "blocked": false,
+          "defaultPreferenceUnchanged": true,
+          "sourceDirty": false,
+          "manifest": {
+            "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/chat-download-source-file-1793181324592/manifest.json",
+            "sha256": "2918c9c5215397854e1f8a8f25829b78a9d8e688386b5e184e6e18bab22a0002"
+          }
+        },
+        {
+          "case": "prior-receipt-plus-new-read",
+          "requestId": "device-control-harness-a5f32581-787a-4bab-bb2e-3f00dfc86ad0",
+          "conversationId": "conv_5e033903-384d-4631-ad2e-c6a0a5589422",
+          "tool": "read_file",
+          "arguments": {
+            "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/fixtures/order-status.json"
+          },
+          "adapterExecutions": 1,
+          "attempts": 1,
+          "canonicalStatus": "verified_success",
+          "blocked": false,
+          "defaultPreferenceUnchanged": true,
+          "sourceDirty": false,
+          "manifest": {
+            "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/chat-prior-receipt-plus-new-read-1793181353538/manifest.json",
+            "sha256": "8df3c4d49cb67c5c63280236ef2db2ac72117cd7c65bbceea7d7cb5bfc668e3d"
+          }
+        }
+      ],
+      "evidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/accepted-readonly-replay",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/accepted-readonly-replay/evidence-seal.json",
+        "sha256": "bd15c6799602cda410e0a08d5005732a5329c8039086117f2a89002ca99ff2b7",
+        "files": 2
+      },
+      "review": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/accepted-readonly-replay/review.json",
+      "independentReview": "passed",
+      "printSubmissions": 0,
+      "hardwareWrites": 0,
+      "defaultModel": "relay/aliyun/deepseek-v4-pro",
+      "defaultPreferenceUnchanged": true,
+      "baselineFailuresRetained": {
+        "resultFinalizer": 42,
+        "docDelivery": 6,
+        "oldStatusFixtures": 2,
+        "newFailures": 0
+      },
+      "wordingBoundaryRetained": "First reply describes the current queue as having no record; the strict receipt establishes only not_observed at query time. No permanence or physical completion was inferred from that receipt.",
+      "nativeChatUiAccepted": false,
+      "wholeApplicationAccepted": false
     }
   }
 }
