@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T03:46:01.381Z",
+  "updatedAt": "2026-10-28T03:54:51.579Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
     "title": "主程序网络打印机状态链路",
-    "status": "source-and-real-printer-read-only-passed-runtime-chat-pending",
-    "instruction": "真实只读查询已通过，加载新传输实现后验证正常聊天；电视/ESP32及律师保留项不变"
+    "status": "read-only-discovery-and-live-status-passed-answer-wording-retained",
+    "instruction": "发现与实时状态通过；完整答复措辞保留，实际出纸未验。律师保留项不动。"
   },
   "acceptedWholeItems": [
     3,
@@ -63,12 +63,12 @@
       "update acceptance checkpoint",
       "commit related changes locally"
     ],
-    "remotePushPerformed": false
+    "remotePushPerformed": true
   },
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "88c4e38a495b4b6f9f8dd91954047c9a931ada81",
+    "baseCommit": "1a835fb00670d78dfaa33bb1808c23292a7922f0",
     "branch": "feature/chat-song-workbench-20260916"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
@@ -127,7 +127,7 @@
   "currentCheckpointValidation": {
     "jsonParsed": true,
     "gitDiffCheck": "passed",
-    "sourceChanged": true,
+    "sourceChanged": false,
     "existingPassedOperationsReplayed": false,
     "priorSealedFilesVerified": "135/135",
     "currentSubsealFilesVerified": "56/56",
@@ -135,7 +135,8 @@
     "wholeApplicationAccepted": false,
     "deviceAndManifestTests": "93/93",
     "relatedRoutingTests": "196/200; four existing failures retained",
-    "typecheck": "passed"
+    "typecheck": "passed",
+    "checkpointOnly": true
   },
   "orderedPassSummary": {
     "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/acceptance-summary.json",
@@ -288,7 +289,7 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "source-and-real-printer-read-only-passed-runtime-chat-pending",
+    "status": "read-only-discovery-and-live-status-passed-answer-wording-retained",
     "priority": "先接电视和打印机；电脑作为局域网控制中心"
   },
   "archivedLegalDevelopment": {
@@ -390,8 +391,8 @@
     }
   },
   "latestMainDeviceIntegration": {
-    "updatedAt": "2026-10-27T16:03:00.578Z",
-    "status": "read-only-capabilities-loaded-physical-control-pending",
+    "updatedAt": "2026-10-28T03:54:51.579Z",
+    "status": "read-only-discovery-and-live-network-status-passed-physical-print-pending",
     "scope": "control-center LAN discovery and Windows printer inventory/status",
     "wholeItemPassed": false,
     "physicalControlAccepted": false,
@@ -405,16 +406,16 @@
     "actual": {
       "lanPrinterServiceObserved": true,
       "installedPrinterQueues": 7,
-      "networkIppStatus": "3/3 production-core native HTTP queries passed; runtime chat pending",
+      "networkIppStatus": "3/3 production-core plus 1 normal-chat tool query passed; idle, accepting jobs, zero queued",
       "television": "awaiting availability; user cannot turn it on",
       "physicalPrinting": "not executed",
       "esp32": "deferred"
     },
     "runtime": {
       "status": "loaded-and-backend-healthy",
-      "pid": 39348,
-      "startedAt": "2026-10-27T16:08:19.106Z",
-      "buildId": "88c4e38a495b4b6f9f8dd91954047c9a931ada81",
+      "pid": 37164,
+      "startedAt": "2026-10-28T03:47:33.499Z",
+      "buildId": "1a835fb00670d78dfaa33bb1808c23292a7922f0",
       "sourceRoot": "D:/lumiOS",
       "nativeExecutable": "D:/lumiOS/src-tauri/target/x86_64-pc-windows-gnu/debug/lumi-core.exe",
       "nativeWindowId": 8129392,
@@ -428,7 +429,16 @@
       "nativeChatToolExecutionVerified": false,
       "previousBackendSaved": true,
       "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-device-runtime-20261028-1793117271611/evidence-seal.json",
-      "sha256": "7f7b36a2dd686eaeadb7c09e1738786d893872d7fae99c94e786384031e0d7fd"
+      "sha256": "7f7b36a2dd686eaeadb7c09e1738786d893872d7fae99c94e786384031e0d7fd",
+      "nativeReconnected": true,
+      "nativeVisualAccepted": false,
+      "evidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ipp-native-runtime-1793159232619",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ipp-native-runtime-1793159232619/evidence-seal.json",
+        "sha256": "7612523f852ceab5260a7ad4fa4863ceda5f1789ab54d31d4176751aa42d51b1",
+        "files": 7
+      },
+      "normalHarnessChatToolExecutionVerified": true
     },
     "evidence": {
       "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-lan-printer-integration-20261027-1793115246538",
@@ -448,7 +458,7 @@
   },
   "latestMainIppCompatibility": {
     "updatedAt": "2026-10-28T03:21:40.516Z",
-    "status": "compatibility-tests-passed-live-status-still-blocked",
+    "status": "superseded-by-native-http-transport",
     "sourceRoot": "D:/lumiOS",
     "sourceChanged": [
       "server/devices/ipp_printer.ts",
@@ -459,7 +469,7 @@
     "independentReview": "passed",
     "diagnosis": "One valid complete printer reply omitted MIME; later IPP queries lack response headers while management HTTP remains responsive.",
     "changedBehavior": "Accept omitted response MIME only after complete strict IPP decoding; report headers/body timeout phase.",
-    "actualLive": "headers_timeout retained",
+    "actualLive": "See latestMainIppTransport: live network status now passed",
     "capturedReplyReplay": "passed offline",
     "physicalPrintingPassed": false,
     "physicalControlAccepted": false,
@@ -479,11 +489,12 @@
       "pid": 15480,
       "buildId": "f732d2873221b01ceebe88555425c07e0329fe3b"
     },
-    "currentPrinterConnection": "LAN, user confirmed; USB001 historical queue is not the current link"
+    "currentPrinterConnection": "LAN, user confirmed; USB001 historical queue is not the current link",
+    "supersededBy": "1a835fb00670d78dfaa33bb1808c23292a7922f0"
   },
   "latestMainIppTransport": {
-    "updatedAt": "2026-10-28T03:46:01.381Z",
-    "status": "source-and-real-printer-read-only-passed-runtime-chat-pending",
+    "updatedAt": "2026-10-28T03:54:51.579Z",
+    "status": "read-only-discovery-and-live-status-passed-answer-wording-retained",
     "sourceRoot": "D:/lumiOS",
     "oldDefaultFetchRemoved": true,
     "transport": "single node:http.request with fixed IPP headers; no retry/fallback",
@@ -511,6 +522,60 @@
       "sha256": "bf3ac460e05046fb7f90059157059ebdc4b83427bcff69a88fc42936462e15b7",
       "files": 11
     },
-    "runtimeChatValidation": "pending reload"
+    "runtimeChatValidation": "passed for discovery and live state; answer wording retained",
+    "sourceCodeCommit": "1a835fb00670d78dfaa33bb1808c23292a7922f0",
+    "runtime": {
+      "pid": 37164,
+      "startedAt": "2026-10-28T03:47:33.499Z",
+      "buildId": "1a835fb00670d78dfaa33bb1808c23292a7922f0",
+      "sourceRoot": "D:/lumiOS",
+      "nativeReconnected": true,
+      "nativeVisualAccepted": false,
+      "evidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ipp-native-runtime-1793159232619",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ipp-native-runtime-1793159232619/evidence-seal.json",
+        "sha256": "7612523f852ceab5260a7ad4fa4863ceda5f1789ab54d31d4176751aa42d51b1",
+        "files": 7
+      }
+    },
+    "normalChat": {
+      "scope": "local_acceptance_harness through normal Socket chat; not native UI",
+      "conversationId": "conv_fe97f412-ab73-44ce-a35a-56749e063c55",
+      "requestId": "printer-readonly-harness-823fd012-c7a7-4afe-89b5-5d3844f57e66",
+      "oneUserTurn": true,
+      "finalized": true,
+      "blocked": false,
+      "tools": [
+        "lan_discover_devices",
+        "printer_network_status"
+      ],
+      "toolExecutions": 2,
+      "attemptsPerTool": 1,
+      "toolStatus": "verified_success",
+      "model": "relay/aliyun/deepseek-v4-pro",
+      "modelRouting": "3/3 succeeded, no fallback",
+      "defaultPreferenceUnchanged": true,
+      "endpointAndStatePassed": true,
+      "completeAnswerPassed": false,
+      "retainedWording": [
+        "Broadcast feature row includes an unsupported S-field explanation and confused label",
+        "TLS 1.2 is advertised metadata; handshake was not verified"
+      ],
+      "evidenceDirectory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-printer-normal-chat-harness-20261028-1793159149229/run-chat-1793159431776",
+      "evidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-printer-normal-chat-harness-20261028-1793159149229",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-printer-normal-chat-harness-20261028-1793159149229/evidence-seal.json",
+        "sha256": "d9307ae95029125e5e630feb3ff2db7cfe5675638748e3472dd9d1af19b83477",
+        "files": 31
+      }
+    },
+    "physicalControlAccepted": false,
+    "nextPhysicalStep": "Actual print submission, driver rendering and physical output remain pending; no job sent",
+    "sourceTransportSeal": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ipp-native-transport-final-1793158999923",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ipp-native-transport-final-1793158999923/evidence-seal.json",
+      "sha256": "bf3ac460e05046fb7f90059157059ebdc4b83427bcff69a88fc42936462e15b7",
+      "files": 11
+    }
   }
 }
