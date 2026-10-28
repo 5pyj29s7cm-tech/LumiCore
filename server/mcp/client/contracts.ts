@@ -22,6 +22,8 @@ export interface MCPToolCapabilityDeclaration {
 }
 
 export interface MCPServerConfig {
+  /** Host-owned temporary device connection; never accepted from a model argument. */
+  runtimeOwnerUid?: string;
   command?: string;
   args?: string[];
   cwd?: string;

@@ -4,6 +4,7 @@ import { mountSystemRoutes } from '../server/routes/system_routes';
 import { flushDBOrThrow, querySQL, readDB, writeDB } from '../db_layer';
 import { setAutonomousTaskFinalizationPending } from '../server/autonomy/task_finalization';
 import jwt from 'jsonwebtoken';
+import { toolRegistry } from '../server/tools/registry';
 
 let url: string;
 let cleanup: () => void;
@@ -28,6 +29,18 @@ describe('Settings & Keys API', () => {
   });
 
   afterAll(() => cleanup?.());
+
+  it('keeps owner-scoped device tools out of another user HTTP catalogue', async () => {
+    const name = 'fixture_owned_device_setting_view';
+    toolRegistry.register({ name, description: 'Private device fixture', permission: 'user', securityLevel: 'confirm',
+      internalVisibility: { ownerUserId: 'settings-user' }, parameters: { type: 'object', properties: {} }, handler: async () => 'unused' });
+    try {
+      const own = await fetch(`${url}/api/tools`, { headers: userHeaders() });
+      const other = await fetch(`${url}/api/tools`, { headers: { Authorization: `Bearer ${otherUserToken}` } });
+      expect((await own.json()).some((tool: { name: string }) => tool.name === name)).toBe(true);
+      expect((await other.json()).some((tool: { name: string }) => tool.name === name)).toBe(false);
+    } finally { toolRegistry.unregister(name); }
+  });
 
   it('GET /settings/keys returns masked key status', async () => {
     const res = await fetch(`${url}/api/settings/keys`, {

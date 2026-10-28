@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T07:59:45.390Z",
+  "updatedAt": "2026-10-28T08:40:55.410Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序外部设备中心",
-    "status": "external-display-and-readonly-printer-status-passed-tv-esp-control-pending",
-    "instruction": "真实外设展示和只读打印机状态通过；电视与ESP32控制仍待接入"
+    "title": "主程序外部设备接通验收（打印优先）",
+    "status": "software-passed-normal-chat-print-live-retest-pending",
+    "instruction": "首次聊天打印0提交，局部禁止被旧整轮只读误拦的软件链路已修；等待真实打印结果。ESPgateway软件/集成已过但真机及模型实机未验，电视未识别。"
   },
   "acceptedWholeItems": [
     3,
@@ -289,8 +289,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "external-display-and-readonly-printer-status-passed-tv-esp-control-pending",
-    "priority": "局域网电视、打印机与USB/MCP设备接入"
+    "status": "software-passed-normal-chat-print-live-retest-pending",
+    "priority": "先复测正常聊天单次测试页打印；ESP gateway仅软件及集成通过、真机未配对；电视仍未识别"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -780,7 +780,7 @@
     "modelCalls": 0
   },
   "latestMainPrinterJobs": {
-    "status": "source-tested-actual-print-pending",
+    "status": "source-and-scope-policy-tested-normal-chat-live-print-retest-pending",
     "evidence": {
       "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-source",
       "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-source/evidence-seal.json",
@@ -790,6 +790,164 @@
     "tests": "106/106",
     "physicalOutputPassed": false,
     "arbitraryDocumentsSupported": false,
-    "modelPreferenceChanged": false
+    "modelPreferenceChanged": false,
+    "initialNormalChatPrint": {
+      "status": "not-passed-zero-submit-scope-policy-blocked-before-print",
+      "scope": "One normal Socket chat turn via local_acceptance_harness; not native UI",
+      "conversationId": "conv_5eb1afb8-877b-4163-8552-b8789bd8ed0a",
+      "requestId": "device-control-harness-a3fbe6db-8913-4b9f-990e-3e5a7e76cec1",
+      "submittedJobs": 0,
+      "printAdapterExecutions": 0,
+      "jobId": null,
+      "physicalOutputPassed": false,
+      "toolReceipts": 4,
+      "toolNames": [
+        "printer_list",
+        "client_capability_manifest",
+        "list_skills",
+        "printer_status"
+      ],
+      "modelRoutingReceipts": 3,
+      "defaultModel": "aliyun/deepseek-v4-pro",
+      "defaultPreferenceUnchanged": true,
+      "rootCause": "The prohibition on modifying the queue/default settings was incorrectly widened by the old whole-turn readonly branch. printer_print_test_page was therefore forbidden and no print proposal/adapter submission occurred.",
+      "sourceRepair": {
+        "status": "scoped-source-and-tests-passed-live-print-retest-pending",
+        "change": "Local-write limits now preserve declared pure external actions under normal exact confirmation; the matching model overlay no longer bans all external actions. No printer-specific keyword whitelist or fixed answer.",
+        "tests": "84/84 in5files; final typecheck passed",
+        "evidence": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-local-mutation-scope-20261028-1793175419714",
+        "rootFrozenCases": "Final frozen root regression376/376 in19files passed, including both formerly failed assertions; the original359/361 run remains preserved as historical evidence."
+      },
+      "evidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-chat-1793174543008",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-chat-1793174543008/manifest.json",
+        "sha256": "393e85d065f81809463b70dc4d1819ce27419078c4f46deabc031a725d23d76b"
+      }
+    },
+    "actualSubmittedJobs": 0,
+    "latestPhysicalResult": "Awaiting the separately authorized real-print retest result from the parent task; this record does not claim paper output.",
+    "defaultModelChanged": false
+  },
+  "latestMainXiaozhiGateway": {
+    "updatedAt": "2026-10-28T08:40:55.410Z",
+    "status": "software-tests-and-integration-passed-hardware-pairing-and-model-use-pending",
+    "scope": "Local Xiaozhi compatibility gateway software only",
+    "wholeItemPassed": false,
+    "hardwarePaired": false,
+    "actualDeviceMcpConnected": false,
+    "actualDeviceToolInventoryVerified": false,
+    "modelHardwareChatAccepted": false,
+    "firmwareFlashed": false,
+    "deviceConfigurationChanged": false,
+    "serialCommandsWritten": 0,
+    "defaultModelChanged": false,
+    "software": {
+      "wireTests": "16/16 loopback protocol fixtures",
+      "runtimeAndRepositoryTests": "13/13 including encrypted restore and a standard SDK/registry/manager fixture call",
+      "gatewayAndMcpIntegrationTests": "64/64 in7files",
+      "rootFrozenRegression": "376/376 in19files:294/294 in15files plus82/82 in4additionalfiles; no actual ESP/model hardware acceptance",
+      "typecheck": "passed",
+      "desktopBuild": "passed",
+      "independentReview": "passed within recorded scope",
+      "normalMcpToolOwnerAndConfirmation": "Current authenticated local owner required; ordinary exact confirmation remains; no globalmcp_config mutation",
+      "listenerBoundary": "Dedicated selected physicalLANIPv4:17840 device/bootstrap listener plus separate ephemeral loopback MCP listener; MainAPI host unchanged",
+      "privateStorage": "AES256GCM installation-key-bound atomic private binding storage; no owner credentials recorded in these ledgers"
+    },
+    "evidence": {
+      "wire": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/xiaozhi-local-gateway-wire-20261028-1793174523656",
+        "manifestSha256": "f9d98a40d119a1927529739fdb5eacbd5866c78caffee50749f845d0480e1d95"
+      },
+      "runtime": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-xiaozhi-runtime-service-20261028-1793174864965",
+        "manifestSha256": "c94d6732626b322ebfbe64865aea38db35cd7547899d745c848f9c2f898102db"
+      },
+      "independentReview": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-xiaozhi-integration-policy-independent-review-20261028-1793176491505",
+        "manifestSha256": "22392f687a01fb73013220bc0e9d42ab41f8349c4dcf9ae146b56fb7263a917d"
+      },
+      "rootGatewayAndMcp": {
+        "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/gateway-and-mcp.json",
+        "sha256": "a2c1617ac64164cdc654061ce036bf098c6258524265c3743edcb0f01313631e"
+      },
+      "rootFrozen": {
+        "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/frozen-check-0.json",
+        "sha256": "a289d9a32f24d5b75834582f69fe7e5608cbd571a59963cbd77e5a21056a9db0",
+        "exit": 0
+      },
+      "rootFrozenAdditional": {
+        "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/frozen-additional-tests.json",
+        "sha256": "5683ab268aa8dff3eec2a80146ce9a4b608706566a7c3eebcf645996e668b2bb",
+        "exit": 0
+      },
+      "frozenSource": {
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/frozen-source-1793176791852/evidence-seal.json",
+        "sha256": "d8535fa5fdbb81868248f7f4d67db2028b74ca53f9b91df31625dc4c22b7e005",
+        "files": 26
+      }
+    },
+    "retained": [
+      "No physical ESP pairing or configuration was performed by the software tests.",
+      "No actual ESP tool execution through the default model has been accepted.",
+      "Registry tool-name length/dot interoperability remains to be checked at actual device/model integration; fixture success is not model acceptance."
+    ]
+  },
+  "latestMainTelevisionConnection": {
+    "status": "unidentified-control-not-connected",
+    "hardwareIdentified": false,
+    "controlConnected": false,
+    "diagnostic": "One bounded dual-stack discovery round and one separately authorized two-peer readonly protocol check produced no identifiable TV endpoint. Silence is not proof of absence or offline state.",
+    "evidence": [
+      {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-tv-connection-investigation-20261028-1793173012948",
+        "manifestSha256": "fffdeb5867df4ba9a7fd77de0d74025ef8bdbfc57a4955afe053df6240b9d9d3"
+      },
+      {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/main-tv-peer-readonly-probe-20261028-1793173734777",
+        "manifestSha256": "30de9074f9ff19c740f61015f35a41af1acebe5a878351b5e93b2bba8a1454c8"
+      }
+    ],
+    "userRemoteOperationRequired": false
+  },
+  "latestMainExternalControlConnect": {
+    "updatedAt": "2026-10-28T08:40:55.410Z",
+    "status": "software-passed-normal-chat-print-live-retest-pending",
+    "priority": "Print acceptance first: one built-in page through the authorized exact installed queue, then observe the exact returned job ID",
+    "wholeApplicationAccepted": false,
+    "wholeItemPassed": false,
+    "lawyerAcceptanceUnchanged": true,
+    "heldItemsReopened": false,
+    "esp32Software": "software-tests-and-integration-passed-hardware-pairing-and-model-use-pending",
+    "esp32HardwarePaired": false,
+    "esp32ModelHardwareChatAccepted": false,
+    "televisionIdentified": false,
+    "televisionControlConnected": false,
+    "initialNormalChatPrint": "not-passed-zero-submit-scope-policy-blocked-before-print",
+    "initialPrintSubmissions": 0,
+    "physicalPrintOutputAccepted": false,
+    "rootFrozenRegression": {
+      "status": "passed",
+      "tests": 376,
+      "files": 19,
+      "groups": [
+        "294/294 in15files",
+        "82/82 in4files"
+      ],
+      "evidence": [
+        "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/frozen-check-0.json",
+        "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/frozen-additional-tests.json"
+      ],
+      "typecheck": "passed",
+      "desktopBuild": "passed",
+      "sourceManifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/frozen-source-1793176791852/evidence-seal.json",
+      "sourceManifestSha256": "d8535fa5fdbb81868248f7f4d67db2028b74ca53f9b91df31625dc4c22b7e005",
+      "sourceFiles": 26
+    },
+    "previousRootRegression": {
+      "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/final-tests.json",
+      "result": "359/361 in19files; two failed assertions retained as original evidence, subsequently green in the frozen15file rerun"
+    },
+    "defaultModelChanged": false,
+    "newSummaryFileCreated": false
   }
 }

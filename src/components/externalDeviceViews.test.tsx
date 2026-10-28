@@ -49,6 +49,7 @@ beforeEach(() => {
     warnings: [{ code: 'missing_content_type', message: 'Validated complete response without MIME metadata' }], limitations: [] };
   mocks.fetch.mockImplementation(async (url: string) => {
     const path = new URL(url).pathname;
+    if (path === '/api/devices/xiaozhi') return reply({ devices: [], errors: [], listener: { state: 'stopped', localAddress: null, port: null } });
     if (path === '/api/devices/external') return reply(external);
     if (path === '/api/devices/external/printer-status') return reply(statusResponse);
     if (path === '/api/devices') return reply({ devices: [{ id: 'native-a', name: 'Lumi desktop client', type: 'desktop', status: 'online' }], sensoryContext: null });
@@ -288,10 +289,10 @@ describe('device views consume external owner receipts', () => {
   it('waits for first visibility and does not rescan an existing observation when visibility changes again', async () => {
     const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
     render(<DeviceSyncCenter t={{}} />); await act(async () => {}); expect(externalReads()).toHaveLength(0);
-    hidden.mockReturnValue(false); act(() => document.dispatchEvent(new Event('visibilitychange')));
+    hidden.mockReturnValue(false); await act(async () => document.dispatchEvent(new Event('visibilitychange')));
     await screen.findByText('Generic serial bridge'); expect(externalReads()).toHaveLength(1);
-    hidden.mockReturnValue(true); act(() => document.dispatchEvent(new Event('visibilitychange')));
-    hidden.mockReturnValue(false); act(() => document.dispatchEvent(new Event('visibilitychange')));
+    hidden.mockReturnValue(true); await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+    hidden.mockReturnValue(false); await act(async () => document.dispatchEvent(new Event('visibilitychange')));
     expect(externalReads()).toHaveLength(1);
   });
 

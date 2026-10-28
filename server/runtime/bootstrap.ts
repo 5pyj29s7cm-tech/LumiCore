@@ -59,6 +59,7 @@ import { ensurePendingConfirmationPersistenceInitialized } from '../tools/pendin
 import { RuntimeShutdownCoordinator, registerShutdownSignals, type ShutdownIngress } from './shutdown';
 import { runtimeBackgroundWork, runtimeShutdownCancellation, waitUntilRuntimeIdle } from './shutdown_work';
 import { stopLayaShadow } from './laya_shadow';
+import { xiaozhiDeviceService } from '../devices/xiaozhi_service';
 
 interface BootstrapContext {
   server: any;
@@ -197,6 +198,8 @@ export async function bootstrap(ctx: BootstrapContext) {
   // Register LumiCore capabilities.
   registerAllTools(toolRegistry, llm);
   console.log(`[Tools] Registered ${toolRegistry.list().length} built-in tools`);
+  try { await xiaozhiDeviceService.startSaved(); }
+  catch { console.warn('[Devices] The local device gateway could not restore; inspect its status in Device Center.'); }
   const extensionHydration = await hydrateActiveExtensions(toolRegistry);
   if (extensionHydration.activated > 0 || extensionHydration.failed > 0) {
     console.log(`[Extensions] Active=${extensionHydration.activated}, boot-failed=${extensionHydration.failed}`);
@@ -289,6 +292,7 @@ export async function bootstrap(ctx: BootstrapContext) {
         stopMessagingIngressAndDrain(),
         stopMessagingConnections(),
         ctx.shutdownMcp(),
+        xiaozhiDeviceService.close(),
         stopWorkflowRuntimeMaintenance(),
         ctx.shutdownIngress.waitForIdle(),
         waitUntilRuntimeIdle(() => scheduler.listTasks().every(task => !task.running && !task.settlementPending)),

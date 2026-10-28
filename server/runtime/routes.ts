@@ -6,6 +6,7 @@ import { Server } from "socket.io";
 import { mountPersonalityRoutes } from "../routes/personality_routes";
 import { mountMcpRoutes } from "../routes/mcp_routes";
 import { mountDeviceRoutes } from "../routes/device_routes";
+import { mountXiaozhiDeviceRoutes } from '../routes/xiaozhi_device_routes';
 import { mountSystemRoutes } from "../routes/system_routes";
 import { mountChatRoutes } from "../routes/chat_routes";
 import { mountPreferencesRoutes } from "../routes/preferences_routes";
@@ -57,6 +58,7 @@ export function mountAllRoutes({ apiRouter, jwtSecret, llm, getCookieOptions, io
   mountPersonalityRoutes(apiRouter, jwtSecret, llmGetters);
   mountMcpRoutes(apiRouter);
   mountDeviceRoutes(apiRouter, jwtSecret);
+  mountXiaozhiDeviceRoutes(apiRouter);
 
   // System routes (health, tools, llm, settings, stats, ecosystem, modules)
   mountSystemRoutes(apiRouter, jwtSecret, io, llm);

@@ -202,7 +202,16 @@ function applyCurrentTurnNoMutationConstraint(
     ...(preservedOutput ? ['code_execution'] : []),
     ...(requestedWorkflowCapture ? ['capture_recent_workflow', 'save_workflow'] : []),
   ]);
+  const localWriteLimit = prohibition.local && !prohibition.external && !prohibition.allEffects;
   const mutationTools = registry.getCapabilityManifest(undefined, { context: visibilityContext })
+    // A local-file/settings fence cannot revoke a separately declared external action.
+    // Opaque/process effects remain denied; the ordinary exact confirmation gate is unchanged.
+    .filter(entry => !(localWriteLimit && entry.metadataSources.operation === 'tool_definition'
+      && entry.metadataSources.sideEffects === 'tool_definition'
+      && ['create', 'mutate', 'communicate'].includes(entry.operation)
+      && entry.sideEffects.some(effect => ['external_state_change', 'external_communication'].includes(effect.type))
+      && entry.sideEffects.every(effect => ['external_state_change', 'external_communication'].includes(effect.type)
+        || effect.reversible && ['none', 'local_read', 'network_read'].includes(effect.type))))
     .filter(entry => !scopedTools.has(entry.toolName) && (!preservedOutput || !isPreservedSourceOutputTool(entry.toolName)) && (
       entry.operation === 'create'
       || entry.operation === 'mutate'
@@ -228,6 +237,8 @@ function applyCurrentTurnNoMutationConstraint(
         ? 'Only the requested memory-person authoring and image operations may mutate state. Preserve existing people and all implementation files. Do not edit code/databases, send messages, or start a livestream.'
         : preservedOutput
         ? 'Preserve the original input file. Read and calculate, then save only the separately requested local output. Do not modify the source or send, submit, launch, or mutate unrelated state.'
+        : localWriteLimit
+        ? 'Current-turn local-write boundary: preserve local files, content, and settings. Do not perform local writes or opaque/process actions. Separately declared external actions remain subject to their normal authorization and exact confirmation; this boundary grants no approval.'
         : 'Current-turn read-only boundary: the user explicitly prohibited modification. Read/inspect/answer only; do not create, edit, save, send, submit, control, or mutate any state.',
     ].join('\n'),
   };

@@ -14,6 +14,7 @@ import {
 import { useSocket } from '@/hooks/useSocket';
 import { GlassCard } from './SharedUI';
 import { ExternalDeviceCenter } from './ExternalDeviceCenter';
+import { XiaozhiLocalDevices } from './XiaozhiLocalDevices';
 import { apiJson } from '@/services/apiClient';
 import { useApp } from '@/contexts/AppContext';
 import { getDomainReconciliation } from '@/lib/domainSession';
@@ -95,6 +96,7 @@ function DeviceSyncView({ t, scope }: { t: any; scope: string }) {
   return (
     <div className="space-y-6">
       <ExternalDeviceCenter scope={scope} lang={t.langCode === 'zh' ? 'zh' : 'en'} />
+      <XiaozhiLocalDevices scope={scope} lang={t.langCode === 'zh' ? 'zh' : 'en'} />
       <GlassCard className="p-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="space-y-1">

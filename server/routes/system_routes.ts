@@ -736,8 +736,8 @@ function mountVoiceProviderRoutes(router: Router) {
 
 function mountToolSchedulerRoutes(router: Router) {
   // Tool list for security config
-  router.get("/tools", requireAuth, (_req, res) => {
-    const tools = toolRegistry.list().map(t => ({
+  router.get("/tools", requireAuth, (req, res) => {
+    const tools = toolRegistry.listForContext({ userId: req.user!.uid, source: 'tool_settings' }).map(t => ({
       name: t.name,
       description: t.description.slice(0, 80),
       permission: t.permission,

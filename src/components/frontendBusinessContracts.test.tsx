@@ -41,6 +41,7 @@ vi.mock('@/services/socketService', () => ({ socketService: {
 vi.mock('./NodeDetailPanel', () => ({ NodeDetailPanel: () => null }));
 // External observations have endpoint-specific fixtures in externalDeviceViews.test.tsx.
 vi.mock('./ExternalDeviceCenter', () => ({ ExternalDeviceCenter: () => null }));
+vi.mock('./XiaozhiLocalDevices', () => ({ XiaozhiLocalDevices: () => null }));
 vi.mock('./PersonalityEvolution', () => ({ PersonalityEvolution: ({ personalityId }: any) => <div data-testid="evolution-owner">{personalityId}</div> }));
 vi.mock('./MemoryTree', () => ({
   layoutTree3D: (_memories: any[], files: any[]) => ({ nodes: files.map(file => ({ id: file.id, name: file.name })), curves: [] }),

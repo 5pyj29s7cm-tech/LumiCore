@@ -61,28 +61,37 @@ export interface ToolIntentDecisionTrace {
 }
 
 
+// The broad read-only/action veto is shared with local mutation recognition;
+// scoped file/settings limits must not acquire that whole-turn meaning.
+// i18n-allow: Existing no-mutation and read-only input grammar, not tool routing.
+const WHOLE_TURN_READ_ONLY = /(?:^|[，,。；;\n])\s*(?:只读(?!取)|read[- ]only)/iu;
+const LOCAL_NEGATION_CN = String.raw`(?:不要|不|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续|重新)?\s*`;
+const LOCAL_NEGATION_EN = String.raw`\b(?:do\s+not|don't|without)\s+`;
+const WHOLE_TURN_NO_ACTION_CN = new RegExp(LOCAL_NEGATION_CN + String.raw`(?:操作|(?:执行|推进)(?:\s*(?:或|和|及)\s*(?:执行|推进))?\s*(?:任何|后续|新|当前|现有|所有|全部)?\s*(?:步骤|任务|工作|动作|操作))`, 'u');
+const WHOLE_TURN_NO_ACTION_EN = new RegExp(LOCAL_NEGATION_EN + String.raw`(?:execute|advance)(?:\s+(?:or|and)\s+(?:execute|advance))?\s+(?:(?:any|new|further|current|existing|all)\s+)?(?:steps?|tasks?|work|actions?)\b`, 'iu');
 const EXPLICIT_NO_LOCAL_MUTATION_PATTERNS: RegExp[] = [
-  // i18n-allow: A clause explicitly limited to reading is the existing no-mutation boundary.
-  /(?:^|[，,。；;\n])\s*(?:只读|read[- ]only)/iu,
-  // i18n-allow: Chinese prohibition input recognition, not user-visible copy.
-  /(?:不要|不|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续|重新)?\s*(?:修改|改动|写入|保存|覆盖|删除|操作|(?:执行|推进)(?:\s*(?:或|和|及)\s*(?:执行|推进))?\s*(?:任何|后续|新|当前|现有|所有|全部)?\s*(?:步骤|任务|工作|动作|操作)|(?:改写|创建|新建|生成|起草|撰写|制作|整理成|做一份|给我一份)(?:(?:这|该|当前|任何|原|新)?(?:个|份)?\s*(?:文件|文档|内容|页面|系统|数据|图片|图像|视频|草稿|它)|(?=\s*(?:$|[，,。！？!?；;、\n]|或|和|及))))/u,
-  /(?:保持|保留)\s*(?:原|源)?(?:文件|文档|数据)(?:原样|不变)|(?:原|源)(?:文件|文档|数据)\s*(?:不动|不变|保持原样)/u, // i18n-allow: Chinese preservation input recognition.
-  /\b(?:do\s+not|don't|without)\s+(?:(?:modify|edit|write|save|overwrite|delete|change)\b|(?:execute|advance)(?:\s+(?:or|and)\s+(?:execute|advance))?\s+(?:(?:any|new|further|current|existing|all)\s+)?(?:steps?|tasks?|work|actions?)\b|(?:create|generate|draft)\b(?=\s*(?:(?:(?:the|this|that|any|all|new|original|current)\s+)?(?:files?|documents?|content|pages?|systems?|data|images?|pictures?|videos?|drafts?|it)\b|$|[.,;!?\n])))/iu,
+  WHOLE_TURN_READ_ONLY, WHOLE_TURN_NO_ACTION_CN, WHOLE_TURN_NO_ACTION_EN,
+  new RegExp(LOCAL_NEGATION_CN + String.raw`(?:修改|改动|写入|保存|覆盖|删除|(?:改写|创建|新建|生成|起草|撰写|制作|整理成|做一份|给我一份)(?:(?:这|该|当前|任何|原|新)?(?:个|份)?\s*(?:文件|文档|内容|页面|系统|数据|图片|图像|视频|草稿|它)|(?=\s*(?:$|[，,。！？!?；;、\n]|或|和|及))))`, 'u'),
+  /(?:保持|保留)\s*(?:原|源)?(?:文件|文档|数据)(?:原样|不变)|(?:原|源)(?:文件|文档|数据)\s*(?:不动|不变|保持原样)/u,
+  new RegExp(LOCAL_NEGATION_EN + String.raw`(?:(?:modify|edit|write|save|overwrite|delete|change)\b|(?:create|generate|draft)\b(?=\s*(?:(?:(?:the|this|that|any|all|new|original|current)\s+)?(?:files?|documents?|content|pages?|systems?|data|images?|pictures?|videos?|drafts?|it)\b|$|[.,;!?\n])))`, 'iu'),
 ];
 
 // The same existing prohibition verbs are scoped to external effects, not all local creation.
 const EXPLICIT_NO_EXTERNAL_COMMIT_PATTERNS: RegExp[] = [
-  // i18n-allow: existing Chinese send/submit prohibition, scoped by effect.
   /(?:不要|不|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续)?\s*(?:发送|提交)/u,
-  // i18n-allow: existing English send/submit prohibition, scoped by effect.
   /\b(?:do\s+not|don't|without)\s+(?:send|submit)\b/iu,
 ];
 
-export function explicitNoMutationScope(text: string): { local: boolean; external: boolean } {
+export function explicitNoMutationScope(text: string): { local: boolean; external: boolean; allEffects: boolean } {
   const normalized = String(text || '').trim();
   // i18n-allow: preserve the existing double-negative input boundary.
-  if (!normalized || /(?:不是|并非|并不是)\s*(?:不要|别|不用|无需).{0,12}(?:修改|改动|写入|保存|创建|生成|操作|执行|推进)/u.test(normalized)) return { local: false, external: false };
-  return { local: EXPLICIT_NO_LOCAL_MUTATION_PATTERNS.some(pattern => pattern.test(normalized)), external: EXPLICIT_NO_EXTERNAL_COMMIT_PATTERNS.some(pattern => pattern.test(normalized)) };
+  if (!normalized || /(?:不是|并非|并不是)\s*(?:不要|别|不用|无需).{0,12}(?:修改|改动|写入|保存|创建|生成|操作|执行|推进)/u.test(normalized)) return { local: false, external: false, allEffects: false };
+  return {
+    local: EXPLICIT_NO_LOCAL_MUTATION_PATTERNS.some(pattern => pattern.test(normalized)),
+    external: EXPLICIT_NO_EXTERNAL_COMMIT_PATTERNS.some(pattern => pattern.test(normalized)),
+    allEffects: WHOLE_TURN_READ_ONLY.test(normalized) || WHOLE_TURN_NO_ACTION_CN.test(normalized)
+      || WHOLE_TURN_NO_ACTION_EN.test(normalized) || hasExplicitNoToolInstruction(normalized),
+  };
 }
 
 /** A current-turn veto for side-effecting tools while preserving read-only inspection. */

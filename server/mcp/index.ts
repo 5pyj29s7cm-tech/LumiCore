@@ -240,6 +240,13 @@ function buildRegisteredTool(
   tool: MCPToolDef,
   serverConfig?: MCPServerConfig,
 ): ToolDefinition {
+  const requireRuntimeOwner = (context?: ToolContext) => {
+    if (!serverConfig?.runtimeOwnerUid) return;
+    if (context?.authenticated !== true || context.userId !== serverConfig.runtimeOwnerUid
+      || context.localExecution !== true || context.executionBoundary !== 'trusted_local') {
+      throw new Error('This device tool requires its owning user on the local control center.');
+    }
+  };
   const declaredCapability = resolveMCPToolCapability(tool, serverConfig);
   const runtimeConfigFingerprint = serverConfig
     ? mcpPublicRuntimeContractFingerprint(serverConfig)
@@ -268,6 +275,8 @@ function buildRegisteredTool(
     // even when the provider annotation marks the individual call read-only.
     permission: 'user',
     securityLevel: resolveMCPToolSecurity(tool, serverConfig),
+    ...(serverConfig?.runtimeOwnerUid ? { internalVisibility: { ownerUserId: serverConfig.runtimeOwnerUid } } : {}),
+    ...(serverConfig?.runtimeOwnerUid ? { preflight: (_args: Record<string, any>, context?: ToolContext) => requireRuntimeOwner(context) } : {}),
     capability,
     parameters: mcpSchemaToParams(tool.inputSchema),
     ...(serverConfig?.source === 'local' && serverConfig.managedSkill?.origin === 'generated' ? {
@@ -288,8 +297,10 @@ function buildRegisteredTool(
       },
     } : {}),
     handler: async (params: Record<string, any>, _ctx: ToolContext) => {
+      requireRuntimeOwner(_ctx);
       return mcpManager.callToolForServer(tool.serverName, rawToolName, params, {
         timeoutMs: getToolExecutionTimeoutMs(tool.name),
+        configuration: serverConfig,
       });
     },
   };
@@ -620,6 +631,9 @@ export function validateMCPServerConfig(
   }
   if (value.installationState !== undefined) {
     throw new Error(`MCP server "${serverName}" installationState is runtime-managed.`);
+  }
+  if (value.runtimeOwnerUid !== undefined) {
+    throw new Error(`MCP server "${serverName}" runtimeOwnerUid is runtime-managed.`);
   }
 
   const rawCommand = typeof value.command === 'string' ? value.command.trim() : '';
