@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T10:01:48.489Z",
+  "updatedAt": "2026-10-28T10:32:19.588Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序外部任务状态误路由修复",
-    "status": "passed-four-case-original-conversation-routing-and-readonly-replies",
-    "instruction": "旧任务误路由及回执覆盖已修正；默认模型原会话四案例只读完整回答复测通过并封存，无重新打印。"
+    "title": "主程序外部链接与设备测试、旧桌面端清理",
+    "status": "partial-known-routing-failures-retained-cleanup-completed",
+    "instruction": "保留真实失败及ComputerUse停止边界；旧客户端和闲置程序产物清理已完成。"
   },
   "acceptedWholeItems": [
     3,
@@ -289,8 +289,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "passed-four-case-original-conversation-routing-and-readonly-replies",
-    "priority": "本次外部任务状态误路由修复已完成并复测；内置单页出纸通过，精确Job2聊天回读通过（措辞边界保留）；ESP真机及电视仍未通过"
+    "status": "external-links-devices-tested-known-routing-blockers-retained-old-client-uninstalled",
+    "priority": "USB/LAN观察可用；IPP实际待机但组合聊天被旧发送合同误判；外链打开存在状态投影和工具裁剪问题，准确网址核对因ComputerUse安全停止未通过；旧桌面端已卸载，用户数据保留"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -1424,6 +1424,81 @@
       "wordingBoundaryRetained": "First reply describes the current queue as having no record; the strict receipt establishes only not_observed at query time. No permanence or physical completion was inferred from that receipt.",
       "nativeChatUiAccepted": false,
       "wholeApplicationAccepted": false
+    }
+  },
+  "latestMainExternalLinksDevicesTest": {
+    "at": "2026-10-28T10:32:19.588Z",
+    "status": "partial-known-routing-failures-and-browser-verification-blocked",
+    "evidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-links-devices-1793182149935/closed-evidence",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-links-devices-1793182149935/closed-evidence/evidence-seal.json",
+      "sha256": "f8be3c58cc17c9072e0d5beacb6593f2c77cfc7c905ce8bcc5559644c7edbb56",
+      "files": 14
+    },
+    "deviceTests": {
+      "usbAndLanChat": "passed-observation-only",
+      "printerIppActual": "observed-idle-acceptingJobs-queue0",
+      "printerCombinedChat": "failed-old-messaging-contract-matched-discovery-text",
+      "television": "not-identified-or-connected",
+      "esp32": "usb-bridge-observed-MCP-not-connected",
+      "xiaozhiDeviceCount": 0
+    },
+    "urlTests": {
+      "fullInstruction": "failed-status-projection-and-tool-selection",
+      "positiveControl": "waiting-confirmation",
+      "confirmationTerminal": {
+        "finalized": true,
+        "blocked": false,
+        "reason": ""
+      },
+      "confirmationTools": [
+        {
+          "name": "desktop_open",
+          "status": "verified_success",
+          "arguments": {
+            "target": "https://www.python.org/"
+          }
+        },
+        {
+          "name": "desktop_active_window",
+          "status": "verified_success",
+          "arguments": {}
+        },
+        {
+          "name": "desktop_execution_plan_receipt",
+          "arguments": {
+            "planId": "desktop_b2c244e46d3dcb0869c236eb",
+            "applicationId": "desktop-browser"
+          }
+        }
+      ],
+      "nativeBrowserTitle": "Welcome to Python.org 和另外7个页面",
+      "exactPageUrlVerified": false,
+      "status": "partial-open-action-attempted-page-url-not-verified",
+      "computerUseStopped": true,
+      "computerUseStopReason": "Tool could not determine current browser URL on Windows with enough confidence to enforce policy. No further UI actions taken.",
+      "remainingUrlVariants": "not-run-after-shared-routing-blocker-and-computer-use-stop"
+    },
+    "defaultModelChanged": false,
+    "printSubmissions": 0,
+    "hardwareWrites": 0,
+    "wholeApplicationAccepted": false
+  },
+  "latestMainObsoleteDesktopCleanup": {
+    "at": "2026-10-28T10:32:19.588Z",
+    "status": "completed-scoped",
+    "oldRegisteredDesktopUninstalled": true,
+    "oldStartupRemoved": true,
+    "deletedFiles": 34,
+    "logicalBytesRemoved": 4600256223,
+    "reclaimedDiskSpaceMeasured": false,
+    "userDataDirectoriesPreserved": true,
+    "currentDeveloperExecutablePreserved": "D:/lumiOS/src-tauri/target/x86_64-pc-windows-gnu/debug/lumi-core.exe",
+    "evidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-links-devices-1793182149935/closed-evidence",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-links-devices-1793182149935/closed-evidence/evidence-seal.json",
+      "sha256": "f8be3c58cc17c9072e0d5beacb6593f2c77cfc7c905ce8bcc5559644c7edbb56",
+      "files": 14
     }
   }
 }
