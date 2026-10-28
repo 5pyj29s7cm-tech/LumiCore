@@ -1,6 +1,6 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T12:23:01.093Z",
+  "updatedAt": "2026-10-28T13:05:21.229Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
@@ -1642,7 +1642,7 @@
   },
   "latestMainPageDeviceEvidenceRepair": {
     "at": "2026-10-28T12:06:00.678Z",
-    "status": "software-reviewed-live-page-and-full-answer-replay-pending",
+    "status": "web-display-verified-printer-complete-answer-not-passed",
     "userResumed": true,
     "sourceEvidence": {
       "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234/software-source",
@@ -1706,7 +1706,47 @@
       "typecheck": "passed",
       "wave1FailureReview": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234/wave1-review.json",
       "desktopRuntimeConfiguration": "Use official LUMI_DESKTOP=1 on verified same Windows session; guards unchanged",
-      "liveFullAnswerReplay": "pending"
-    }
+      "liveFullAnswerReplay": "Completed with actual failures retained; web display2/2 verified, original printer and Copper full answers not passed"
+    },
+    "completedReviewAt": "2026-10-28T13:05:21.229Z",
+    "overallPassed": false,
+    "sourceCommits": [
+      "8ebd7c7c5ecf9f521f96bb4f4f09f43c0eb67d56",
+      "5b06471bf5b4f25f7c810bc1639710b20ae4e5e7"
+    ],
+    "finalEvidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234/evidence-seal.json",
+      "sha256": "8755e7ca3503be91517bc2ce7ecfb8d8d08db9be7e908ac7ae10a8ae4ae07ec0",
+      "files": 441
+    },
+    "finalReview": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234/root-final-review.json",
+    "actualReplay": {
+      "pages": {
+        "passed": 2,
+        "total": 2,
+        "scope": "Exact URL/title/body observed in same native Edge Document; all network resources not established"
+      },
+      "printerOriginal": "Failed complete answer: DHCP cause labelled receipt fact and one UUID transcription error",
+      "hpRetry": "Read-only queue/cache explanation supported; earlier planning fallback Flash disclosed",
+      "syntheticCobalt": "Unknown identity boundary preserved",
+      "syntheticCopper": "Failed complete answer: unsupported queue dispatch inference"
+    },
+    "modelComparison": {
+      "userAuthorized": true,
+      "defaultPreferenceChanged": false,
+      "defaultProvider": "relay",
+      "defaultModel": "aliyun/deepseek-v4-pro",
+      "defaultPreferenceVerifiedUnchanged": true,
+      "bufferedOriginal": "Pro and Kimi HTTP504; retained",
+      "bufferedCopper": "Pro no reproduced dispatch claim this control; Kimi unsupported live-channel/no-drift claims",
+      "sseOriginal": "Both complete stop; Pro no DHCP guess; Kimi unmeasured DHCP possibility labelled unknown reachability",
+      "scope": "Recorded-text diagnosis only; cannot promote to application/default-model acceptance"
+    },
+    "remainingUnresolved": [
+      "Main program complete printer answer still over-interprets complete source data.",
+      "No software causal-text injection or result truncation found in remaining failures; exact triggering factor not isolated.",
+      "No fixed answer, output ban, additional verification layer, history deletion or default-model replacement introduced."
+    ]
   }
 }
