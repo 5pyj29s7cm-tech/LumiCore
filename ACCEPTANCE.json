@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T08:40:55.410Z",
+  "updatedAt": "2026-10-28T08:50:44.051Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
     "title": "主程序外部设备接通验收（打印优先）",
-    "status": "software-passed-normal-chat-print-live-retest-pending",
-    "instruction": "首次聊天打印0提交，局部禁止被旧整轮只读误拦的软件链路已修；等待真实打印结果。ESPgateway软件/集成已过但真机及模型实机未验，电视未识别。"
+    "status": "builtin-page-print-submission-and-user-output-passed-exact-job-chat-retained",
+    "instruction": "内置测试页经正常聊天精确确认后仅提交一次：Windows GDI Job2，1页1份；用户确认已正常出纸。精确作业聊天回读被旧task_status分支吞掉及完成措辞过强仍保留。ESP仅软件通过，电视未识别。"
   },
   "acceptedWholeItems": [
     3,
@@ -289,8 +289,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "software-passed-normal-chat-print-live-retest-pending",
-    "priority": "先复测正常聊天单次测试页打印；ESP gateway仅软件及集成通过、真机未配对；电视仍未识别"
+    "status": "builtin-page-print-submission-and-user-output-passed-exact-job-chat-retained",
+    "priority": "内置单页测试正常聊天确认后单次提交与用户出纸已通过；精确job2聊天回读/措辞保留；ESP真机及电视仍未通过"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -408,7 +408,7 @@
       "installedPrinterQueues": 7,
       "networkIppStatus": "3/3 production-core plus 1 normal-chat tool query passed; idle, accepting jobs, zero queued",
       "television": "User has powered it on; identity and control still not connected",
-      "physicalPrinting": "not executed",
+      "physicalPrinting": "Built-in Lumi test page submitted once via normal chat exact confirmation; user confirmed paper output. Arbitrary documents not accepted.",
       "esp32": "USB metadata observed; MCP control not connected"
     },
     "runtime": {
@@ -454,7 +454,8 @@
       "receipt": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-lan-printer-integration-20261027-1793115246538-push.json"
     },
     "sourceCommit": "88c4e38a495b4b6f9f8dd91954047c9a931ada81",
-    "note": "The following checkpoint changes metadata only. Running backend source/code baseline is the recorded buildId; no source changed after it started."
+    "note": "The following checkpoint changes metadata only. Running backend source/code baseline is the recorded buildId; no source changed after it started.",
+    "builtinPagePrintPhysicalAccepted": true
   },
   "latestMainIppCompatibility": {
     "updatedAt": "2026-10-28T03:21:40.516Z",
@@ -722,8 +723,7 @@
     ],
     "pending": [
       "TV identity/control",
-      "ESP32 MCP control",
-      "physical printing"
+      "ESP32 MCP control"
     ],
     "lawyerHeldUnchanged": true,
     "sourceCodeCommit": "02c55761d84a6e73e25ae15a76c26f9ff09d7cf0",
@@ -766,7 +766,9 @@
       "systemPrinterQueues": "retained in system details; physical reachability not inferred",
       "tvIdentified": false,
       "esp32McpControlConnected": false,
-      "physicalPrintingPerformed": false
+      "physicalPrintingPerformed": true,
+      "builtinPagePrintOutputUserConfirmed": true,
+      "arbitraryDocumentPrintingAccepted": false
     },
     "removed": [
       "dead PAIR bookkeeping and projection",
@@ -777,10 +779,11 @@
     ],
     "moved": "Remote Lumi MCP server configuration moved to existing tool-runtime connection settings",
     "defaultModelChanged": false,
-    "modelCalls": 0
+    "modelCalls": 0,
+    "latestPhysicalPrintRecord": "latestMainPrinterJobs.normalChatPhysicalPrint"
   },
   "latestMainPrinterJobs": {
-    "status": "source-and-scope-policy-tested-normal-chat-live-print-retest-pending",
+    "status": "single-builtin-page-normal-chat-confirmed-submission-and-user-paper-output-passed",
     "evidence": {
       "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-source",
       "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-source/evidence-seal.json",
@@ -788,7 +791,7 @@
       "files": 6
     },
     "tests": "106/106",
-    "physicalOutputPassed": false,
+    "physicalOutputPassed": true,
     "arbitraryDocumentsSupported": false,
     "modelPreferenceChanged": false,
     "initialNormalChatPrint": {
@@ -824,9 +827,146 @@
         "sha256": "393e85d065f81809463b70dc4d1819ce27419078c4f46deabc031a725d23d76b"
       }
     },
-    "actualSubmittedJobs": 0,
-    "latestPhysicalResult": "Awaiting the separately authorized real-print retest result from the parent task; this record does not claim paper output.",
-    "defaultModelChanged": false
+    "actualSubmittedJobs": 1,
+    "latestPhysicalResult": "User confirmed one Lumi built-in test page output; normal chat confirmation submitted Windows GDI Job2 once, one page/one copy. Exact-job chat readback and answer wording remain retained.",
+    "defaultModelChanged": false,
+    "updatedAt": "2026-10-28T08:50:44.051Z",
+    "normalChatPhysicalPrint": {
+      "updatedAt": "2026-10-28T08:50:44.051Z",
+      "status": "single-builtin-page-normal-chat-confirmed-submission-and-user-paper-output-passed",
+      "scope": "Exactly one built-in Lumi Windows-driver test page, one copy, on the authorized installed queue",
+      "wholeItemPassed": false,
+      "arbitraryDocumentsSupported": false,
+      "nativeChatUiAccepted": false,
+      "conversationId": "conv_5e033903-384d-4631-ad2e-c6a0a5589422",
+      "sourceCodeCommit": "6ecea3f641cee4d8e6984637c51299c703ee67ce",
+      "remotePush": {
+        "status": "pushed-per-parent-source-receipt",
+        "head": "6ecea3f641cee4d8e6984637c51299c703ee67ce"
+      },
+      "runtime": {
+        "pid": 33052,
+        "startedAt": "2026-10-28T08:41:56.908Z",
+        "buildId": "6ecea3f641cee4d8e6984637c51299c703ee67ce",
+        "sourceRoot": "D:/lumiOS",
+        "sourceDirty": false,
+        "evidenceRoot": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-runtime-fixed-1793176827122"
+      },
+      "proposal": {
+        "status": "waiting-exact-confirmation",
+        "requestId": "device-control-harness-f3e84fbf-ed6d-4fde-a775-d6fef7b368f1",
+        "printAdapterExecutions": 0,
+        "reason": "waiting_confirmation",
+        "scope": "Single-turn normal chat driver via local_acceptance_harness; not native UI acceptance.",
+        "evidence": {
+          "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-chat-fixed-1793176956990",
+          "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-chat-fixed-1793176956990/manifest.json",
+          "sha256": "8dd7b50101679a34f469d8cc9009fea5e43339c37514f7e5b7362e76a218c547"
+        }
+      },
+      "confirmedPrint": {
+        "status": "submitted",
+        "requestId": "device-control-harness-8b54d810-e65d-47eb-a2a7-9cdcecfc9dab",
+        "scope": "Single-turn normal chat driver via local_acceptance_harness; not native UI acceptance.",
+        "source": "windows_gdi",
+        "printerName": "All-in-One Inkjet Printer PCL-3 (网络)",
+        "jobId": 2,
+        "pages": 1,
+        "copies": 1,
+        "printAdapterExecutions": 1,
+        "attempt": 1,
+        "startDocSucceeded": true,
+        "endDocSucceeded": true,
+        "abortDocAttempted": false,
+        "receiptPhysicalCompletionVerified": false,
+        "evidence": {
+          "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-chat-confirm-1793177120573",
+          "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-chat-confirm-1793177120573/manifest.json",
+          "sha256": "1241b358519310c33ff48bbadc054ff369a491e2dbfc3b5770163696880424f3"
+        }
+      },
+      "physicalOutput": {
+        "status": "passed-user-confirmed",
+        "userReply": "已正常出纸",
+        "confirmedAt": "2026-10-28T08:48:13.580Z",
+        "jobId": 2,
+        "pages": 1,
+        "copies": 1,
+        "userConfirmed": true,
+        "evidence": {
+          "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-runtime-fixed-1793176827122/physical-output-confirmed.json",
+          "sha256": "1d5e41aea44b46afd6f1f1ade70d8f5bfb145098cd77560e0246607858f00172"
+        }
+      },
+      "completeAnswerPassed": false,
+      "retained": [
+        {
+          "issue": "The post-print model called printer_status, which reads the queue rather than the exact queue/job2; it described this as same-queue-and-job readback.",
+          "status": "retained"
+        },
+        {
+          "issue": "The answer inferred Job2 left the queue and characterized this as normal completion from queueCount0. Queue-only observation does not independently prove the exact job completed. The separate subsequent user confirmation proves actual paper output, not the earlier inference.",
+          "status": "retained"
+        }
+      ],
+      "exactJobChatReadback": {
+        "status": "not-passed-task-status-shortcut",
+        "requestId": "device-control-harness-4d922a7a-4a4a-4ca4-8b4f-0197ea522f47",
+        "conversationId": "conv_5e033903-384d-4631-ad2e-c6a0a5589422",
+        "reason": "task_status",
+        "toolExecutions": 0,
+        "modelRoutingReceipts": 0,
+        "printAdapterExecutions": 0,
+        "rootCause": {
+          "status": "located-not-repaired",
+          "owner": "server/cognition/normalized_action_intent.ts:842 plus prior_task_status shortcut",
+          "detail": "Unbound task plus status projection mapped the external printer Job2 request to a prior Lumi task; ledger shortcut returned before model or tools. No printer-specific exception was introduced."
+        },
+        "evidence": {
+          "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-chat-job2-1793177293580",
+          "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-chat-job2-1793177293580/manifest.json",
+          "sha256": "cd1277a0eb06c435e357581addbb9180fed8f7d62ff80e260b3cdf9a2338da73"
+        }
+      },
+      "exactJobProductionOwnerReadback": {
+        "status": "not_observed",
+        "acceptedAsChat": false,
+        "nativeUiAccepted": false,
+        "scope": "Direct production readPrinterJobStatus(queue,2) only; not normal chat or native UI; no print resubmission",
+        "observedAt": "2026-10-28T08:50:05.760Z",
+        "ok": false,
+        "supported": true,
+        "jobId": 2,
+        "source": "windows_spooler_getjob",
+        "win32ErrorCode": 87,
+        "errorCode": "job_not_observed",
+        "physicalCompletionVerified": false,
+        "evidence": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-runtime-fixed-1793176827122/production-job2-read.json",
+        "sha256": "5232e7f7ef1317b56c05f5d5f19d0277a2ca4f197441ca3e04bfa78ed666e58d",
+        "interpretation": "Job2 is not observable; this does not independently prove paper output. Physical output acceptance relies on explicit user confirmation."
+      },
+      "defaultModel": "aliyun/deepseek-v4-pro",
+      "defaultPreferenceUnchanged": true,
+      "finalEvidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/actual-single-page-closed-1793177466994",
+        "review": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/actual-single-page-closed-1793177466994/review.json",
+        "reviewSha256": "da26f8756a21873c0530113c97e86eac127cdfdf6b37eba4a808c0eaf56b1627",
+        "seal": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/actual-single-page-closed-1793177466994/evidence-seal.json",
+        "sealSha256": "4fa7ee5076e124ff5a66d03c4eb969916292e48f12eb4b3a85d914a17a82fe3f",
+        "files": 3
+      },
+      "defaultModelUnchangedAcrossAllThreeChats": true,
+      "noPrintResubmission": true
+    },
+    "completeAnswerPassed": false,
+    "finalEvidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/actual-single-page-closed-1793177466994",
+      "review": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/actual-single-page-closed-1793177466994/review.json",
+      "reviewSha256": "da26f8756a21873c0530113c97e86eac127cdfdf6b37eba4a808c0eaf56b1627",
+      "seal": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/actual-single-page-closed-1793177466994/evidence-seal.json",
+      "sealSha256": "4fa7ee5076e124ff5a66d03c4eb969916292e48f12eb4b3a85d914a17a82fe3f",
+      "files": 3
+    }
   },
   "latestMainXiaozhiGateway": {
     "updatedAt": "2026-10-28T08:40:55.410Z",
@@ -910,9 +1050,9 @@
     "userRemoteOperationRequired": false
   },
   "latestMainExternalControlConnect": {
-    "updatedAt": "2026-10-28T08:40:55.410Z",
-    "status": "software-passed-normal-chat-print-live-retest-pending",
-    "priority": "Print acceptance first: one built-in page through the authorized exact installed queue, then observe the exact returned job ID",
+    "updatedAt": "2026-10-28T08:50:44.051Z",
+    "status": "builtin-page-print-submission-and-user-output-passed-exact-job-chat-retained",
+    "priority": "Built-in print action and physical paper output accepted; exact job chat readback retained; TV/ESP hardware remain pending",
     "wholeApplicationAccepted": false,
     "wholeItemPassed": false,
     "lawyerAcceptanceUnchanged": true,
@@ -924,7 +1064,7 @@
     "televisionControlConnected": false,
     "initialNormalChatPrint": "not-passed-zero-submit-scope-policy-blocked-before-print",
     "initialPrintSubmissions": 0,
-    "physicalPrintOutputAccepted": false,
+    "physicalPrintOutputAccepted": true,
     "rootFrozenRegression": {
       "status": "passed",
       "tests": 376,
@@ -948,6 +1088,32 @@
       "result": "359/361 in19files; two failed assertions retained as original evidence, subsequently green in the frozen15file rerun"
     },
     "defaultModelChanged": false,
-    "newSummaryFileCreated": false
+    "newSummaryFileCreated": false,
+    "normalChatConfirmedPrintSubmittedJobs": 1,
+    "jobId": 2,
+    "exactJobChatReadbackPassed": false,
+    "completePrintAnswerPassed": false,
+    "runtime": {
+      "pid": 33052,
+      "startedAt": "2026-10-28T08:41:56.908Z",
+      "buildId": "6ecea3f641cee4d8e6984637c51299c703ee67ce",
+      "sourceRoot": "D:/lumiOS",
+      "sourceDirty": false,
+      "evidenceRoot": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-runtime-fixed-1793176827122"
+    },
+    "sourceCodeCommit": "6ecea3f641cee4d8e6984637c51299c703ee67ce",
+    "remotePush": {
+      "status": "pushed-per-parent-source-receipt",
+      "head": "6ecea3f641cee4d8e6984637c51299c703ee67ce"
+    },
+    "finalEvidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/actual-single-page-closed-1793177466994",
+      "review": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/actual-single-page-closed-1793177466994/review.json",
+      "reviewSha256": "da26f8756a21873c0530113c97e86eac127cdfdf6b37eba4a808c0eaf56b1627",
+      "seal": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/actual-single-page-closed-1793177466994/evidence-seal.json",
+      "sealSha256": "4fa7ee5076e124ff5a66d03c4eb969916292e48f12eb4b3a85d914a17a82fe3f",
+      "files": 3
+    },
+    "exactJobProductionOwnerReadbackStatus": "not_observed-win32-87-not-chat-or-physical-proof"
   }
 }
