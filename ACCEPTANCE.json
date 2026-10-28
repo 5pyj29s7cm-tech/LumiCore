@@ -6,9 +6,9 @@
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序外部设备接通验收（打印优先）",
-    "status": "builtin-page-print-submission-and-user-output-passed-exact-job-chat-retained",
-    "instruction": "内置测试页经正常聊天精确确认后仅提交一次：Windows GDI Job2，1页1份；用户确认已正常出纸。精确作业聊天回读被旧task_status分支吞掉及完成措辞过强仍保留。ESP仅软件通过，电视未识别。"
+    "title": "主程序外部任务状态误路由修复",
+    "status": "source-and-socket-tested-live-model-replay-pending",
+    "instruction": "修复通用旧任务状态快捷投影；已过软件回归，默认模型原会话只读复测待验，不再打印。"
   },
   "acceptedWholeItems": [
     3,
@@ -289,7 +289,7 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "builtin-page-print-submission-and-user-output-passed-exact-job-chat-retained",
+    "status": "source-and-socket-tested-live-model-replay-pending",
     "priority": "内置单页测试正常聊天确认后单次提交与用户出纸已通过；精确job2聊天回读/措辞保留；ESP真机及电视仍未通过"
   },
   "archivedLegalDevelopment": {
@@ -1115,5 +1115,35 @@
       "files": 3
     },
     "exactJobProductionOwnerReadbackStatus": "not_observed-win32-87-not-chat-or-physical-proof"
+  },
+  "latestMainTaskStatusRoutingRepair": {
+    "at": "2026-10-28T09:28:15.378Z",
+    "status": "source-and-socket-tested-live-model-replay-pending",
+    "scope": "New external/source status read must not be projected onto old Lumi task ledger",
+    "productionFiles": [
+      "server/cognition/normalized_action_intent.ts",
+      "server/cognition/runtime_work_intent.ts"
+    ],
+    "testFiles": [
+      "test/chat_new_artifact_status_routing.test.ts",
+      "test/normalized_desktop_intent.test.ts"
+    ],
+    "sourceEvidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/software-source",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-external-task-status-repair-1793177792275/software-source/evidence-seal.json",
+      "sha256": "4e7dd8776eb51ccba7618bd458cb0ae02ff6c620ad08d2a884ff747e59454b64",
+      "files": 5
+    },
+    "tests": {
+      "owner": "254/254",
+      "internalConfirmation": "5/5",
+      "socketReads": "4/4",
+      "rootRelated": "131/137;6 document tests reproduced on HEAD retained",
+      "types": "passed"
+    },
+    "defaultModelChanged": false,
+    "printSubmissions": 0,
+    "heldAcceptanceUnchanged": true,
+    "wholeApplicationAccepted": false
   }
 }

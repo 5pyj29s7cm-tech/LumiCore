@@ -234,13 +234,13 @@ function explicitArtifactPath(text: string): string {
   // keeps them away from the more specific absolute-path matcher entirely.
   if (!ARTIFACT_FILE_EXTENSION_RE.test(text)) return '';
   const absolute = text.match(
-    /([A-Za-z]:[\\/][^\r\n"'<>|?*]+?\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf))(?=$|[\s.,，。;；:：!！?？)）\]}'"])/iu,
+    /([A-Za-z]:[\\/][^\r\n"'<>|?*]+?\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf))(?=$|[\s.,，。;；:：!！?？)）\]}'"”’」』])/iu,
   )?.[1];
   if (absolute) return trimSlot(absolute);
   // POSIX paths use the same filename boundary as Windows paths. A slash in
   // a URL or a relative path must not become a local output authorization.
   const posix = text.match(
-    /(?<![\p{L}\p{N}_.:/\\~-])(\/[^\r\n"'<>|?*，,。；;！？]+?\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf))(?=$|[\s.,，。;；:：!！?？)）\]}'"])/iu,
+    /(?<![\p{L}\p{N}_.:/\\~-])(\/[^\r\n"'<>|?*，,。；;！？]+?\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf))(?=$|[\s.,，。;；:：!！?？)）\]}'"”’」』])/iu,
   )?.[1]; // i18n-allow: multilingual punctuation at a concrete filesystem path boundary.
   if (posix) return trimSlot(posix);
   return relativeArtifactPath(text);
@@ -336,7 +336,7 @@ function explicitLocalArtifactReadIntent(text: string): NormalizedActionIntent |
     // This owns only an explicit fresh command. A path supplied by itself
     // remains eligible to fill the target slot of an unfinished task.
     // i18n-allow: Existing read predicate with explicit read-only/completeness and file operands.
-    return /^(?:(?:请|麻烦你|现在|直接)\s*)*(?:(?:只|完整)\s*)*(?:(?:改成|改为|换成)\s*)?(?:分析|补读|读取|读|查看|审查|检查|总结)(?:一下)?\s*(?:(?:桌面|下载(?:目录|文件夹)?|文档(?:目录|文件夹))(?:上|中|里|内|下|的)*\s*)?(?:(?:文件|文档)\s*)?$|^(?:(?:please|now|directly)\s+)*(?:analy[sz]e|read|inspect|review|check|summari[sz]e)(?:\s+the)?\s*$/iu.test(actionPrefix);
+    return /^(?:(?:请|麻烦你|现在|直接)\s*)*(?:(?:只|完整)\s*)*(?:(?:改成|改为|换成)\s*)?(?:分析|补读|读取|读|查看|审查|检查|总结)(?:一下)?\s*(?:(?:桌面|下载(?:目录|文件夹)?|文档(?:目录|文件夹))(?:上|中|里|内|下|的)*\s*)?(?:(?:本地)?(?:文件|文档)\s*)?$|^(?:(?:please|now|directly)\s+)*(?:analy[sz]e|read|inspect|review|check|summari[sz]e)(?:\s+the)?\s*$/iu.test(actionPrefix);
   });
   let target = instruction ? explicitArtifactPath(instruction) : '';
   if (!instruction) {
@@ -840,9 +840,10 @@ function statusQuery(text: string): NormalizedActionIntent | null {
 
   // i18n-allow: Chinese task-status input recognition; not user-visible copy.
   const explicitTaskStatus = // i18n-allow: Chinese task-status input recognition; not user-visible copy.
-    /(?:(?:Auto\s*CAD|CAD|图|图纸|平面图|任务|这个|那个).{0,30}(?:画完|做完|完成|执行完|结束)(?:了)?(?:吗|没有|没|了没)|(?:Auto\s*CAD|CAD|任务).{0,30}(?:进度|状态|到哪|怎么样|什么情况)|(?:画|做|执行).{0,12}(?:完了吗|好了没|到哪了))/iu;
-  if (!explicitTaskStatus.test(text)) return null;
-  const target = /Auto\s*CAD|\bCAD\b/iu.test(text) ? 'AutoCAD' : /(?:图纸|平面图|图)/u.test(text) ? 'drawing' : 'recent_task'; // i18n-allow: Chinese task target input recognition.
+    /^(?:(?:Auto\s*CAD|CAD|图|图纸|平面图|这个|那个).{0,30}(?:画完|做完|完成|执行完|结束)(?:了)?(?:吗|没有|没|了没)|(?:Auto\s*CAD|CAD|这个任务|那个任务|刚才的任务|刚才任务|当前任务|当前的任务).{0,30}(?:进度|状态|到哪|怎么样|什么情况)|(?:画|做|执行).{0,12}(?:完了吗|好了没|到哪了))/iu;
+  const statusInstruction = explicitTaskStatus.exec(text)?.[0];
+  if (!statusInstruction) return null;
+  const target = /Auto\s*CAD|\bCAD\b/iu.test(statusInstruction) ? 'AutoCAD' : /(?:图纸|平面图|图)/u.test(statusInstruction) ? 'drawing' : 'recent_task'; // i18n-allow: Chinese task target input recognition.
   return {
     kind: 'status_query',
     operation: 'status',
@@ -1273,18 +1274,18 @@ export function normalizeActionIntent(value: string, analysis?: ActionIntentAnal
   const explicitArtifactCreation = Boolean(artifactCreation);
   const compositeNavigation = !artifactCreation && !artifactRead ? compositeNavigationInstructions(text) : [];
 
-  // Order is a safety invariant. Later action-shaped words cannot override a
-  // correction, status query, client-native route, external-AI read, or
-  // inbound message read.
+  // Exact affirmative file operations own their supplied source/target before
+  // retrospective status shortcuts. Quoted and negated operations were already
+  // excluded by those owners; a status noun cannot replace a fresh read.
   const priority = [
     correctionOrExplanation(text),
-    statusQuery(text),
     mediaGenerationIntent(text),
     persistentWorkTaskCreation(text),
     artifactCreation,
     explicitArtifactEditIntent(artifactInput),
     artifactRead,
     currentAuthoringDocumentRead,
+    statusQuery(text),
     compositeNavigation.find(item => item.intent.kind === 'desktop_operation')?.intent,
     explicitArtifactCreation ? null : clientNavigation(text),
     explicitArtifactCreation ? null : externalAiHistoryRead(text),

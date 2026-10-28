@@ -8,11 +8,18 @@ import { io as createSocketClient, type Socket as ClientSocket } from 'socket.io
 
 const mocks = vi.hoisted(() => ({
   runWithTools: vi.fn(),
+  printerJobRead: vi.fn(),
+  printTripwire: vi.fn(async () => { throw new Error('READ_ONLY_TEST_MUST_NOT_PRINT'); }),
 }));
 
 vi.mock('../server/llm/adapter', async importOriginal => {
   const actual = await importOriginal<typeof import('../server/llm/adapter')>();
   return { ...actual, runWithTools: mocks.runWithTools };
+});
+
+vi.mock('../server/devices/printer_jobs', async importOriginal => {
+  const actual = await importOriginal<typeof import('../server/devices/printer_jobs')>();
+  return { ...actual, readPrinterJobStatus: mocks.printerJobRead, submitPrinterTestPage: mocks.printTripwire };
 });
 
 vi.mock('../server/memory', async importOriginal => {
@@ -36,6 +43,8 @@ import {
   bindConversationActionExecutionTurn,
   getOrCreateActiveConversation,
   prepareConversationActionExecution,
+  setConversationActionExecutionStatus,
+  startIsolatedConversation,
 } from '../server/conversation/manager';
 import { registerChatHandler } from '../server/socket/chat';
 import {
@@ -43,6 +52,7 @@ import {
 } from '../server/tools/pending_confirmation';
 import { registerAllTools } from '../server/tools/definitions';
 import { toolRegistry } from '../server/tools/registry';
+import { executeToolCall } from '../server/tools/execution_engine';
 
 function waitForRequestEvent<T extends Record<string, any>>(
   socket: ClientSocket,
@@ -152,8 +162,6 @@ describe('Chat new artifact routing after a completed task', () => {
         },
       }],
     });
-    expect((readDB().conversationActionTasks || []).find((row: any) => row.id === priorTaskId))
-      .toMatchObject({ status: 'completed', activeRequestId: '' });
 
     let attempt = 0;
     mocks.runWithTools.mockImplementation(async (...args: any[]) => {
@@ -287,6 +295,9 @@ describe('Chat new artifact routing after a completed task', () => {
   });
 
   it('executes the new turn through the tool loop instead of returning prior task status', async () => {
+    expect((readDB().conversationActionTasks || []).find((row: any) => row.id === priorTaskId))
+      .toMatchObject({ status: 'completed', activeRequestId: '' });
+
     const responsePromise = waitForRequestEvent<Record<string, any>>(
       client,
       'agent:response',
@@ -330,4 +341,72 @@ describe('Chat new artifact routing after a completed task', () => {
     expect(assistant?.source).not.toBe('chat_task_status');
     expect(assistant?.cognitiveIntent).not.toBe('task_status');
   });
+
+  it.each(['device-job', 'order-file', 'download-file', 'prior-receipt-and-file'] as const)(
+    'reads the new %s source through the real chat handler without resuming the old task', async kind => {
+      const liveRequestId = 'fresh-read-' + kind + '-' + suffix;
+      const isolated = startIsolatedConversation(userId, 'lumi', 'personal', '');
+      const oldGoal = 'Open the prior isolated settings task.';
+      const oldRequestId = 'old-read-' + kind + '-' + suffix;
+      const messageId = addMessage({ userId, agentId: 'lumi', conversationId: isolated.id, role: 'user', content: oldGoal,
+        domain: 'personal', orgId: '', source: 'chat', channel: 'chat', requestId: oldRequestId, deferActionPreparation: true });
+      bindConversationActionExecutionTurn({ conversationId: isolated.id, userId, userText: oldGoal, requestId: oldRequestId, userMessageId: messageId });
+      const old = prepareConversationActionExecution({ conversationId: isolated.id, userId, userText: oldGoal,
+        requestId: oldRequestId, userMessageId: messageId, forceTask: true, forceNewTask: true,
+        toolPolicy: { allowedTools: ['client_action'], forbiddenTools: [], requireConfirmation: [], maxIterations: 1 } });
+      const oldTaskId = String(old.state?.taskId || '');
+      setConversationActionExecutionStatus(isolated.id, userId, 'blocked', { assistantState: 'Prior action needs independent follow-up.', blocker: 'old receipt incomplete' });
+      addMessage({ userId, agentId: 'lumi', conversationId: isolated.id, role: 'assistant', content: 'The prior action ended without a completion receipt.',
+        domain: 'personal', orgId: '', source: 'chat', channel: 'chat', requestId: oldRequestId, taskIntent: 'task', llmWasCalled: true, toolCalls: [] });
+      expect((readDB().conversationActionTasks || []).find((row: any) => row.id === oldTaskId)).toMatchObject({ status: 'blocked', activeRequestId: '' });
+      const sourcePath = path.join(String(process.env.LUMI_DATA_DIR || ''), kind + '-CAD-图纸-任务状态.json');
+      fs.writeFileSync(sourcePath, JSON.stringify({ orderId: 'ORD-9841', jobId: 17, status: 'paused', downloadedBytes: 4097 }));
+      const queue = 'Fixture physical network queue';
+      const prompt = kind === 'device-job'
+        ? '刚才 Job ID 2 已正常出纸。请只使用 printer_job_status 读取队列“' + queue + '”中任务编号 2 的状态，按回执说明是否仍可观察到。不要再次打印，不要查询其他队列，不要修改任何设置。'
+        : kind === 'prior-receipt-and-file'
+          ? '你上一轮用了哪个工具？现在读取本地文件“' + sourcePath + '”，给出订单 ORD-9841 的任务状态；订单状态以这次新读取的合成材料为准，不联系平台、不执行订单，不修改文件。'
+          : '请只读取本地文件“' + sourcePath + '”，告诉我其中任务编号 17 的状态和已下载字节数，只以文件字段为准，不运行其他程序，不修改文件。';
+      mocks.printerJobRead.mockResolvedValue({ ok: false, supported: true, platform: 'win32', source: 'windows_spooler_getjob',
+        status: 'not_observed', observedAt: new Date().toISOString(), printerName: queue, jobId: 2, queue: null, job: null,
+        physicalCompletionVerified: false, errors: [{ code: 'job_not_observed', message: 'Fixture job is not observable.' }], limitations: ['Not proof of physical completion.'] });
+      mocks.runWithTools.mockReset();
+      const executions: string[] = [];
+      const modelInputs: Array<{taskId: unknown; actionIntent: unknown; routedTaskText: unknown}> = [];
+      mocks.runWithTools.mockImplementation(async (...args: any[]) => {
+        const context = args[11];
+        modelInputs.push({ taskId: context.taskId, actionIntent: context.actionIntent, routedTaskText: context.routedTaskText });
+        const name = kind === 'device-job' ? 'printer_job_status' : 'read_file';
+        const exactArgs = kind === 'device-job' ? { printerName: queue, jobId: 2 } : { path: sourcePath };
+        expect(context.toolPolicy.forbiddenTools).not.toContain(name);
+        const record = await executeToolCall({ registry: toolRegistry, name, arguments: exactArgs,
+          executionOrigin: 'model_selected', context, id: liveRequestId + '-read' });
+        expect(record.error).toBeFalsy();
+        expect(record.adapterStarted).toBe(true);
+        executions.push(name);
+        args[3]?.(record);
+        return { text: record.result, toolCalls: [record], usageRecords: [] };
+      });
+      const responsePromise = waitForRequestEvent<Record<string, any>>(client, 'agent:response', liveRequestId);
+      const ack = await client.timeout(5_000).emitWithAck('agent:chat', { text: prompt, agentId: 'lumi', domain: 'personal',
+        source: 'command-center-chat', requestId: liveRequestId, conversationId: isolated.id });
+      expect(ack).toMatchObject({ ok: true, requestId: liveRequestId });
+      const response = await responsePromise;
+      expect(response.reason).not.toBe('task_status');
+      expect(response.taskRelation?.feedback).toBe('new_task');
+      expect(executions, JSON.stringify({ modelInputs, response })).toEqual([kind === 'device-job' ? 'printer_job_status' : 'read_file']);
+      expect(modelInputs).toHaveLength(1);
+      expect(modelInputs[0].actionIntent).toBe(prompt);
+      expect(modelInputs[0].routedTaskText).toBe(prompt);
+      expect(modelInputs[0].taskId).not.toBe(oldTaskId);
+      expect(response.taskRelation?.taskId).not.toBe(oldTaskId);
+      expect(mocks.runWithTools).toHaveBeenCalledOnce();
+      expect(mocks.printTripwire).not.toHaveBeenCalled();
+      const reply = (readDB().interactions || []).find((row: any) => row.conversationId === isolated.id
+        && row.role === 'assistant' && String(row.requestId || row.externalMessageId || '') === liveRequestId);
+      expect(reply?.source).not.toBe('chat_task_status');
+      expect(reply?.cognitiveIntent).not.toBe('task_status');
+    },
+  );
+
 });

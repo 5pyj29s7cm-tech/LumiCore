@@ -764,3 +764,37 @@ describe('local desktop navigation binds an explicit application or location ope
     expect(normalizeActionIntent(text).kind).not.toBe('desktop_operation');
   });
 });
+
+
+describe('fresh source status reads do not become previous Lumi task status', () => {
+ const cases = [
+  {
+    "id": "printer-job2-original",
+    "prompt": "刚才 Job ID 2 已正常出纸。请只使用 printer_job_status 读取队列“All-in-One Inkjet Printer PCL-3 (网络)”中任务编号 2 的状态，按回执说明是否仍可观察到。不要再次打印，不要查询其他队列，不要修改任何设置。"
+  },
+  {
+    "id": "order-source-file",
+    "prompt": "请只读取本地文件“C:/fixtures/order-status.json”，查看其中订单 ORD-7328 的任务编号 2 的状态，按文件的字段说明。这是合成验收材料，不联系任何订单平台，不执行订单，不修改文件。",
+    "expectedPath": "C:/fixtures/order-status.json"
+  },
+  {
+    "id": "download-source-file",
+    "prompt": "读取“C:/fixtures/download-status.json”，告诉我下载任务编号 17 的状态和已下载字节数，只以文件现有字段为准。这是合成验收材料，不运行下载器、不恢复任务，不修改文件。",
+    "expectedPath": "C:/fixtures/download-status.json"
+  },
+  {
+    "id": "prior-receipt-plus-new-read",
+    "prompt": "你上一轮用了哪个工具？现在读取本地文件“C:/fixtures/order-status.json”，给出订单 ORD-7328 的任务状态；订单状态以这次新读取的合成材料为准，不联系平台、不执行订单，不修改文件。",
+    "expectedPath": "C:/fixtures/order-status.json"
+  }
+] as const;
+ it.each(cases)('$id stays new work with its exact source', item => {
+  const intent = normalizeActionIntent(item.prompt);
+  expect(intent.kind).not.toBe('status_query');
+  expect(intent.relation).toBe('new');
+  if ('expectedPath' in item) expect(intent).toMatchObject({kind:'desktop_operation',operation:'read',target:item.expectedPath});
+ });
+ it.each(['这个任务现在状态如何？','那个任务进度怎么样？','刚才的任务状态怎么样？','当前任务现在状态如何？','AutoCAD 任务现在什么状态？'])('keeps direct task status: %s', text => { expect(normalizeActionIntent(text).kind).toBe('status_query'); });
+});
+
+it('does not map an English external task status request onto the Lumi runtime ledger', () => { expect(normalizeActionIntent('Query the external fulfillment task status for order ORD-9841 from its supplied source.')).not.toMatchObject({kind:'status_query',target:'runtime_work'}); });
