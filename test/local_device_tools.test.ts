@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { registerLocalDeviceTools, type LocalDeviceAdapters } from '../server/tools/definitions/local_device_tools';
 import { ToolRegistry } from '../server/tools/registry';
 import type { ToolContext } from '../server/tools/types';
+import { getAdapterRetryPolicy } from '../server/tools/adapter_resilience';
 
 const native: ToolContext = { userId: 'local-device-test', authenticated: true, localExecution: true, executionBoundary: 'trusted_local' };
 function fixture() {
@@ -10,6 +11,8 @@ function fixture() {
     printers: vi.fn(async () => ({ supported: true, status: 'ok', platform: 'win32', observedAt: 'test-time', printers: [], ports: [], errors: [] })),
     printerStatus: vi.fn(async () => ({ supported: true, status: 'ok', platform: 'win32', observedAt: 'test-time', printer: { name: 'Test queue', workOffline: true, queueStatus: 'Normal' }, ports: [], errors: [] })),
     networkPrinterStatus: vi.fn(async () => ({ ok: false, status: 'unavailable', observedAt: 'test-time', error: 'Timed out' })),
+    submitTestPage: vi.fn(async () => ({ ok: true, status: 'submitted', observedAt: 'test-time', printerName: 'Test queue', jobId: 73, physicalCompletionVerified: false, submission: { endDocSucceeded: true } })),
+    jobStatus: vi.fn(async () => ({ ok: false, status: 'not_observed', observedAt: 'test-time', printerName: 'Test queue', jobId: 73, job: null, physicalCompletionVerified: false })),
     usbSerial: vi.fn(async () => ({ supported: true, status: 'ok', platform: 'win32', observedAt: 'test-time', devices: [], errors: [], limitations: ['A USB bridge does not prove an MCP connection.'] })),
   };
   const registry = new ToolRegistry();
@@ -47,8 +50,8 @@ describe('Lumi control-center device tools', () => {
   it('preserves source and metadata contracts without granting remote access', async () => {
     const { registry, adapters } = fixture();
     const manifest = registry.getCapabilityManifest();
-    expect(manifest).toHaveLength(5);
-    for (const entry of manifest) {
+    expect(manifest).toHaveLength(7);
+    for (const entry of manifest.filter(item => item.toolName !== 'printer_print_test_page')) {
       expect(entry).toMatchObject({ family: 'devices', operation: 'observe', permission: 'user', assurance: 'observed', risk: 'low' });
       expect(entry.sideEffects.every(effect => ['local_read', 'network_read'].includes(effect.type))).toBe(true);
       expect(entry.verification.requiredFields).toContain('executionHost');
@@ -86,6 +89,23 @@ describe('Lumi control-center device tools', () => {
       devices: [], errors: [{ code: 'port_name_query_failed', message: 'Access denied' }], limitations: [] } as never);
     const result = JSON.parse(await tools.find(item => item.name === 'usb_serial_list')!.handler({}, native));
     expect(result).toMatchObject({ ok: false, status: 'partial', source: 'windows_pnp_serial', errors: [{ code: 'port_name_query_failed' }] });
+  });
+
+  it('exposes a confirmed physical print action with no automatic retry and a separate read-only job lookup', async () => {
+    const { tools, registry, adapters } = fixture();
+    const submit = tools.find(tool => tool.name === 'printer_print_test_page')!;
+    expect(submit.securityLevel).toBe('confirm');
+    expect(submit.capability).toMatchObject({ operation: 'create', risk: 'medium', sideEffects: [{ type: 'external_state_change', reversible: false }] });
+    const manifest = registry.getCapabilityManifestEntry(submit.name)!;
+    expect(getAdapterRetryPolicy(submit.name, manifest).maxAttempts).toBe(1);
+    await expect(registry.execute(submit.name, { printerName: 'Test queue' }, native)).rejects.toThrow(/confirmation/i);
+    expect(adapters.submitTestPage).not.toHaveBeenCalled();
+    const receipt = JSON.parse(await submit.handler({ printerName: 'Test queue' }, native));
+    expect(receipt).toMatchObject({ ok: true, status: 'submitted', jobId: 73, physicalCompletionVerified: false, executionHost: 'lumi_backend_host' });
+    expect(adapters.submitTestPage).toHaveBeenCalledExactlyOnceWith('Test queue');
+    const status = JSON.parse(await tools.find(tool => tool.name === 'printer_job_status')!.handler({ printerName: 'Test queue', jobId: 73 }, native));
+    expect(status).toMatchObject({ ok: false, status: 'not_observed', job: null, physicalCompletionVerified: false });
+    expect(adapters.jobStatus).toHaveBeenCalledExactlyOnceWith('Test queue', 73);
   });
 
 });

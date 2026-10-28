@@ -4,6 +4,7 @@ import { discoverLanDevices } from '../../devices/lan_discovery';
 import { readPrinterInventory, readPrinterStatus } from '../../devices/printer_inventory';
 import { readNetworkPrinterStatus } from '../../devices/ipp_printer';
 import { readUsbSerialInventory, USB_SERIAL_OBSERVATION_LIMIT } from '../../devices/usb_serial_inventory';
+import { submitPrinterTestPage, readPrinterJobStatus, PRINTER_JOB_LIMITATIONS } from '../../devices/printer_jobs';
 
 const OBSERVATION_LIMIT = 'Observed on the Lumi control-center host; discovery is not pairing, and a queue/status query is not a completed physical print.';
 const EXECUTION_HOST = 'lumi_backend_host';
@@ -34,6 +35,8 @@ export interface LocalDeviceAdapters {
   printerStatus: typeof readPrinterStatus;
   networkPrinterStatus: typeof readNetworkPrinterStatus;
   usbSerial: typeof readUsbSerialInventory;
+  submitTestPage?: typeof submitPrinterTestPage;
+  jobStatus?: typeof readPrinterJobStatus;
 }
 
 export function registerLocalDeviceTools(registry: ToolRegistry, adapters: LocalDeviceAdapters = {
@@ -112,6 +115,44 @@ export function registerLocalDeviceTools(registry: ToolRegistry, adapters: Local
       requireControlCenter(context);
       const result = await adapters.usbSerial();
       return JSON.stringify({ ...result, ok: result.status === 'ok', executionHost: EXECUTION_HOST, source: 'windows_pnp_serial' });
+    },
+  });
+
+  registry.register({
+    name: 'printer_print_test_page',
+    description: 'Print exactly one built-in Lumi test page through the installed Windows driver of the exact printer queue selected by the user or returned by printer_list. This consumes paper/ink. Returns the real Windows job id after GDI EndDoc succeeds. No arbitrary DOCX/PDF rendering, raw IPP submission, queue/port/default/driver changes, or automatic retry. A submitted job is not physical paper-completion proof; use printer_job_status for its exact queue/id.',
+    parameters: { type: 'object', properties: { printerName: { type: 'string', description: 'Exact installed printer queue name chosen for this print action.' } }, required: ['printerName'], additionalProperties: false },
+    permission: 'user', securityLevel: 'confirm',
+    preflight: (_args, context) => { requireControlCenter(context); },
+    capability: {
+      id: 'devices.printers.print_test_page', family: 'devices', lane: 'system', operation: 'create', risk: 'medium',
+      domains: ['devices'], tags: ['devices', 'printer'],
+      sideEffects: [{ type: 'external_state_change', scope: 'One driver-rendered page on the exact selected installed printer queue', reversible: false }],
+      prerequisites: ['Authenticated native desktop session on the control center', 'User-selected installed Windows printer queue and driver'],
+      verification: { strategy: 'terminal_receipt', required: true,
+        requiredFields: ['executionHost', 'observedAt', 'printerName', 'jobId', 'submission'], requiredValues: { ok: true, status: 'submitted' },
+        successStatuses: ['submitted'], failureStatuses: ['not_submitted', 'submission_unknown', 'unsupported'],
+        successSignals: ['The selected Windows driver returned a positive StartDoc job id and EndDoc succeeded.'], limitations: [...PRINTER_JOB_LIMITATIONS] },
+    },
+    evidence: { capability: 'devices.printers.print_test_page', operation: 'create', assurance: 'observed', limitations: [...PRINTER_JOB_LIMITATIONS] },
+    handler: async (args, context) => {
+      requireControlCenter(context);
+      return JSON.stringify({ ...await (adapters.submitTestPage ?? submitPrinterTestPage)(args.printerName), executionHost: EXECUTION_HOST });
+    },
+  });
+  registry.register({
+    name: 'printer_job_status',
+    description: 'Read the current Windows spooler receipt for an exact installed printer queue and positive job id returned by printer_print_test_page or supplied by the user. Returns raw job flags and page counters. A missing/disappearing job or PRINTED flag does not independently prove physical paper output. Does not submit, cancel, clear, restart or change any job.',
+    parameters: { type: 'object', properties: {
+      printerName: { type: 'string', description: 'Exact installed queue name from the submission receipt.' },
+      jobId: { type: 'integer', minimum: 1, maximum: 2147483647, description: 'Exact Windows StartDoc/spooler job identifier.' },
+    }, required: ['printerName', 'jobId'], additionalProperties: false },
+    permission: 'user', securityLevel: 'safe',
+    capability: capability('devices.printers.job_status', 'local_read', ['observedAt', 'printerName', 'jobId', 'job'], ['job_observed'], [...PRINTER_JOB_LIMITATIONS]),
+    evidence: { capability: 'devices.printers.job_status', operation: 'observe', assurance: 'observed', limitations: [...PRINTER_JOB_LIMITATIONS] },
+    handler: async (args, context) => {
+      requireControlCenter(context);
+      return JSON.stringify({ ...await (adapters.jobStatus ?? readPrinterJobStatus)(args.printerName, args.jobId), executionHost: EXECUTION_HOST });
     },
   });
 

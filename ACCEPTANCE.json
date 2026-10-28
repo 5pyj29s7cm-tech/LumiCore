@@ -1,6 +1,6 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T07:28:19.955Z",
+  "updatedAt": "2026-10-28T07:59:45.390Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
@@ -778,5 +778,18 @@
     "moved": "Remote Lumi MCP server configuration moved to existing tool-runtime connection settings",
     "defaultModelChanged": false,
     "modelCalls": 0
+  },
+  "latestMainPrinterJobs": {
+    "status": "source-tested-actual-print-pending",
+    "evidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-source",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/external-control-connect-1793172933642/printer-source/evidence-seal.json",
+      "sha256": "e7669d6e25b25ccbed05c5c39c1a880b2c0b56d3cb655b980bd3a599c841f98f",
+      "files": 6
+    },
+    "tests": "106/106",
+    "physicalOutputPassed": false,
+    "arbitraryDocumentsSupported": false,
+    "modelPreferenceChanged": false
   }
 }
