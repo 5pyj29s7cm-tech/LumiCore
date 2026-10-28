@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Cpu, Database, Sparkle, Wrench, FileText } from "lucide-react";
 import { MCPSettings } from "../MCPSettings";
+import { RemoteMCPSettings } from "../RemoteMCPSettings";
 import { uiMessage } from "../../i18n/uiMessages";
 import { LegalDataSourcesSettings } from "../org/LegalDataSourcesSettings";
 import { SettingsSection } from './components';
@@ -80,6 +81,7 @@ export function ToolRuntimeConnections({ t }: { t: any }) {
         </div>
       </SettingsSection>
       <MCPSettings t={t} />
+      <RemoteMCPSettings t={t} />
     </div>
   );
 }

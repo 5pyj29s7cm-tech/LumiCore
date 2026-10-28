@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { ArrowUpRight, Monitor, Smartphone, Cpu, Radio, Usb, Printer } from 'lucide-react';
+import { ArrowUpRight, Monitor, Smartphone, Cpu, Radio, Usb } from 'lucide-react';
 import type { Socket } from 'socket.io-client';
 import { useApp } from '@/contexts/AppContext';
 import { apiFetch } from '@/services/apiClient';
 import { deviceWidgetCopy } from '@/i18n/locales/deviceWidget';
 import { useExternalDevices } from '@/services/externalDevices';
 import { getDomainReconciliation } from '@/lib/domainSession';
+import { mainUsbDevices, groupLanServices } from './externalDevicePresentation';
 
 type DevicePreview = { id: string; name: string; type: string; status: string };
 
@@ -66,7 +67,8 @@ export function DesktopDeviceWidget({ lang, socket, onOpen }: {
   const available = Boolean(current && !current.error);
   const online = devices.filter(device => device.status === 'online').length;
   const preview = [...devices].sort((a, b) => Number(b.status === 'online') - Number(a.status === 'online')).slice(0, 2);
-  const usb = external.data?.usb, lan = external.data?.lan, printers = external.data?.printers;
+  const usb = external.data?.usb, lan = external.data?.lan;
+  const sourceWarning = external.data && [external.data.usb, external.data.lan, external.data.printers].some(source => !['ok', 'completed'].includes(source.status) || source.errors.length);
 
   return (
     <button type="button" data-lumi-target="devices" onClick={onOpen}
@@ -101,15 +103,12 @@ export function DesktopDeviceWidget({ lang, socket, onOpen }: {
       </span>
       <span className="block mt-3 text-xs text-white/60 space-y-2">
         <span className="flex flex-wrap gap-x-4 gap-y-2">
-          <span className="inline-flex items-center gap-1.5"><Usb size={13} />{copy.usbPresent}: {usb && 'devices' in usb && ['ok', 'partial'].includes(usb.status) ? usb.devices.length : '—'}{usb && usb.status !== 'ok' ? ` (${usb.status})` : ''}</span>
-          <span className="inline-flex items-center gap-1.5"><Radio size={13} />{copy.lanCandidates}: {lan && 'candidates' in lan && ['completed', 'partial'].includes(lan.status) ? lan.candidates.length : '—'}{lan && lan.status !== 'completed' ? ` (${lan.status})` : ''}</span>
-          <span className="inline-flex items-center gap-1.5"><Printer size={13} />{copy.printQueues}: {printers && 'printers' in printers && ['ok', 'partial'].includes(printers.status) ? printers.printers.length : '—'}{printers && printers.status !== 'ok' ? ` (${printers.status})` : ''}</span>
+          <span className="inline-flex items-center gap-1.5"><Usb size={13} />{copy.usbPresent}: {usb && 'devices' in usb && ['ok', 'partial'].includes(usb.status) ? mainUsbDevices(usb).length : '—'}</span>
+          <span className="inline-flex items-center gap-1.5"><Radio size={13} />{copy.lanCandidates}: {lan && 'candidates' in lan && ['completed', 'partial'].includes(lan.status) ? groupLanServices(lan).length : '—'}</span>
         </span>
-        <span className="block text-[10px] text-white/40">{external.data ? `${copy.observed}: ${external.data.observedAt}` : external.loading ? copy.observing : copy.unavailable}</span>
-        <span className="block text-[10px] text-white/40">{copy.externalHint}</span>
+        {!external.data && <span className="block text-[10px] text-white/40">{external.loading ? copy.observing : copy.unavailable}</span>}
         {external.error && <span role="alert" className="block text-amber-300 text-[11px] break-words">{external.error}</span>}
-        {external.data && (['usb', 'printers', 'lan'] as const).flatMap(source => external.data![source].errors.map((error, index) =>
-          <span role="alert" key={`${source}:${index}`} className="block text-amber-300 text-[11px] break-words">{source} · {error.code}: {error.message}</span>))}
+        {sourceWarning && <span role="alert" className="block text-amber-300 text-[11px]">{copy.observationWarning}</span>}
       </span>
       <span className="lumi-device-footer">{copy.manage}<ArrowUpRight size={14} /></span>
     </button>

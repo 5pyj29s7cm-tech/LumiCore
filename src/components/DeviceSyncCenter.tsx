@@ -13,8 +13,6 @@ import {
 } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { GlassCard } from './SharedUI';
-import { RemoteMCPSettings } from './RemoteMCPSettings';
-import { ClientConnectionStatus } from './ClientConnectionStatus';
 import { ExternalDeviceCenter } from './ExternalDeviceCenter';
 import { apiJson } from '@/services/apiClient';
 import { useApp } from '@/contexts/AppContext';
@@ -95,18 +93,18 @@ function DeviceSyncView({ t, scope }: { t: any; scope: string }) {
   }, [socket, fetchDevices]);
 
   return (
-    <div className="space-y-8">
-      {/* Device Discovery Section */}
-      <GlassCard className="p-4 sm:p-6 space-y-6">
+    <div className="space-y-6">
+      <ExternalDeviceCenter scope={scope} lang={t.langCode === 'zh' ? 'zh' : 'en'} />
+      <GlassCard className="p-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="space-y-1">
-            <h3 className="text-xl font-bold flex items-center gap-2">
-              <Wifi size={20} className="text-celestial-saturn" />
+            <h3 className="text-base font-semibold flex items-center gap-2">
+              <Wifi size={16} className="text-celestial-saturn" />
               {t.lumiClients || 'Lumi clients'}
             </h3>
             <p className="text-xs text-white/40">
               {sensoryCtx
-                ? `${sensoryCtx.deviceCount} ${t.sensorCtxOnline || 'online'} · ${t.sensorCtxAudio || 'Audio'}: ${sensoryCtx.hasAudio ? (t.sensorCtxYes || 'yes') : (t.sensorCtxNo || 'no')} · ${t.sensorCtxVideo || 'Video'}: ${sensoryCtx.hasVideo ? (t.sensorCtxYes || 'yes') : (t.sensorCtxNo || 'no')}`
+                ? `${sensoryCtx.deviceCount} ${t.sensorCtxOnline || 'online'}`
                 : t.lumiClientsDesc || 'Lumi client registrations and their current connection state.'}
               {lastSync && (
                 <span className="text-celestial-saturn text-xs font-mono ml-2">
@@ -125,9 +123,8 @@ function DeviceSyncView({ t, scope }: { t: any; scope: string }) {
           </button>
         </div>
 
-        <ClientConnectionStatus />
         {loadError && <p role="alert" className="text-sm text-red-400">{loadError}</p>}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           <AnimatePresence>
             {discoveredDevices.map((device, idx) => {
               const type = Object.hasOwn(DEVICE_TYPES, device.type) ? DEVICE_TYPES[device.type] : { Icon: HardDrive, label: '', fallback: device.type };
@@ -137,15 +134,15 @@ function DeviceSyncView({ t, scope }: { t: any; scope: string }) {
                 initial={{ opacity: 0, scale: 0.9, y: 10 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 transition={{ delay: idx * 0.1 }}
-                className={`p-4 rounded-2xl border transition-all group ${
+                className={`p-3 rounded-xl border transition-all group ${
                   device.status === 'online'
                     ? 'bg-white/5 border-white/10 hover:border-celestial-saturn/30'
                     : 'bg-white/5 border-white/5 opacity-50'
                 }`}
               >
-                <div className="flex items-center justify-between mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-white/60">
-                    <type.Icon size={20} />
+                <div className="flex items-center justify-between mb-2">
+                  <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center text-white/60">
+                    <type.Icon size={16} />
                   </div>
                   <div className="flex items-center gap-1.5">
                     <div className={`w-2 h-2 rounded-full ${device.status === 'online' ? 'bg-green-500' : 'bg-white/20'}`} />
@@ -171,12 +168,6 @@ function DeviceSyncView({ t, scope }: { t: any; scope: string }) {
         </div>
       </GlassCard>
 
-      <ExternalDeviceCenter scope={scope} lang={t.langCode === 'zh' ? 'zh' : 'en'} />
-
-      {/* Remote MCP Endpoints */}
-      <GlassCard className="p-4 sm:p-6 space-y-6">
-        <RemoteMCPSettings t={t} />
-      </GlassCard>
     </div>
   );
 }

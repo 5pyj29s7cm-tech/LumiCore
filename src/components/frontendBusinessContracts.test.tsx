@@ -353,7 +353,7 @@ describe('business views wait for the owning backend result', () => {
     mocks.fetch.mockImplementation(async (url: string) => reply({ devices: url.endsWith('/remote-devices') ? {} : [] }));
     const listener = vi.fn(); window.addEventListener('lumi:client-action', listener);
     try {
-      render(<DeviceSyncCenter t={{}} />); await screen.findByText('No remote devices configured'); const count = mocks.fetch.mock.calls.length;
+      render(<DeviceSyncCenter t={{}} />); await screen.findByText('No devices connected. Open the app on another device to see it here.'); const count = mocks.fetch.mock.calls.length;
       expect(screen.queryByRole('button', { name: 'Kernel Monitor' })).toBeNull();
       expect(listener).not.toHaveBeenCalled();
       expect(getPersonalClientSurfaceByAction('open_computer_adaptation')?.target).toBe('kernel');
@@ -504,7 +504,8 @@ describe('business views wait for the owning backend result', () => {
     vi.stubGlobal('DeviceMotionEvent', Event);
     const subscribe = vi.spyOn(window, 'addEventListener'), unsubscribe = vi.spyOn(window, 'removeEventListener');
     mocks.fetch.mockImplementation(async (url: string) => reply({ devices: url.endsWith('/remote-devices') ? {} : [] }));
-    const view = render(<DeviceSyncCenter t={{}} />); await screen.findByText('No remote devices configured');
+    const view = render(<DeviceSyncCenter t={{}} />); await screen.findByText('No devices connected. Open the app on another device to see it here.');
+    expect(mocks.fetch.mock.calls.some(([url]) => url.endsWith('/remote-devices'))).toBe(false);
     expect(watchPosition).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'ENABLE' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'STOP' })).toBeNull();
@@ -544,7 +545,7 @@ describe('business views wait for the owning backend result', () => {
     const reads = () => mocks.fetch.mock.calls.filter(([url]) => url.endsWith('/devices')).length;
     next = true; act(() => { for (const event of ['device:registered', 'devices:update', 'device:removed', 'connect']) mocks.on.mock.calls.find(([name]) => name === event)![1]({ name: 'Untrusted event device' }); });
     await screen.findByText('New device'); expect(reads()).toBe(2); await waitFor(() => expect(screen.queryByText('Old device')).toBeNull());
-    expect(screen.getByText('2 online · Audio: yes · Video: yes')).toBeTruthy(); expect(screen.queryByRole('button', { name: 'PAIR' })).toBeNull();
+    expect(screen.getByText('2 online')).toBeTruthy(); expect(screen.queryByRole('button', { name: 'PAIR' })).toBeNull();
     const timers = vi.spyOn(globalThis, 'setTimeout'), cancel = vi.spyOn(globalThis, 'clearTimeout');
     const onSync = mocks.on.mock.calls.find(([name]) => name === 'memories:changed')![1];
     act(() => { onSync({ timestamp: '2026-10-03T00:00:00Z' }); onSync({ timestamp: '2026-10-03T00:00:01Z' }); });

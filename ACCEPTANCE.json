@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T07:08:38.129Z",
+  "updatedAt": "2026-10-28T07:28:19.955Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
     "title": "主程序外部设备中心",
-    "status": "source-tests-build-passed-live-api-pending",
-    "instruction": "真实观察展示与支持的打印机状态读取；电视与ESP32控制仍待接入"
+    "status": "external-display-and-readonly-printer-status-passed-tv-esp-control-pending",
+    "instruction": "真实外设展示和只读打印机状态通过；电视与ESP32控制仍待接入"
   },
   "acceptedWholeItems": [
     3,
@@ -289,7 +289,7 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "source-tests-build-passed-live-api-pending",
+    "status": "external-display-and-readonly-printer-status-passed-tv-esp-control-pending",
     "priority": "局域网电视、打印机与USB/MCP设备接入"
   },
   "archivedLegalDevelopment": {
@@ -407,9 +407,9 @@
       "lanPrinterServiceObserved": true,
       "installedPrinterQueues": 7,
       "networkIppStatus": "3/3 production-core plus 1 normal-chat tool query passed; idle, accepting jobs, zero queued",
-      "television": "awaiting availability; user cannot turn it on",
+      "television": "User has powered it on; identity and control still not connected",
       "physicalPrinting": "not executed",
-      "esp32": "deferred"
+      "esp32": "USB metadata observed; MCP control not connected"
     },
     "runtime": {
       "status": "loaded-and-backend-healthy",
@@ -678,8 +678,8 @@
     "wholeApplicationAccepted": false
   },
   "latestMainExternalDeviceCenter": {
-    "updatedAt": "2026-10-28T07:08:38.129Z",
-    "status": "source-tests-build-passed-live-api-pending",
+    "updatedAt": "2026-10-28T07:28:19.955Z",
+    "status": "external-display-and-readonly-printer-status-passed-tv-esp-control-pending",
     "sourceRoot": "D:/lumiOS",
     "tests": {
       "scopedTests": "319/319 in17 files",
@@ -708,10 +708,10 @@
     },
     "sourceFiles": 20,
     "evidence": {
-      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/device-center-external-1793169977582",
-      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/device-center-external-1793169977582/evidence-seal.json",
-      "sha256": "4f474e74b74fcc2fa1179ff24d7fb6c4a86110e4840833efe2c85758f982af8e",
-      "files": 32
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/device-center-ui-density-1793171819891",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/device-center-ui-density-1793171819891/evidence-seal.json",
+      "sha256": "9528bca19ed8ebd5e37aca888b24794c2d5971b3c0196155d4161c63c5bcb901",
+      "files": 19
     },
     "deleted": "unused paired-device setting projection/routes/UI and fake WS-to-HTTP MCP open link",
     "capabilities": [
@@ -721,11 +721,62 @@
       "supported network IPP status"
     ],
     "pending": [
-      "native UI acceptance",
-      "actual TV control",
+      "TV identity/control",
       "ESP32 MCP control",
       "physical printing"
     ],
-    "lawyerHeldUnchanged": true
+    "lawyerHeldUnchanged": true,
+    "sourceCodeCommit": "02c55761d84a6e73e25ae15a76c26f9ff09d7cf0",
+    "sourceEvidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/device-center-external-1793169977582",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/device-center-external-1793169977582/evidence-seal.json",
+      "sha256": "4f474e74b74fcc2fa1179ff24d7fb6c4a86110e4840833efe2c85758f982af8e",
+      "files": 32
+    },
+    "runtime": {
+      "pid": 35820,
+      "startedAt": "2026-10-28T07:09:42.089Z",
+      "backendBuildId": "02c55761d84a6e73e25ae15a76c26f9ff09d7cf0",
+      "sourceRoot": "D:/lumiOS",
+      "frontend": "updated source UI built and observed in existing native window",
+      "evidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/device-center-runtime-1793171355064",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/device-center-runtime-1793171355064/evidence-seal.json",
+        "sha256": "dba9c33c997890483265a85176840a223153b6bf5407145ff4464bc8c1127cbe",
+        "files": 10
+      }
+    },
+    "validation": {
+      "sourceScopedTests": "319/319 before presentation cleanup",
+      "finalUiTests": "120/120",
+      "typecheck": "passed",
+      "desktopBuild": "passed",
+      "buildBoundaries": "3/3",
+      "independentReview": "passed",
+      "actualApi": "passed",
+      "nativeContent": "USB external2/LAN printer1, diagnostics closed and remote MCP removed from this page",
+      "nativePrinterButton": "prior actual native click returned idle/IPP0; same status owner retained by UI cleanup",
+      "pixelCapture": "unavailable: FrameArrived timeout",
+      "visualPixelAcceptance": false
+    },
+    "actual": {
+      "usbPnPExternalPorts": 2,
+      "mainboardExcludedFromMain": true,
+      "networkPrinterStatus": "idle, accepting jobs, queue0",
+      "systemPrinterQueues": "retained in system details; physical reachability not inferred",
+      "tvIdentified": false,
+      "esp32McpControlConnected": false,
+      "physicalPrintingPerformed": false
+    },
+    "removed": [
+      "dead PAIR bookkeeping and projection",
+      "fake MCP browser open link",
+      "duplicate connection status panel",
+      "duplicate IPP/IPPS cards when supported by matching service evidence",
+      "system-only inventory and technical fields from primary display"
+    ],
+    "moved": "Remote Lumi MCP server configuration moved to existing tool-runtime connection settings",
+    "defaultModelChanged": false,
+    "modelCalls": 0
   }
 }

@@ -62,6 +62,96 @@ const externalReads = () => mocks.fetch.mock.calls.filter(([url]) => new URL(url
 const statusReads = () => mocks.fetch.mock.calls.filter(([url]) => new URL(url).pathname === '/api/devices/external/printer-status');
 
 describe('device views consume external owner receipts', () => {
+  it('keeps USB failures in the main list while moving motherboard and other serial records into diagnostics', async () => {
+    const serial = external.usb.devices[0];
+    external.usb.devices.push({ ...serial, instanceId: 'ACPI\\PNP0501\\fixture', instanceEnumerator: 'ACPI', name: 'Motherboard serial', portName: 'COM1' });
+    external.usb.devices.push({ ...serial, instanceId: 'FTDIBUS\\fixture', instanceEnumerator: 'FTDIBUS', name: 'Derived serial record', portName: 'COM42' });
+    external.usb.devices.push({ ...serial, instanceId: 'USB\\VID_4321&PID_8765\\unconfigured', category: 'unconfigured_usb', name: 'Unconfigured USB device', portName: null, problemCode: 28, configManagerErrorCode: 28 });
+    render(<DeviceSyncCenter t={{}} />); await screen.findByText('Unconfigured USB device');
+    const usb = screen.getByRole('region', { name: 'USB devices' });
+    expect(within(usb).getAllByRole('article')).toHaveLength(2); expect(usb.textContent).not.toContain('Motherboard serial'); expect(usb.textContent).not.toContain('Derived serial record');
+    expect(within(usb).getByText(/Needs attention/)).toBeTruthy();
+    expect(screen.getByText('Motherboard serial · COM1').closest('details')!.open).toBe(false);
+    expect(screen.getByText('Derived serial record · COM42').closest('details')!.open).toBe(false);
+  });
+
+  it('keeps every installed queue in closed print details without treating local WSD flags as proof of a virtual device', async () => {
+    external.printers.printers.push({ ...external.printers.printers[0], name: 'Virtual document queue', portName: 'PORTPROMPT:', workOffline: false });
+    external.printers.printers.push({ ...external.printers.printers[0], name: 'Physical WSD queue', portName: 'WSD-fixture', workOffline: false, isLocal: true, isNetwork: false });
+    render(<DeviceSyncCenter t={{}} />); await screen.findByText('Generic serial bridge');
+    const queues = screen.getByRole('region', { name: 'System print queues' });
+    expect(queues.closest('details')!.open).toBe(false); expect(within(queues).getAllByRole('article')).toHaveLength(3);
+    expect(within(queues).getByText('Physical WSD queue')).toBeTruthy(); expect(within(queues).getByText('Virtual document queue')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /Read printer status/ })).toHaveLength(1);
+  });
+
+  it('shows matching IPP/IPPS services once and reads only the original IPP target', async () => {
+    external.lan.candidates[0].name = 'Office printer._ipp._tcp.local';
+    external.lan.candidates.unshift({ ...external.lan.candidates[0], id: 'secure-service', serviceType: '_ipps._tcp.local', name: 'Office printer._ipps._tcp.local', port: 443 });
+    render(<DeviceSyncCenter t={{}} />); await screen.findByText('Generic serial bridge');
+    const lan = screen.getByRole('region', { name: 'LAN devices' }); expect(within(lan).getAllByRole('article')).toHaveLength(1);
+    expect(within(lan).getByRole('heading', { name: 'Office printer' })).toBeTruthy();
+    expect(within(lan).getByText('mdns · _ipps._tcp.local').closest('details')!.open).toBe(false);
+    expect(within(lan).getByText('mdns · _ipp._tcp.local').closest('details')!.open).toBe(false);
+    fireEvent.click(within(lan).getByRole('button', { name: 'Read printer status' })); await screen.findByText('Idle');
+    expect(JSON.parse(statusReads()[0][1].body)).toEqual({ address: '10.42.0.31', port: 631, resourcePath: '/ipp/print' });
+  });
+
+  it.each(['host', 'path', 'name', 'interface', 'localAddress', 'uuid', 'addresses', 'sameProtocolPort'])('keeps services separate when advertised %s evidence differs', async difference => {
+    const ipps = { ...external.lan.candidates[0], id: 'different-service', serviceType: '_ipps._tcp.local', port: 443,
+      source: { ...external.lan.candidates[0].source }, txt: { ...external.lan.candidates[0].txt } };
+    if (difference === 'host') ipps.host = 'other-printer.local';
+    if (difference === 'path') ipps.path = '/ipp/other';
+    if (difference === 'name') ipps.name = 'Different logical printer';
+    if (difference === 'interface') ipps.source.interfaceName = 'Other Ethernet';
+    if (difference === 'localAddress') ipps.source.localAddress = '10.42.0.6';
+    if (difference === 'uuid') ipps.txt.UUID = 'conflicting-advertised-uuid';
+    if (difference === 'addresses') ipps.addresses = ['10.42.0.32'];
+    if (difference === 'sameProtocolPort') { ipps.serviceType = '_ipp._tcp.local'; ipps.port = 8631; }
+    external.lan.candidates.push(ipps);
+    render(<DeviceSyncCenter t={{}} />); await screen.findByText('Generic serial bridge');
+    expect(within(screen.getByRole('region', { name: 'LAN devices' })).getAllByRole('article')).toHaveLength(2);
+  });
+
+  it('does not fill an unresolved IPP address from a grouped IPPS advertisement', async () => {
+    external.lan.candidates[0].addresses = [];
+    external.lan.candidates.push({ ...external.lan.candidates[0], id: 'secure-only-address', serviceType: '_ipps._tcp.local', addresses: ['10.42.0.32'], port: 443 });
+    render(<DeviceSyncCenter t={{}} />); await screen.findByText('Generic serial bridge');
+    const lan = screen.getByRole('region', { name: 'LAN devices' }); expect(within(lan).getAllByRole('article')).toHaveLength(1);
+    expect(within(lan).queryByRole('button')).toBeNull(); expect(within(lan).getByText(/Address unresolved/)).toBeTruthy(); expect(statusReads()).toHaveLength(0);
+  });
+
+  it.each(['idle', 'processing', 'stopped', 'unrecognized'])('renders %s as a user-facing Chinese state and keeps protocol diagnostics closed', async state => {
+    statusResponse.state = state;
+    render(<DeviceSyncCenter t={{ langCode: 'zh' }} />); fireEvent.click(await screen.findByRole('button', { name: '读取打印机状态' }));
+    const translated = { idle: '待机', processing: '正在打印', stopped: '已停止', unrecognized: '状态未知' }[state]!;
+    await screen.findByText(translated); expect(screen.getByText('有诊断提示')).toBeTruthy();
+    expect(screen.getByText(/missing_content_type:/).closest('details')!.open).toBe(false);
+    expect(screen.getByText('暂不接受打印任务')).toBeTruthy(); expect(screen.getByText('排队任务: 0')).toBeTruthy();
+    expect(screen.getByText(state).closest('details')!.open).toBe(false);
+    if (state === 'unrecognized') expect(screen.getByText(translated).className).not.toContain('text-emerald');
+  });
+
+  it('marks an explicit PnP Error status as needing attention even without numeric problem codes', async () => {
+    external.usb.devices[0].status = 'Error'; external.usb.devices[0].problemCode = null; external.usb.devices[0].configManagerErrorCode = null;
+    render(<DeviceSyncCenter t={{}} />); await screen.findByText('Generic serial bridge');
+    expect(within(screen.getByRole('region', { name: 'USB devices' })).getByText(/Needs attention/)).toBeTruthy();
+  });
+
+  it('uses unknown counts for failed center sources while retaining brief warnings and detailed receipts', async () => {
+    external.usb = { ok: false, status: 'unavailable', observedAt, errors: [{ code: 'observation_failed', message: 'USB read unavailable' }] };
+    external.lan.ok = false; external.lan.status = 'unavailable'; external.lan.candidates = []; external.lan.errors = [{ code: 'socket_error', message: 'LAN read unavailable' }];
+    render(<DeviceSyncCenter t={{}} />); await screen.findByText('USB devices: Observation unavailable · USB read unavailable');
+    expect(within(screen.getByRole('region', { name: 'USB devices' })).getByRole('heading').textContent).toContain('—');
+    expect(within(screen.getByRole('region', { name: 'LAN devices' })).getByRole('heading').textContent).toContain('—');
+  });
+
+  it('shows successful-source warnings as diagnostic notices rather than an unavailable observation', async () => {
+    external.lan.errors = [{ code: 'source_notice', message: 'One additional record was not usable' }];
+    render(<DeviceSyncCenter t={{}} />);
+    const alert = await screen.findByRole('alert'); expect(alert.textContent).toBe('LAN devices: Diagnostic notice · One additional record was not usable');
+    expect(screen.getByRole('button', { name: 'Read printer status' })).toBeTruthy();
+  });
   it('separates native clients, present USB metadata, LAN advertisements and old queue state without invented control', async () => {
     const lan = external.lan;
     lan.candidates.push({ ...lan.candidates[0], id: 'ipps-a', serviceType: '_ipps._tcp.local', port: 443 });
@@ -70,13 +160,15 @@ describe('device views consume external owner receipts', () => {
     const view = render(<DeviceSyncCenter t={{}} />);
     await screen.findByText('Generic serial bridge'); expect(screen.getByText('Lumi desktop client')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Lumi clients' })).toBeTruthy();
-    const usb = screen.getByRole('region', { name: 'USB and serial devices present' });
+    const usb = screen.getByRole('region', { name: 'USB devices' });
     expect(usb.textContent).toContain('Registry PortName: COM41'); expect(usb.textContent).toContain('PnP problem code: 0');
     expect(usb.textContent).toContain('Configuration error code: 0'); expect(usb.textContent).toContain('Example provider · 4.2.0 · oem41.inf · Unsigned');
     expect(usb.textContent).not.toContain('xiaozhi'); expect(within(usb).queryByRole('button')).toBeNull();
+    expect(usb.querySelector('details')!.open).toBe(false);
     const queues = screen.getByRole('region', { name: 'System print queues' });
     expect(queues.textContent).toContain('Shared label'); expect(queues.textContent).toContain('USB004'); expect(queues.textContent).toContain('Offline / true');
     expect(within(queues).queryByRole('button')).toBeNull();
+    expect(queues.closest('details')!.open).toBe(false);
     expect(screen.getAllByRole('button', { name: /Read printer status/ })).toHaveLength(1);
     expect(screen.getByText('IPPS advertises TLS; this status reader currently supports IPP over HTTP only')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /PAIR|connect device/i })).toBeNull();
@@ -86,12 +178,14 @@ describe('device views consume external owner receipts', () => {
   it('reads only the selected exact IPP target and renders authenticated confirmed attributes and warnings', async () => {
     localStorage.setItem('lumi_auth_token', 'synthetic-user-token'); localStorage.setItem('lumi_desktop_session_proof', 'synthetic-local-proof');
     render(<DeviceSyncCenter t={{}} />); fireEvent.click(await screen.findByRole('button', { name: /Read printer status/ }));
-    await screen.findByText('Printer state: idle'); expect(statusReads()).toHaveLength(1);
+    await screen.findByText('Idle'); expect(statusReads()).toHaveLength(1);
     const [, init] = statusReads()[0]; expect(init.method).toBe('POST');
     expect(JSON.parse(init.body)).toEqual({ address: '10.42.0.31', port: 631, resourcePath: '/ipp/print' });
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer synthetic-user-token');
     expect(new Headers(init.headers).get('x-lumi-desktop-session')).toBe('synthetic-local-proof');
-    expect(screen.getByText(/missing_content_type: Validated/)).toBeTruthy(); expect(screen.getByText('Protocol printer')).toBeTruthy();
+    expect(screen.getByText('Diagnostic notice')).toBeTruthy();
+    expect(screen.getByText(/missing_content_type: Validated/).closest('details')!.open).toBe(false); expect(screen.getByText('Protocol printer')).toBeTruthy();
+    expect(screen.getByText('Not accepting jobs')).toBeTruthy(); expect(screen.getByText('Queued jobs: 0')).toBeTruthy();
     expect(screen.getByText('printer-is-accepting-jobs').nextSibling?.textContent).toBe('false');
     expect(screen.getByText('queued-job-count').nextSibling?.textContent).toBe('0');
   });
@@ -101,9 +195,9 @@ describe('device views consume external owner receipts', () => {
       ? { ok: false, status: 'query_failed', observedAt, ippStatusCode: 1282, target: statusResponse.target, warnings: [], limitations: [] }
       : { ok: false, status: 'unavailable', observedAt, target: statusResponse.target, phase: failure === 'body_timeout' ? 'body' : 'headers', errorCode: failure, error: 'Timed out while reading the device response', limitations: [] };
     render(<DeviceSyncCenter t={{}} />); fireEvent.click(await screen.findByRole('button', { name: /Read printer status/ }));
-    await screen.findByText(`Status query failed: ${statusResponse.status}`);
-    expect(screen.queryByText(/Printer state:/)).toBeNull();
-    if (failure === 'ipp_status') expect(screen.getByText('1282')).toBeTruthy(); else expect(screen.getByRole('alert').textContent).toContain(failure);
+    await screen.findByText('Status query failed'); expect(screen.queryByText('Idle')).toBeNull();
+    if (failure === 'ipp_status') expect(screen.getByText('1282').closest('details')!.open).toBe(false);
+    else { expect(screen.getByRole('alert').textContent).toContain('Timed out'); expect(screen.getByText(new RegExp(failure)).closest('details')!.open).toBe(false); }
   });
 
   it.each([401, 403])('shows HTTP %s and the actual local admission reason, then allows an explicit retry', async code => {
@@ -113,7 +207,7 @@ describe('device views consume external owner receipts', () => {
       ? Promise.resolve(reply({ error: 'Current local desktop proof is required' }, code)) : defaultHandler(url, init));
     render(<DeviceSyncCenter t={{}} />);
     expect((await screen.findByRole('alert')).textContent).toBe(`HTTP ${code}: Current local desktop proof is required`);
-    expect(screen.queryByRole('region', { name: 'USB and serial devices present' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'USB devices' })).toBeNull();
     denied = false; fireEvent.click(screen.getByRole('button', { name: 'Refresh external devices' }));
     await screen.findByText('Generic serial bridge'); expect(externalReads()).toHaveLength(2);
   });
@@ -122,7 +216,7 @@ describe('device views consume external owner receipts', () => {
     external.usb = { ok: false, status: 'unavailable', observedAt, errors: [{ code: 'observation_failed', message: 'PnP observation failed' }] };
     external.lan.status = 'partial'; external.lan.errors = [{ code: 'socket_error', message: 'One interface did not respond', protocol: 'mdns' }];
     render(<DeviceSyncCenter t={{}} />); await screen.findByText('observation_failed: PnP observation failed');
-    const usb = screen.getByRole('region', { name: 'USB and serial devices present' });
+    const usb = screen.getByRole('region', { name: 'USB devices' });
     expect(usb.textContent).not.toContain('No observations'); expect(screen.getByText('socket_error: One interface did not respond')).toBeTruthy();
     expect(screen.getByRole('region', { name: 'System print queues' }).textContent).toContain('Installed queue driver');
     expect(screen.getByRole('button', { name: /Read printer status/ })).toBeTruthy();
@@ -154,7 +248,7 @@ describe('device views consume external owner receipts', () => {
     render(<><DesktopDeviceWidget lang="en" socket={mocks as any} onOpen={() => {}} /><DeviceSyncCenter t={{}} /></>);
     await screen.findByText('Generic serial bridge'); expect(externalReads()).toHaveLength(1);
     const widget = screen.getByRole('button', { name: 'View and manage devices' });
-    expect(widget.textContent).toContain('USB / serial present: 1'); expect(widget.textContent).toContain('LAN candidates: 1'); expect(widget.textContent).toContain('Print queues: 1');
+    expect(widget.textContent).toContain('USB devices: 1'); expect(widget.textContent).toContain('LAN discovered: 1'); expect(widget.textContent).not.toContain('Print queues:');
     await act(async () => {
       for (const [callback, delay] of intervals.mock.calls) if (delay === 30000) (callback as Function)();
       for (const [event, callback] of mocks.on.mock.calls) if (event === 'devices:update') callback();
@@ -168,10 +262,22 @@ describe('device views consume external owner receipts', () => {
     external.usb.status = 'unsupported'; external.usb.supported = false; external.usb.devices = [];
     external.printers = { ok: false, status: 'unavailable', observedAt, errors: [{ code: 'observation_failed', message: 'Spooler metadata unavailable' }] };
     render(<DesktopDeviceWidget lang="en" socket={null} onOpen={() => {}} />);
-    await screen.findByText('printers · observation_failed: Spooler metadata unavailable');
+    await screen.findByText('Some observations need attention. Open device center for details.');
     const widget = screen.getByRole('button', { name: 'View and manage devices' });
-    expect(widget.textContent).toContain('USB / serial present: — (unsupported)'); expect(widget.textContent).toContain('Print queues: — (unavailable)');
-    expect(widget.textContent).toContain('LAN candidates: 1');
+    expect(widget.textContent).toContain('USB devices: —'); expect(widget.textContent).not.toContain('Print queues:');
+    expect(widget.textContent).toContain('LAN discovered: 1');
+  });
+
+  it('uses the same USB filter and advertised-service grouping in the compact widget and main list', async () => {
+    external.usb.devices.push({ ...external.usb.devices[0], instanceId: 'ACPI\\fixture', instanceEnumerator: 'ACPI', name: 'Motherboard serial', portName: 'COM1' });
+    external.lan.candidates.push({ ...external.lan.candidates[0], id: 'secure-pair', serviceType: '_ipps._tcp.local', port: 443 });
+    render(<><DesktopDeviceWidget lang="en" socket={null} onOpen={() => {}} /><DeviceSyncCenter t={{}} /></>);
+    await screen.findByText('Generic serial bridge'); const widget = screen.getByRole('button', { name: 'View and manage devices' });
+    expect(widget.textContent).toContain('USB devices: 1'); expect(widget.textContent).toContain('LAN discovered: 1');
+    expect(widget.textContent).not.toContain(observedAt); expect(widget.textContent).not.toContain('Print queues');
+    expect(within(screen.getByRole('region', { name: 'USB devices' })).getAllByRole('article')).toHaveLength(1);
+    expect(within(screen.getByRole('region', { name: 'LAN devices' })).getAllByRole('article')).toHaveLength(1);
+    expect(externalReads()).toHaveLength(1);
   });
 
   it('starts one shared LAN observation under the desktop StrictMode lifecycle', async () => {
@@ -215,7 +321,7 @@ describe('device views consume external owner receipts', () => {
     mocks.fetch.mockImplementation((url: string, init: RequestInit) => new URL(url).pathname.endsWith('/printer-status') ? held.promise : defaultHandler(url, init));
     const view = render(<DeviceSyncCenter t={{}} />); fireEvent.click(await screen.findByRole('button', { name: /Read printer status/ }));
     const signal = statusReads()[0][1].signal; view.unmount(); expect(signal.aborted).toBe(true);
-    await act(async () => held.resolve(reply(statusResponse))); expect(screen.queryByText('Printer state: idle')).toBeNull();
+    await act(async () => held.resolve(reply(statusResponse))); expect(screen.queryByText('Idle')).toBeNull();
   });
 
   it('explains the direction of remote MCP and renders configured WebSocket URLs without a fabricated browser action', async () => {
