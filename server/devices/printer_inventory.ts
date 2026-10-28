@@ -45,10 +45,11 @@ export interface WindowsPrinterPort {
 export interface WindowsPrinterDeviceNode {
   instanceId: string; className: string | null; friendlyName: string | null; status: string | null;
   parentInstanceId: string | null; containerId: string | null; isPresent: boolean | null;
-  locationInfo: string | null; associationEndpointId: string | null; associationEndpointAddress: string | null;
+  locationInfo: string | null; associationEndpointId: string | null; cachedAssociationEndpointAddress: string | null;
 }
 export interface WindowsPrinterIdentitySnapshot {
-  source: 'windows_pnp_cached_metadata'; observedAt: string; cacheUpdatedAt: null;
+  source: 'windows_pnp_cached_metadata'; scope: 'windows_device_registration'; networkReachability: 'not_tested';
+  observedAt: string; cacheUpdatedAt: null;
   status: 'observed' | 'partial' | 'unavailable'; nodes: WindowsPrinterDeviceNode[]; errors: PrinterProbeError[];
 }
 export interface WindowsPrinterQueueIdentity {
@@ -204,9 +205,9 @@ function identitySnapshot(raw: Row, observedAt: string): WindowsPrinterIdentityS
       status: textOrNull(node.Status), parentInstanceId: textOrNull(node.ParentInstanceId),
       containerId: textOrNull(node.ContainerId), isPresent: booleanOrNull(node.IsPresent),
       locationInfo: location && /^https?:/iu.test(location) ? endpoint(location) : location,
-      associationEndpointId: textOrNull(node.AssociationEndpointId), associationEndpointAddress: endpoint(node.AssociationEndpointAddress) };
+      associationEndpointId: textOrNull(node.AssociationEndpointId), cachedAssociationEndpointAddress: endpoint(node.AssociationEndpointAddress) };
   });
-  return { source: 'windows_pnp_cached_metadata', observedAt, cacheUpdatedAt: null,
+  return { source: 'windows_pnp_cached_metadata', scope: 'windows_device_registration', networkReachability: 'not_tested', observedAt, cacheUpdatedAt: null,
     status: !available || (!nodes.length && errors.length > 0) ? 'unavailable' : errors.length ? 'partial' : 'observed', nodes, errors };
 }
 

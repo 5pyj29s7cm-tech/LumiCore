@@ -1,6 +1,6 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T12:06:00.678Z",
+  "updatedAt": "2026-10-28T12:23:01.093Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
@@ -1693,6 +1693,20 @@
       "printSubmissions": 0,
       "messageSends": 0,
       "wholeApplicationAccepted": false
+    },
+    "followupSoftware": {
+      "at": "2026-10-28T12:23:01.093Z",
+      "evidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234/software-source-followup",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234/software-source-followup/evidence-seal.json",
+        "sha256": "bad49e53a035b4794daab10b47bae8d3719518e1c95188987fc57dad2470c89b",
+        "files": 28
+      },
+      "tests": "93/93",
+      "typecheck": "passed",
+      "wave1FailureReview": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-web-device-evidence-repair-1793187478234/wave1-review.json",
+      "desktopRuntimeConfiguration": "Use official LUMI_DESKTOP=1 on verified same Windows session; guards unchanged",
+      "liveFullAnswerReplay": "pending"
     }
   }
 }

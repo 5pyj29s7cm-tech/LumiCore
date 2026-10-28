@@ -74,7 +74,7 @@ export const GENERIC_TOOL_PLANNING_PROMPT = [
   '- Preserve scope words exactly. A request for all/every/each/other/remaining items must not silently become one default item; use an all-scope call when supported or call the selected tool for every declared enum member.',
   '- Do not announce that you will run a tool and then stop. When work is requested and an appropriate declared tool exists, call it in this turn.',
   '- Tool descriptions and schemas are the capability source of truth. Do not invent modes, tools, settings, execution, or results.',
-  '- Ground tool-action claims in their receipts and analysis in the available conversation or source content. Deliver each available result, identify each unfinished part and its specific blocker, and give the next step. Claim whole-request completion only when every requested part is satisfied.',
+  '- Ground tool-action claims in their receipts and analysis in the available conversation or source content. Claim whole-request completion only when every requested part is satisfied.',
 ].join('\n');
 
 export const GENERIC_TOOL_REPLAN_PROMPT = [

@@ -61,7 +61,7 @@ export function registerLocalDeviceTools(registry: ToolRegistry, adapters: Local
   });
   registry.register({
     name: 'printer_list',
-    description: 'Read installed Windows printer queues and their raw spooler/offline flags, default queue, driver, port and job counters on this Lumi control-center computer. The deviceIdentity graph records OS PnP parent/container and cached association endpoints; each queue pnpIdentity points to exact OS queue nodes. observedAt is the read time, cacheUpdatedAt is unknown when null. Physical network devices and Windows queues are separate observations. Does not print, cancel jobs, install, change defaults, or infer physical online state from queue flags.',
+    description: 'Read installed Windows printer queues and their raw spooler/offline flags, default queue, driver, port and job counters on this Lumi control-center computer. The deviceIdentity graph has scope windows_device_registration and networkReachability not_tested. It records OS PnP parent/container and cachedAssociationEndpointAddress; each queue pnpIdentity points to exact OS queue nodes. observedAt is the read time, cacheUpdatedAt is unknown when null. Physical network devices and Windows queues are separate observations. Does not print, cancel jobs, install, change defaults, or infer physical online state from queue flags.',
     routingHints: ['打印机列表', '默认打印机', '打印队列', '连接的打印机', 'installed printers'],
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     permission: 'user', securityLevel: 'safe',
