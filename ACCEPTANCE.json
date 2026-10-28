@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T11:15:26.311Z",
+  "updatedAt": "2026-10-28T11:28:09.385Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
     "title": "主程序网页与设备查询误判修复",
-    "status": "software-scope-validated-normal-chat-replay-pending",
-    "instruction": "重复关键词投影和不正确的权限裁剪已修正；保持默认DeepSeek，原会话完整复测待验，不重印或发送消息。"
+    "status": "routing-fixed-live-replayed-page-and-answer-quality-held",
+    "instruction": "误路由修复已加载并复测；默认DeepSeek不变。保留网页页面核验及模型事实推断问题，不新增网页、不打印、不发送消息。"
   },
   "acceptedWholeItems": [
     3,
@@ -289,8 +289,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "routing-owner-repair-software-validated-replay-pending",
-    "priority": "USB/LAN观察可用；IPP实际待机但组合聊天被旧发送合同误判；外链打开存在状态投影和工具裁剪问题，准确网址核对因ComputerUse安全停止未通过；旧桌面端已卸载，用户数据保留"
+    "status": "routing-fixed-live-replayed-page-and-answer-quality-held",
+    "priority": "网页新打开/旧状态混淆、设备读取/发送混淆的重复投影已删除纠正，原会话及替代场景路由复测通过；网页加载/准确URL未通过，打印答复的设备身份推断仍保留。旧客户端已卸载，律师版及原保留项不动。"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -1482,7 +1482,19 @@
     "defaultModelChanged": false,
     "printSubmissions": 0,
     "hardwareWrites": 0,
-    "wholeApplicationAccepted": false
+    "wholeApplicationAccepted": false,
+    "latestRoutingRepair": {
+      "at": "2026-10-28T11:28:09.385Z",
+      "status": "routing-fixed-live-replayed-page-and-answer-quality-held",
+      "sourceCommit": "f8485a85f18cb2f3914d7ebb69423ea181583261",
+      "evidence": {
+        "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-routing-owner-repair-1793184771614/actual-replay-review",
+        "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-routing-owner-repair-1793184771614/actual-replay-review/evidence-seal.json",
+        "sha256": "0352876cdd749fcd8ff08e18af8c1923f3a9f2c2a191b3cf40b8a9cdcbf2d05c",
+        "files": 19
+      },
+      "initialFailureEvidencePreserved": true
+    }
   },
   "latestMainObsoleteDesktopCleanup": {
     "at": "2026-10-28T10:32:19.588Z",
@@ -1502,8 +1514,8 @@
     }
   },
   "latestMainRoutingOwnerRepair": {
-    "at": "2026-10-28T11:15:26.311Z",
-    "status": "software-scope-validated-normal-chat-replay-pending",
+    "at": "2026-10-28T11:28:09.385Z",
+    "status": "routing-fixed-live-replayed-page-and-answer-quality-held",
     "sourceEvidence": {
       "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-routing-owner-repair-1793184771614/software-source",
       "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-routing-owner-repair-1793184771614/software-source/evidence-seal.json",
@@ -1535,6 +1547,97 @@
     "newVerificationLayer": false,
     "fixedAnswers": false,
     "printSubmissions": 0,
-    "wholeApplicationAccepted": false
+    "wholeApplicationAccepted": false,
+    "sourceCommit": "f8485a85f18cb2f3914d7ebb69423ea181583261",
+    "runtime": {
+      "pid": 37688,
+      "buildId": "f8485a85f18cb2f3914d7ebb69423ea181583261"
+    },
+    "actualReplayEvidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-routing-owner-repair-1793184771614/actual-replay-review",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-routing-owner-repair-1793184771614/actual-replay-review/evidence-seal.json",
+      "sha256": "0352876cdd749fcd8ff08e18af8c1923f3a9f2c2a191b3cf40b8a9cdcbf2d05c",
+      "files": 19
+    },
+    "independentActualReview": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/real-routing-replay-independent-review-1793186661113",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/real-routing-replay-independent-review-1793186661113/manifest.json",
+      "sha256": "53d7b8cd0852a59796e2e701464b89127df938ac28c66683df6067ee896c0040",
+      "scope": "read-only actual answers, receipts, routing, model preferences and event side effects"
+    },
+    "actuals": {
+      "urlOriginal": {
+        "routing": "passed-desktop_open-correct-url",
+        "launchReceipt": "verified_success",
+        "terminal": "desktop_control_paused_for_user_activity",
+        "pageUrlVerified": false,
+        "pageLoadVerified": false,
+        "automaticRetry": false
+      },
+      "urlAlternate": {
+        "routing": "passed-browser_open_task-correct-url",
+        "confirmation": "one-exact-authorized-confirmation",
+        "launchReceipt": "verified_success-launched",
+        "navigationVerified": false,
+        "desktopPlan": "target_mismatch",
+        "pageUrlVerified": false,
+        "pageLoadVerified": false,
+        "fullAnswerPassed": false,
+        "answerQualityHeld": [
+          "Answer acknowledged opened without qualifying navigationVerified=false/desktop plan target_mismatch; not accepted as verified page result."
+        ]
+      },
+      "printerOriginal": {
+        "routing": "passed-printer_list-printer_network_status-printer_status",
+        "observations": "Windows queue Normal jobs0; IPP Mi21213C idle acceptingJobs true queued0",
+        "readReceipts": "all-three-verified_success",
+        "fullAnswerPassed": false,
+        "answerQualityHeld": [
+          "The answer inferred likely different physical machines and no IP binding from WSD metadata whose hostAddress/deviceUrl/deviceUri were null; physical identity remains unverified."
+        ],
+        "evidenceGap": [
+          "Background legacy USB queue job id=4/pagesPrinted0 cannot be independently rechecked from persisted printer_list nested fields omitted; primary requested queue and IPP status have full dedicated receipts."
+        ]
+      },
+      "nodeStatusRead": {
+        "routing": "passed-read_file",
+        "data": "node-cobalt healthy queuedTasks3",
+        "synthetic": true,
+        "physicalEsp32Acceptance": false
+      }
+    },
+    "modelExecution": {
+      "configuredDefault": "relay/aliyun/deepseek-v4-pro",
+      "defaultPreferenceUnchanged": true,
+      "printerTurn": "one pro call failed; existing ordered fallback selected deepseek-v4-flash; not all calls were pro"
+    },
+    "internalUiEvents": {
+      "mdnConfirmation": [
+        {
+          "tool": "desktop_set_wallpaper_mode",
+          "enabled": true,
+          "at": "2026-10-28T11:22:08.895Z"
+        },
+        {
+          "tool": "desktop_set_wallpaper_mode",
+          "enabled": false,
+          "at": "2026-10-28T11:22:09.528Z"
+        }
+      ],
+      "source": "confirmed_action",
+      "interpretation": "temporary Lumi desktop-control presentation switch restored; not present in three persisted tool receipts"
+    },
+    "boundaries": {
+      "defaultModel": "relay/aliyun/deepseek-v4-pro",
+      "defaultPreferenceUnchanged": true,
+      "printSubmissions": 0,
+      "messageSends": 0,
+      "hardwareControlWrites": 0,
+      "newDevicePairings": 0,
+      "newBrowserActionsStoppedAfterUserQuestion": true,
+      "newVerificationLayer": false,
+      "fixedAnswers": false,
+      "wholeApplicationAccepted": false
+    }
   }
 }
