@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T03:21:40.516Z",
+  "updatedAt": "2026-10-28T03:46:01.381Z",
   "localDate": "2026-10-28",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序打印机IPP兼容与连接诊断",
-    "status": "compatibility-tests-passed-live-status-still-blocked",
-    "instruction": "确定的缺MIME兼容已修；真机后续等待响应头仍未解决；等待面板状态，不恢复律师验收"
+    "title": "主程序网络打印机状态链路",
+    "status": "source-and-real-printer-read-only-passed-runtime-chat-pending",
+    "instruction": "真实只读查询已通过，加载新传输实现后验证正常聊天；电视/ESP32及律师保留项不变"
   },
   "acceptedWholeItems": [
     3,
@@ -133,7 +133,7 @@
     "currentSubsealFilesVerified": "56/56",
     "protectedAcceptedStateUnchanged": true,
     "wholeApplicationAccepted": false,
-    "deviceAndManifestTests": "72/72",
+    "deviceAndManifestTests": "93/93",
     "relatedRoutingTests": "196/200; four existing failures retained",
     "typecheck": "passed"
   },
@@ -288,7 +288,7 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "compatibility-tests-passed-live-status-still-blocked",
+    "status": "source-and-real-printer-read-only-passed-runtime-chat-pending",
     "priority": "先接电视和打印机；电脑作为局域网控制中心"
   },
   "archivedLegalDevelopment": {
@@ -405,7 +405,7 @@
     "actual": {
       "lanPrinterServiceObserved": true,
       "installedPrinterQueues": 7,
-      "networkIppStatus": "One native HTTP success; subsequent queries still headers_timeout; stable live status pending",
+      "networkIppStatus": "3/3 production-core native HTTP queries passed; runtime chat pending",
       "television": "awaiting availability; user cannot turn it on",
       "physicalPrinting": "not executed",
       "esp32": "deferred"
@@ -467,13 +467,50 @@
     "defaultModelChanged": false,
     "brandSpecificLogic": false,
     "retriesAdded": false,
-    "printerPanelState": "awaiting user answer",
+    "printerPanelState": "User reports normal idle and no errors",
     "evidence": {
       "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/printer-connectivity-followup-20261028-1793156612651",
       "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/printer-connectivity-followup-20261028-1793156612651/evidence-seal.json",
       "sha256": "4298421a939dfcc56849609cb48e2952d103911ed99895e708b49f2b54a5653d",
       "files": 29
     },
-    "runtime": "reload-pending"
+    "runtime": {
+      "status": "backend-healthy",
+      "pid": 15480,
+      "buildId": "f732d2873221b01ceebe88555425c07e0329fe3b"
+    },
+    "currentPrinterConnection": "LAN, user confirmed; USB001 historical queue is not the current link"
+  },
+  "latestMainIppTransport": {
+    "updatedAt": "2026-10-28T03:46:01.381Z",
+    "status": "source-and-real-printer-read-only-passed-runtime-chat-pending",
+    "sourceRoot": "D:/lumiOS",
+    "oldDefaultFetchRemoved": true,
+    "transport": "single node:http.request with fixed IPP headers; no retry/fallback",
+    "tests": "93/93",
+    "typecheck": "passed",
+    "independentReview": "passed",
+    "postRestartComparison": "native success / Fetch headers_timeout / native success",
+    "actualProductionCoreQueries": {
+      "passed": 3,
+      "total": 3,
+      "state": "idle",
+      "acceptingJobs": true,
+      "queuedJobCount": 0
+    },
+    "connection": "LAN confirmed by user; historical USB queue is separate",
+    "userPhysicalRestart": "confirmed back to idle",
+    "physicalPrintingPassed": false,
+    "queueConfigurationChanged": false,
+    "defaultModelChanged": false,
+    "brandSpecificLogic": false,
+    "semanticRoutingRulesAdded": false,
+    "evidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ipp-native-transport-final-1793158999923",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ipp-native-transport-final-1793158999923/evidence-seal.json",
+      "sha256": "bf3ac460e05046fb7f90059157059ebdc4b83427bcff69a88fc42936462e15b7",
+      "files": 11
+    },
+    "runtimeChatValidation": "pending reload"
   }
 }

@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto';
+import { requestIppHttp, type IppHttpTransport } from './ipp_http';
 import { getPhysicalLanInterfaces, isOnLan, type LanDiscoveryInterface } from './lan_discovery';
 
 export type IppPrinterTarget = { address: string; port: number; resourcePath: string };
@@ -104,7 +105,7 @@ export function decodePrinterAttributesResponse(body: Buffer, requestId: number)
 
 export type IppPrinterDependencies = {
   interfaces?: () => Promise<LanDiscoveryInterface[]>;
-  fetch?: typeof fetch;
+  request?: IppHttpTransport;
   requestId?: () => number;
 };
 
@@ -131,11 +132,7 @@ export async function readNetworkPrinterStatus(target: IppPrinterTarget, deps: I
     }, 5000);
     try {
       phase = 'headers';
-      const response = await (deps.fetch ?? fetch)(httpUrl, {
-        method: 'POST', redirect: 'error', signal: controller.signal,
-        headers: { 'content-type': 'application/ipp', accept: 'application/ipp' },
-        body: encodePrinterAttributesRequest(printerUri, requestId) as unknown as BodyInit,
-      });
+      const response = await (deps.request ?? requestIppHttp)(httpUrl, encodePrinterAttributesRequest(printerUri, requestId), controller.signal);
       phase = 'body';
       const contentType = response.headers.get('content-type');
       if (response.status !== 200 || (contentType !== null && !/^application\/ipp(?:\s*;|$)/i.test(contentType))) {

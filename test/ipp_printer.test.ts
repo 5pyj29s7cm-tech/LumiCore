@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import type { Socket } from 'node:net';
+import { requestIppHttp, type IppHttpTransport } from '../server/devices/ipp_http';
 import { encodePrinterAttributesRequest, decodePrinterAttributesResponse, readNetworkPrinterStatus } from '../server/devices/ipp_printer';
 
 const id = 42;
@@ -21,8 +22,8 @@ function response(fields: Buffer[] = [], code = 0, requestId = id): Buffer {
   header.writeUInt16BE(code, 2); header.writeInt32BE(requestId, 4);
   return Buffer.concat([header, Buffer.from([4]), ...fields, Buffer.from([3])]);
 }
-function mockFetch(body: Buffer, status = 200, contentType = 'application/ipp') {
-  return vi.fn(async () => new Response(new Uint8Array(body), { status, headers: { 'content-type': contentType } })) as unknown as typeof fetch;
+function mockRequest(body: Buffer, status = 200, contentType = 'application/ipp') {
+  return vi.fn(async () => new Response(new Uint8Array(body), { status, headers: { 'content-type': contentType } })) as unknown as IppHttpTransport;
 }
 
 describe('read-only IPP printer status', () => {
@@ -72,43 +73,44 @@ describe('read-only IPP printer status', () => {
   ])('rejects %s', (_label, bytes) => {
     expect(() => decodePrinterAttributesResponse(bytes as Buffer, id)).toThrow();
   });
-  it('uses exact LAN endpoint, prohibits redirects and reports observation separately from printing', async () => {
-    const fetcher = mockFetch(response([field(0x23, 'printer-state', 5)]));
-    const result = await readNetworkPrinterStatus(target, { interfaces, fetch: fetcher, requestId: () => id });
+  it('passes the exact LAN endpoint and binary request to one transport call', async () => {
+    const requester = mockRequest(response([field(0x23, 'printer-state', 5)]));
+    const result = await readNetworkPrinterStatus(target, { interfaces, request: requester, requestId: () => id });
     expect(result).toMatchObject({ ok: true, status: 'observed', state: 'stopped', target });
-    const call = vi.mocked(fetcher).mock.calls[0];
+    const call = vi.mocked(requester).mock.calls[0];
     expect(String(call[0])).toBe('http://10.42.0.20:631/ipp/print');
-    expect(call[1]).toMatchObject({ method: 'POST', redirect: 'error' });
-    expect(Buffer.from(call[1]!.body as Uint8Array).readUInt16BE(2)).toBe(11);
+    expect(call[1].readUInt16BE(2)).toBe(11);
+    expect(call[2]).toBeInstanceOf(AbortSignal);
+    expect(requester).toHaveBeenCalledTimes(1);
   });
-  it.each(['8.8.8.8', '127.0.0.1', '10.43.0.20', '10.42.0.10', '10.42.0.255', 'printer.local', '::1', '010.42.0.20'])('never fetches non-peer address %s', async address => {
-    const fetcher = mockFetch(response([]));
-    expect(await readNetworkPrinterStatus({ ...target, address }, { interfaces, fetch: fetcher })).toMatchObject({ ok: false, status: 'unavailable' });
-    expect(fetcher).not.toHaveBeenCalled();
+  it.each(['8.8.8.8', '127.0.0.1', '10.43.0.20', '10.42.0.10', '10.42.0.255', 'printer.local', '::1', '010.42.0.20'])('never requests a non-peer address %s', async address => {
+    const requester = mockRequest(response([]));
+    expect(await readNetworkPrinterStatus({ ...target, address }, { interfaces, request: requester })).toMatchObject({ ok: false, status: 'unavailable' });
+    expect(requester).not.toHaveBeenCalled();
   });
   it.each(['/ipp/print?x=1', '//evil.example', '/ipp\\print', '/ipp/print#x', '/ipp/print\n'])('rejects ambiguous resource %s', async resourcePath => {
-    const fetcher = mockFetch(response([]));
-    expect(await readNetworkPrinterStatus({ ...target, resourcePath }, { interfaces, fetch: fetcher })).toMatchObject({ ok: false });
-    expect(fetcher).not.toHaveBeenCalled();
+    const requester = mockRequest(response([]));
+    expect(await readNetworkPrinterStatus({ ...target, resourcePath }, { interfaces, request: requester })).toMatchObject({ ok: false });
+    expect(requester).not.toHaveBeenCalled();
   });
   it('retains protocol errors, bad HTTP and timeout as failures instead of idle', async () => {
-    for (const fetcher of [mockFetch(response([], 0x0401)), mockFetch(Buffer.from('login'), 401, 'text/html'),
-      vi.fn(async () => { throw new DOMException('Timed out', 'AbortError'); }) as unknown as typeof fetch]) {
-      const result = await readNetworkPrinterStatus(target, { interfaces, fetch: fetcher, requestId: () => id });
+    for (const requester of [mockRequest(response([], 0x0401)), mockRequest(Buffer.from('login'), 401, 'text/html'),
+      vi.fn(async () => { throw new DOMException('Timed out', 'AbortError'); }) as unknown as IppHttpTransport]) {
+      const result = await readNetworkPrinterStatus(target, { interfaces, request: requester, requestId: () => id });
       expect(result.ok).toBe(false); expect(result).not.toHaveProperty('state');
     }
   });
   it('bounds response and treats missing state as unknown', async () => {
-    const big = await readNetworkPrinterStatus(target, { interfaces, fetch: mockFetch(Buffer.alloc(128 * 1024 + 1)), requestId: () => id });
+    const big = await readNetworkPrinterStatus(target, { interfaces, request: mockRequest(Buffer.alloc(128 * 1024 + 1)), requestId: () => id });
     expect(big).toMatchObject({ ok: false, status: 'unavailable' });
-    const empty = await readNetworkPrinterStatus(target, { interfaces, fetch: mockFetch(response([])), requestId: () => id });
+    const empty = await readNetworkPrinterStatus(target, { interfaces, request: mockRequest(response([])), requestId: () => id });
     expect(empty).toMatchObject({ ok: true, state: 'unknown' });
   });
 });
 
 
 describe('IPP response compatibility and timeout phases', () => {
-  it('reads a complete chunked HTTP response with no MIME header through the real fetch client', async () => {
+  it('reads a complete chunked HTTP response with no MIME header through the real HTTP transport', async () => {
     const sockets = new Set<Socket>();
     let requests = 0;
     const server = http.createServer(async (req, res) => {
@@ -126,12 +128,12 @@ describe('IPP response compatibility and timeout phases', () => {
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     try {
       const port = (server.address() as { port: number }).port;
-      const fetcher = vi.fn((_url, init) => fetch('http://127.0.0.1:' + port + '/ipp/print', init)) as unknown as typeof fetch;
-      const result = await readNetworkPrinterStatus(target, { interfaces, fetch: fetcher, requestId: () => id });
+      const requester = vi.fn((_url, body, signal) => requestIppHttp(new URL('http://127.0.0.1:' + port + '/ipp/print'), body, signal)) as unknown as IppHttpTransport;
+      const result = await readNetworkPrinterStatus(target, { interfaces, request: requester, requestId: () => id });
       expect(result).toMatchObject({ ok: true, state: 'idle', attributes: { 'queued-job-count': [0] },
         warnings: [{ code: 'missing_content_type' }] });
       expect(requests).toBe(1);
-      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(requester).toHaveBeenCalledTimes(1);
     } finally {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>(resolve => server.close(() => resolve()));
@@ -144,59 +146,59 @@ describe('IPP response compatibility and timeout phases', () => {
     ['incomplete IPP', response([]).subarray(0, 9)],
     ['trailing body bytes', Buffer.concat([response([]), Buffer.from('extra')])],
   ])('does not accept a missing MIME header with %s', async (_label, body) => {
-    const fetcher = vi.fn(async () => new Response(new Uint8Array(body))) as unknown as typeof fetch;
-    const result = await readNetworkPrinterStatus(target, { interfaces, fetch: fetcher, requestId: () => id });
+    const requester = vi.fn(async () => new Response(new Uint8Array(body))) as unknown as IppHttpTransport;
+    const result = await readNetworkPrinterStatus(target, { interfaces, request: requester, requestId: () => id });
     expect(result).toMatchObject({ ok: false, phase: 'decode', errorCode: 'response_invalid' });
     expect(result).not.toHaveProperty('state');
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(requester).toHaveBeenCalledTimes(1);
   });
 
   it('still rejects an explicit non-IPP MIME type and non-200 HTTP without retrying', async () => {
-    for (const fetcher of [mockFetch(response([]), 200, 'text/html'), mockFetch(response([]), 401)]) {
-      const result = await readNetworkPrinterStatus(target, { interfaces, fetch: fetcher, requestId: () => id });
+    for (const requester of [mockRequest(response([]), 200, 'text/html'), mockRequest(response([]), 401)]) {
+      const result = await readNetworkPrinterStatus(target, { interfaces, request: requester, requestId: () => id });
       expect(result).toMatchObject({ ok: false, phase: 'body', errorCode: 'response_invalid' });
-      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(requester).toHaveBeenCalledTimes(1);
     }
   });
 
   it('reports an actual request error separately from the response deadline', async () => {
-    const fetcher = vi.fn(async () => { throw new TypeError('Connection refused'); }) as unknown as typeof fetch;
-    const result = await readNetworkPrinterStatus(target, { interfaces, fetch: fetcher, requestId: () => id });
+    const requester = vi.fn(async () => { throw new TypeError('Connection refused'); }) as unknown as IppHttpTransport;
+    const result = await readNetworkPrinterStatus(target, { interfaces, request: requester, requestId: () => id });
     expect(result).toMatchObject({ ok: false, phase: 'headers', errorCode: 'request_failed', error: 'Connection refused' });
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(requester).toHaveBeenCalledTimes(1);
   });
 
   it('reports a headers deadline at the existing 5000ms total limit', async () => {
     vi.useFakeTimers();
     try {
-      const fetcher = vi.fn((_url, init) => new Promise<Response>((_resolve, reject) => {
-        init!.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
-      })) as unknown as typeof fetch;
-      const pending = readNetworkPrinterStatus(target, { interfaces, fetch: fetcher, requestId: () => id });
+      const requester = vi.fn((_url, _body, signal) => new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      })) as unknown as IppHttpTransport;
+      const pending = readNetworkPrinterStatus(target, { interfaces, request: requester, requestId: () => id });
       await vi.advanceTimersByTimeAsync(5000);
       expect(await pending).toMatchObject({ ok: false, phase: 'headers', errorCode: 'headers_timeout' });
-      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(requester).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
   });
 
   it('requires HTTP body completion and gives it only the remainder of the same 5000ms deadline', async () => {
     vi.useFakeTimers();
     try {
-      const fetcher = vi.fn(async (_url, init) => {
+      const requester = vi.fn(async (_url, _body, signal) => {
         await new Promise(resolve => setTimeout(resolve, 4000));
         return new Response(new ReadableStream({ start(controller) {
           controller.enqueue(new Uint8Array(response([field(0x23, 'printer-state', 3)])));
-          init!.signal!.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), { once: true });
+          signal.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), { once: true });
           // A complete IPP message is not a completed HTTP response body.
         } }));
-      }) as unknown as typeof fetch;
+      }) as unknown as IppHttpTransport;
       let settled = false;
-      const pending = readNetworkPrinterStatus(target, { interfaces, fetch: fetcher, requestId: () => id }).then(result => { settled = true; return result; });
+      const pending = readNetworkPrinterStatus(target, { interfaces, request: requester, requestId: () => id }).then(result => { settled = true; return result; });
       await vi.advanceTimersByTimeAsync(4999);
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(await pending).toMatchObject({ ok: false, phase: 'body', errorCode: 'body_timeout' });
-      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(requester).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
   });
 });
