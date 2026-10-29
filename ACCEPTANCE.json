@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-29T08:30:40.008875+00:00",
+  "updatedAt": "2026-10-29T09:11:33.318642+00:00",
   "localDate": "2026-10-29",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序分区能力审计与复测",
-    "status": "software-partial-native-input-blocked",
-    "instruction": "检查主程序各分区；本轮软件修复及隔离回归已封存。原生输入通道阻塞，未完成真人端到端。法律/设计师版不查，已验收及暂停项保持，默认模型不变；新后端源码尚未载入运行验证。"
+    "title": "主程序已加载验证与其余分区隔离复测",
+    "status": "runtime-loaded-regression-partial-native-ui-paused-by-user",
+    "instruction": "用户要求加载验证并测试其余分区，真人坐标测试先停。主后端已加载f7352d35，原生客户端自动重连。新增隔离回归已封存，5处产品问题及安装技能校验限制保持显式未修；默认模型、已验收和原暂停项不变。"
   },
   "acceptedWholeItems": [
     3,
@@ -36,11 +36,12 @@
     "Existing file full body returned through normal Socket and persisted exactly once with terminal task/turn"
   ],
   "knownUnresolved": [
-    "Composite read/calculate/write analysis remains unverified and blocked; verified file body preservation is only a partial repair.",
-    "Native UI input/capture blocked: 2 partial readonly partitions, 61 untested, 0 whole-partition passes.",
-    "Seven scoped tests still fail and also reproduce with HEAD production sources; see latestMainPartitionRegression evidence.",
-    "New backend changes are not loaded into the existing PID 20164; runtime and human-flow verification remain pending.",
-    "Other held acceptance boundaries and existing i18n/architecture findings remain unresolved."
+    "Five confirmed unmodified product gaps: terminal replacement lifecycle, two English navigation cases, compound retrieval/edit obligation, and documentation search binding.",
+    "Seven assertions failed in this round: three product navigation/contract assertions and four stale test-premise/owner-layer assertions; separate terminal/docs probes confirm two additional product gaps.",
+    "Some installed skills are skipped by runtime identity validation; current installation availability is not established by passing isolated tests.",
+    "Prior round seven scoped failures and composite calculation semantic verification remain open; they were not replayed in this round.",
+    "Native coordinate/UI testing is paused by user request; hardware/provider business end-to-end and some organization branches remain unverified.",
+    "Other held acceptance boundaries and prior i18n/architecture findings remain unresolved."
   ],
   "validation": {
     "tsc": "passed in both repositories",
@@ -51,10 +52,10 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "D:/Lumi-Audit-Temp/main-human-regression-20261029",
-    "manifest": "D:/Lumi-Audit-Temp/main-human-regression-20261029/evidence-seal.json",
-    "sha256": "dccc96912484ce79168dd5fe96aa5beb87462936658d05eacd47c41736784633",
-    "files": 397,
+    "directory": "D:/Lumi-Audit-Temp/main-loaded-regression-20261029",
+    "manifest": "D:/Lumi-Audit-Temp/main-loaded-regression-20261029/evidence-seal.json",
+    "sha256": "68607399b9cba71303979c7c626e306d3c19a1b908b65a558f9f92a615107982",
+    "files": 130,
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -129,17 +130,18 @@
   "currentCheckpointValidation": {
     "jsonParsed": true,
     "gitDiffCheck": "passed",
-    "sourceChanged": true,
-    "sourceFiles": 14,
+    "productionSourceChanged": false,
+    "runtimeLoadedSourceCommit": "f7352d35e5a12054e8d5514518de419b392d0d1b",
+    "backendPid": 47516,
+    "nativeClientAutomaticallyReconnected": true,
+    "scopedTests": "672/679 across73 unique existing files;7 failures retained with classification",
+    "typecheck": "not repeated; unchanged production source has prior f7352d35 passing check",
     "existingPassedOperationsReplayed": false,
     "protectedAcceptedStateUnchanged": true,
+    "defaultModelUnchanged": true,
+    "nativeUITesting": "paused-by-user",
     "wholeApplicationAccepted": false,
-    "scopedTests": "502/509; seven failures also reproduce against HEAD production sources",
-    "typecheck": "passed",
-    "i18nNewFindings": 0,
-    "nativeWholePartitionPasses": 0,
-    "checkpointOnly": false,
-    "installerReleased": false,
+    "checkpointOnly": true,
     "remotePushPerformed": false
   },
   "orderedPassSummary": {
@@ -293,8 +295,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "software-partial-native-input-blocked",
-    "priority": "检查主程序各分区；本轮软件修复及隔离回归已封存。原生输入通道阻塞，未完成真人端到端。法律/设计师版不查，已验收及暂停项保持，默认模型不变；新后端源码尚未载入运行验证。"
+    "status": "runtime-loaded-regression-partial-native-ui-paused-by-user",
+    "priority": "用户要求加载验证并测试其余分区，真人坐标测试先停。主后端已加载f7352d35，原生客户端自动重连。新增隔离回归已封存，5处产品问题及安装技能校验限制保持显式未修；默认模型、已验收和原暂停项不变。"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -1891,6 +1893,160 @@
       "在正常启动的主程序中验证已提交修改；当前后端仍是旧进程。",
       "继续处理7项既有失败与复合计算语义核验，不能将当前检查点当作全部验收。"
     ],
+    "wholeApplicationAccepted": false,
+    "installerReleased": false,
+    "remotePushPerformed": false
+  },
+  "latestMainLoadedRegression": {
+    "at": "2026-10-29T09:11:33.318642+00:00",
+    "status": "runtime-loaded-regression-partial-native-ui-paused-by-user",
+    "sourceCommit": "f7352d35e5a12054e8d5514518de419b392d0d1b",
+    "productionSourceChanged": false,
+    "version": "3.1.1",
+    "evidence": {
+      "directory": "D:/Lumi-Audit-Temp/main-loaded-regression-20261029",
+      "manifest": "D:/Lumi-Audit-Temp/main-loaded-regression-20261029/evidence-seal.json",
+      "sha256": "68607399b9cba71303979c7c626e306d3c19a1b908b65a558f9f92a615107982",
+      "files": 130,
+      "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
+      "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
+    },
+    "report": "D:/Lumi-Audit-Temp/main-loaded-regression-20261029/加载验证与剩余分区报告.txt",
+    "structuredReport": "D:/Lumi-Audit-Temp/main-loaded-regression-20261029/loaded-regression-summary.json",
+    "runtimeObserved": {
+      "name": "lumi-core",
+      "version": "3.1.1",
+      "buildId": "f7352d35e5a12054e8d5514518de419b392d0d1b",
+      "pid": 47516,
+      "sharedBackendProtocol": 1,
+      "startedAt": "2026-10-29T08:39:23.720Z",
+      "uptimeSeconds": 1697,
+      "nodeVersion": "v24.19.0",
+      "platform": "win32"
+    },
+    "runtimeHealth": {
+      "status": "degraded",
+      "fault": {
+        "degraded": false,
+        "acceptingWork": true
+      },
+      "scheduler": {
+        "degraded": true,
+        "pausedTasks": 5,
+        "queuedTasks": 0,
+        "failedTasks": 0
+      },
+      "timestamp": "2026-10-29T09:07:36.656Z",
+      "runtime": {
+        "name": "lumi-core",
+        "version": "3.1.1",
+        "buildId": "f7352d35e5a12054e8d5514518de419b392d0d1b"
+      },
+      "database": {
+        "dirty": false,
+        "persistence": {
+          "degraded": false
+        }
+      }
+    },
+    "nativeClientRecovery": {
+      "nativeClientPidUnchanged": 43928,
+      "automaticRecoveryObserved": true,
+      "evidence": [
+        {
+          "stdoutLine": 68,
+          "text": "[API_ROUTER] POST /auth/bootstrap"
+        },
+        {
+          "stdoutLine": 71,
+          "text": "[Socket] Client connected: i2ykjkFLN3QSwdO6AAAB (uid=admin-uid)"
+        },
+        {
+          "stdoutLine": 84,
+          "text": "[Devices] Registered: Win32 (desktop) for user admin-uid"
+        }
+      ],
+      "mechanismAnchors": [
+        "src/services/socketService.ts:244",
+        "src/services/socketService.ts:308",
+        "server/config/desktop_bootstrap.ts:91"
+      ],
+      "assistantInjectedCredentials": false,
+      "assistantOperatedNativeUI": false
+    },
+    "nativeUITesting": "paused-by-user; zero input/capture attempts this round",
+    "coverage": {
+      "mappedPartitions": 63,
+      "newRoundReviewed": 42,
+      "previousOrSealedScopeRetained": 21,
+      "nativeUITestAttemptsThisRound": 0,
+      "wholePartitionPassesClaimed": 0
+    },
+    "tests": {
+      "uniqueFiles": 73,
+      "executed": 679,
+      "passed": 672,
+      "failed": 7,
+      "uniqueUnselected": 57,
+      "duplicateOrRetryAssertionsDeduplicated": 62
+    },
+    "failureClassification": {
+      "productNavigationOrContractAssertions": 3,
+      "testPremiseMismatchAssertions": 4,
+      "additionalProductDefects": [
+        "terminal lifecycle replacement",
+        "documentation search binding"
+      ]
+    },
+    "additionalProbes": {
+      "launcherFunctionalPassed": 2,
+      "docsDefectReproductionConfirmed": 1,
+      "terminalDefectReproductionFailedAsExpected": 1,
+      "notAddedToExistingRegressionCounts": true
+    },
+    "preservation": {
+      "defaultModelUnchanged": true,
+      "databaseQuickCheck": "ok",
+      "businessRecordCountDeltas": {
+        "conversations": 0,
+        "interactions": 0,
+        "generated_archive": 0,
+        "model_routing_receipts": 0
+      },
+      "acceptedWholeItems": [
+        3,
+        15,
+        16
+      ],
+      "heldItemsUnchanged": true,
+      "lawyerEditionInspected": false,
+      "designerEditionInspected": false,
+      "businessMessagesOrPaidGenerationsRequested": false,
+      "externalProviderConnections": "Existing configured background adapters resumed during normal startup; no test business message or generation requested.",
+      "remotePushPerformed": false
+    },
+    "remaining": [
+      "5 confirmed product gaps remain unmodified in loaded source.",
+      "4 test assertions need premise/owner-layer maintenance.",
+      "Prior round7failures and composite calculation semantic verification remain open; not rerun in this round.",
+      "Some currently installed skills are skipped by identity validation; see runtime evidence.",
+      "Org chat lacks direct dynamic coverage; org dashboard/audit and founders remain static-only. Native/hardware/provider end-to-end remains untested."
+    ],
+    "runtimeSkillEvidence": "D:/Lumi-Audit-Temp/main-loaded-regression-20261029/runtime-skill-findings/result.json",
+    "priorCurrentItem": {
+      "id": null,
+      "title": "主程序分区能力审计与复测",
+      "status": "software-partial-native-input-blocked",
+      "instruction": "检查主程序各分区；本轮软件修复及隔离回归已封存。原生输入通道阻塞，未完成真人端到端。法律/设计师版不查，已验收及暂停项保持，默认模型不变；新后端源码尚未载入运行验证。"
+    },
+    "priorEvidence": {
+      "directory": "D:/Lumi-Audit-Temp/main-human-regression-20261029",
+      "manifest": "D:/Lumi-Audit-Temp/main-human-regression-20261029/evidence-seal.json",
+      "sha256": "dccc96912484ce79168dd5fe96aa5beb87462936658d05eacd47c41736784633",
+      "files": 397,
+      "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
+      "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
+    },
     "wholeApplicationAccepted": false,
     "installerReleased": false,
     "remotePushPerformed": false
