@@ -3627,6 +3627,14 @@
     "en": "Obsidian sync failed",
     "zh": "Obsidian 同步失败"
   },
+  "knowledge-base.obsidian-status-failed-to-load.9c23a1af82": {
+    "en": "Obsidian status failed to load",
+    "zh": "Obsidian 状态读取失败"
+  },
+  "knowledge-base.previous-obsidian-status.7db26cd191": {
+    "en": "Showing the previous Obsidian status; it may be out of date.",
+    "zh": "当前显示上次读取的 Obsidian 状态，可能已过时。"
+  },
   "knowledge-base.open-knowledge-folder-failed.2988dd36f8": {
     "en": "Open knowledge folder failed",
     "zh": "打开知识库文件夹失败"

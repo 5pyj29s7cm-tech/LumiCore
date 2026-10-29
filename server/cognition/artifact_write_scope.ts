@@ -3,11 +3,14 @@ import { buildTaskTargetAnchorProjection, canonicalPathIdentity, outputDocumentI
 import { hasAffirmativeArtifactMutationAction, normalizeActionIntent } from './normalized_action_intent';
 import path from 'node:path';
 import os from 'node:os';
-import { withoutLocationLiterals } from './location_literals';
+import { directoryArtifactPath, withoutLocationLiterals } from './location_literals';
+import { affirmativeActionInstructionClauses, negatedActionInstructions } from './action_instruction_clauses';
 
 /** Resolve one named artifact only in an explicit absolute or standard user folder. */
 export function resolveExplicitUserArtifactPath(text: string, folderContext = ''): string {
   if ((text.match(/\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/giu) || []).length !== 1) return '';
+  const inDirectory = directoryArtifactPath(text);
+  if (inDirectory) return inDirectory;
   const target = buildTaskTargetAnchorProjection({ taskText: text }).target;
   if (/^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(target.path)) return target.path;
   // i18n-allow: standard user-directory input grammar; names and paths are operands.
@@ -29,7 +32,8 @@ function mixedTaskOutputPath(text: string): string {
   const outputs: string[] = [];
   // Only an affirmative output clause with one filename can select a result.
   // i18n-allow: multilingual file-output clause and same-directory recognition.
-  for (const clause of text.split(/[，,。！？!?；;\n]/u)) {
+  for (const { probe, start } of affirmativeActionInstructionClauses(text)) {
+    const clause = probe.replace(/[，,。！？!?；;\n]+$/u, '');
     const destination = outputDocumentInstruction(clause);
     if (destination ? !hasAffirmativeArtifactMutationAction(clause)
       : !/(?:生成|创建|写入|导出|另存|保存(?:到|为|成))|\b(?:create|write|export|save)\b/iu.test(clause)) continue;
@@ -41,7 +45,7 @@ function mixedTaskOutputPath(text: string): string {
     if (outputPath) { outputs.push(outputPath); continue; }
     if (!/(?:同目录|同一目录|同一文件夹)|\bsame\s+(?:directory|folder)\b/iu.test(clause)) continue;
     const filename = clause.match(/(?:^|\s|["'“])([^\s/\\:"'“”<>，,。；;]+\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json))(?=$|[\s"'”])/iu)?.[1];
-    const source = buildTaskTargetAnchorProjection({ taskText: text.slice(0, text.indexOf(clause)) }).target.path;
+    const source = buildTaskTargetAnchorProjection({ taskText: text.slice(0, start) }).target.path;
     if (filename && source) {
       const paths = /^[a-z]:[\\/]|^\\\\/iu.test(source) ? path.win32 : path.posix;
       outputs.push(paths.join(paths.dirname(source), filename));
@@ -102,16 +106,25 @@ export function requestedArtifactFormatBlockReason(text: string, toolName: strin
   return `The requested artifact is ${artifact.path}. Use its ${artifact.producer} capability; do not create a different document format.`;
 }
 
+/** A scoped output exception cannot override a whole-file write prohibition. */
+export function hasUnscopedArtifactWriteProhibition(text: string): boolean {
+  // i18n-allow: Existing whole-file prohibition grammar, applied only to actual negative instructions.
+  return negatedActionInstructions(text).some(({ instruction }) => /^(?:(?:再|继续|重新)\s*)?(?:修改|创建|保存|写入)\s*(?:任何|所有|新)?文件|^(?:create|save|modify|write(?:\s+to)?)\s+(?:any|all)\s+files?\b/iu.test(instruction));
+}
+
 /** A local output is allowed while the explicitly preserved input stays read-only. */
-export function preservedSourceOutputScope(text: string): { sourceText: string; outputText: string } | null {
+export function preservedSourceOutputScope(text: string): { sourceText: string; outputText: string; outputPaths?: string[] } | null {
   // i18n-allow: input recognition for a preserved source and separately requested output.
   const preserve = /(?:不修改|不要修改|不改动|不要改动|不覆盖|不要覆盖)(?:原|源)文件|(?:原|源)文件(?:不动|不变|不要(?:修改|改动|覆盖))|(?:保持|保留)(?:原|源)文件(?:原样|不变)|\b(?:do not|don't|without)\s+(?:modify|modifying|edit|editing|change|changing|overwrite|overwriting)\s+(?:the\s+)?(?:original|source)\s+file\b/iu;
   if (!preserve.test(text)) return null;
-  // i18n-allow: an unscoped prohibition still forbids all file mutations.
-  if (/(?:不修改|不要修改|禁止修改|不要创建|不要保存)(?:任何|所有|新)?文件|\b(?:do not|don't)\s+(?:create|save|modify)\s+(?:any|all)\s+files?\b/iu.test(text)) return null;
+  if (hasUnscopedArtifactWriteProhibition(text)) return null;
   // i18n-allow: only an affirmative output clause grants this narrow exception.
   const output = /(?:另存(?:为)?|导出(?:为|到)?|保存(?:为|成)(?=\s*(?:(?:一份)?(?:新|副本)|[A-Za-z]:[\\/]|\/))|\b(?:save\s+(?:a\s+copy\s+)?as|export\s+(?:to|as))\b)/iu.exec(text);
-  if (!output) return null;
+  if (!output) {
+    const created = affirmativeActionInstructionClauses(text).filter(clause => clause.start > 0 && requestedSingleArtifact(clause.probe));
+    return created.length ? { sourceText: text.slice(0, created[0].start), outputText: created.map(clause => clause.probe).join('\n'),
+      outputPaths: created.map(clause => requestedSingleArtifact(clause.probe)!.path) } : null;
+  }
   // i18n-allow: a negated export does not authorize a local write.
   if (/(?:不要|别|不|禁止|无需)\s*$|\b(?:do not|don't|without)\s*$/iu.test(text.slice(Math.max(0, output.index - 24), output.index))) return null;
   return { sourceText: text.slice(0, output.index), outputText: text.slice(output.index + output[0].length) };
@@ -124,6 +137,8 @@ export function isPreservedSourceOutputTool(name: string): boolean {
 export function preservedSourceOutputTools(text: string, acceptedTarget?: AcceptedTaskTarget): string[] {
   const scope = preservedSourceOutputScope(text);
   if (!scope) return [];
+  if (scope.outputPaths) return [...new Set(scope.outputPaths.flatMap(output => /\.xlsx?$/i.test(output) ? ['create_xlsx', 'modify_xlsx']
+    : /\.docx?$/i.test(output) ? ['create_docx'] : /\.pptx?$/i.test(output) ? ['create_ppt'] : /\.pdf$/i.test(output) ? ['create_pdf'] : ['write_file']))];
   const output = buildTaskTargetAnchorProjection({ taskText: scope.outputText }).target.path;
   if (/\.xlsx?$/i.test(output)) return ['create_xlsx', 'modify_xlsx'];
   if (!output && /\.xlsx?$/i.test(buildTaskTargetAnchorProjection({ taskText: scope.sourceText }).target.path || acceptedTarget?.target.path || '')) return ['modify_xlsx', 'create_xlsx'];
@@ -141,10 +156,12 @@ export function preservedSourceWriteBlockReason(input: {
 }): string | null {
   const scope = preservedSourceOutputScope(input.text);
   if (!scope || !isPreservedSourceOutputTool(input.toolName)) return null;
-  const output = buildTaskTargetAnchorProjection({ taskText: scope.outputText }).target.path;
+  const outputs = scope.outputPaths || [buildTaskTargetAnchorProjection({ taskText: scope.outputText }).target.path].filter(Boolean);
   const explicitSource = buildTaskTargetAnchorProjection({ taskText: scope.sourceText }).target.path;
   const inheritedSource = input.acceptedTarget?.source !== 'current_turn' ? input.acceptedTarget?.target.path : '';
-  const source = explicitSource || inheritedSource || '';
+  const sources = affirmativeActionInstructionClauses(scope.sourceText).map(clause => normalizeActionIntent(clause.probe))
+    .filter(intent => intent.rule === 'explicit-local-artifact-read' && intent.target).map(intent => intent.target);
+  if (!sources.length && (explicitSource || inheritedSource)) sources.push(explicitSource || inheritedSource || '');
   // Match each handler's actual input, including alias priority. An ignored
   // outputPath/filePath must never authorize a write through args.path.
   const targetValue = input.toolName === 'write_file'
@@ -159,8 +176,8 @@ export function preservedSourceWriteBlockReason(input: {
   const target = String(targetValue || '');
   const targetId = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(target) ? canonicalPathIdentity(target) : '';
   if (!targetId) return 'A separately saved artifact requires one concrete output path.';
-  if (source && targetId === canonicalPathIdentity(source)) return 'The user required the original file to remain unchanged. Save the result to a different file.';
-  if (output && targetId !== canonicalPathIdentity(output)) return 'The output path does not match the separately saved artifact requested in this turn.';
-  if (!output && !source) return 'The source or separate output path must be resolved before saving a copy.';
+  if (sources.some(source => targetId === canonicalPathIdentity(source))) return 'The user required the original file to remain unchanged. Save the result to a different file.';
+  if (outputs.length && !outputs.some(output => targetId === canonicalPathIdentity(output))) return 'The output path does not match the separately saved artifact requested in this turn.';
+  if (!outputs.length && !sources.length) return 'The source or separate output path must be resolved before saving a copy.';
   return null;
 }

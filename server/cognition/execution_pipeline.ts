@@ -46,7 +46,7 @@ import type { ToolContext, ServerBoundCapabilitySelection } from '../tools/types
 import { frozenCapabilitySnapshot } from '../tools/definitions/workflow/capability_snapshot';
 import { resolveAcceptedTaskTarget } from '../conversation/task_target_anchor';
 import { resolveAcceptedFilePlan } from '../conversation/task_plan_reference';
-import { isPreservedSourceOutputTool, preservedSourceOutputScope, preservedSourceOutputTools, requestedSingleArtifact } from './artifact_write_scope';
+import { hasUnscopedArtifactWriteProhibition, isPreservedSourceOutputTool, preservedSourceOutputScope, preservedSourceOutputTools, requestedSingleArtifact } from './artifact_write_scope';
 
 export interface LumiCapabilityPlan extends LumiCapabilitySelection {
   schemaVersion: 1;
@@ -146,6 +146,7 @@ function applyCurrentTurnNoMutationConstraint(
     && navigationIntent.target
   ) return execution;
   const prohibition = explicitNoMutationScope(text);
+  const unscopedFileWriteProhibition = hasUnscopedArtifactWriteProhibition(text);
   if (prohibition.external && !prohibition.local && !mediaScope?.projectSelection) {
     // A ban on sending/submitting never grants opaque actions or existing-state mutation.
     const retrievalOnly = analysis.contract(text).artifactMode === 'retrieve';
@@ -179,7 +180,7 @@ function applyCurrentTurnNoMutationConstraint(
   // The artifact route already removes messaging, client-surface and desktop
   // launch tools, while the executor still binds the write to the explicit
   // path supplied in this turn.
-  if (isExplicitArtifactCreationText(text) && !preservedOutput) return execution;
+  if (isExplicitArtifactCreationText(text) && !preservedOutput && !unscopedFileWriteProhibition && !prohibition.allEffects) return execution;
   const normalizedIntent = acceptedIntent && text === originalText ? acceptedIntent : analysis.intent(text);
   // An explicitly requested persistent Lumi task is an internal ledger write.
   // A clause such as "do not send any messages" fences the later external
@@ -189,7 +190,7 @@ function applyCurrentTurnNoMutationConstraint(
     && normalizedIntent.operation === 'create'
     && normalizedIntent.sideEffectClass === 'local_write'
   ) return execution;
-  if (!hasExplicitNoMutationInstruction(text) && !mediaScope?.projectSelection) return execution;
+  if (!hasExplicitNoMutationInstruction(text) && !unscopedFileWriteProhibition && !mediaScope?.projectSelection) return execution;
   const avatarInstruction = avatarAuthoringMutationInstruction(text);
   const scopedAvatarAuthoring = avatarInstruction !== null && !hasExplicitNoMutationInstruction(avatarInstruction);
   const businessBoundary = localBusinessAnalysisBoundary(text);
@@ -203,7 +204,7 @@ function applyCurrentTurnNoMutationConstraint(
     ...(preservedOutput ? ['code_execution'] : []),
     ...(requestedWorkflowCapture ? ['capture_recent_workflow', 'save_workflow'] : []),
   ]);
-  const localWriteLimit = prohibition.local && !prohibition.external && !prohibition.allEffects;
+  const localWriteLimit = (prohibition.local || unscopedFileWriteProhibition) && !prohibition.external && !prohibition.allEffects;
   const mutationTools = registry.getCapabilityManifest(undefined, { context: visibilityContext })
     // A local-file/settings fence cannot revoke a separately declared external action.
     // Opaque/process effects remain denied; the ordinary exact confirmation gate is unchanged.

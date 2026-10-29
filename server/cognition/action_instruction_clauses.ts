@@ -25,6 +25,22 @@ function projectInstructionClauses(input: string): ProjectedClause[] {
           && !/\.(?:xlsx?|xlsm|docx?|pptx?|pdf|rtf|txt|md|csv|tsv|json|html?|wps|et|dps|png|jpe?g|webp|bmp|gif|tiff?|mp4|wav|mp3)\s+\S/iu.test(value);
         probe += exactPath ? literal : ' ';
         syntax += exactPath ? ' '.repeat(literal.length) : ' ';
+        // A quoted source operand can be followed by a second explicit file
+        // predicate without punctuation. Split only a direct affirmative read;
+        // quoted prose, hypothetical reads and coordinated prohibitions stay whole.
+        // i18n-allow: Existing read and file-creation predicates joined by coordination.
+        const directRead = /^(?:(?:请|麻烦你|现在|直接)\s*)*(?:(?:只|完整)\s*)*(?:读取|读|查看|审查|检查|总结|分析)(?:一下)?\s*(?:(?:本地)?(?:文件|文档)\s*)?$|^(?:(?:please|now|directly)\s+)*(?:read|inspect|review|check|summari[sz]e|analy[sz]e)(?:\s+the)?\s*$/iu.test(input.slice(start, quoteStart).trim());
+        const next = index + quote.length;
+        // i18n-allow: Coordination introduces a separate file creation predicate.
+        const coordination = exactPath && /\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf)$/iu.test(value) && directRead
+          ? /^\s*(?:(?:并且|并)\s*|and(?:\s+then)?\s+)(?=(?:创建|新建|生成)|(?:create|generate|write)\b)/iu.exec(input.slice(next)) : null;
+        if (coordination) {
+          parts.push({ text: input.slice(start, next), probe, syntax, start });
+          start = next + coordination[0].length;
+          index = start - 1;
+          probe = ''; syntax = ''; quote = '';
+          continue;
+        }
         index += quote.length - 1;
         quote = '';
       }

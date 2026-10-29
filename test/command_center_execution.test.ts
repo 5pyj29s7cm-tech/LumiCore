@@ -25,8 +25,8 @@ const userId = 'manual-plan-synthetic-user';
 const getters = { getDeepSeek: () => null, getGemini: () => null };
 const io = { to: () => ({ emit: vi.fn() }) } as any;
 const handler = vi.fn(async () => JSON.stringify({ status: 'completed', items: [{ url: 'https://example.invalid/source' }] }));
-function plan(instruction = 'Research the current public standard and summarize the result.') {
-  return createCommandCenterPlan({ userId, domain: 'personal', orgId: '' }, { title: 'Research public sources', instruction, kind: 'daily_task', cadence: 'none' });
+function plan(instruction = 'Research the current public standard and summarize the result.', title = 'Research public sources') {
+  return createCommandCenterPlan({ userId, domain: 'personal', orgId: '' }, { title, instruction, kind: 'daily_task', cadence: 'none' });
 }
 async function httpFixture() {
   const fixture = await makeApp();
@@ -52,7 +52,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await runtimeBackgroundWork.waitForIdle();
-  scheduler.stop(); toolRegistry.unregister('web_search'); toolRegistry.unregister('synthetic_plan_external_send');
+  scheduler.stop(); toolRegistry.unregister('web_search'); toolRegistry.unregister('send_email'); toolRegistry.unregister('synthetic_plan_external_send');
   resetExternalCommitRuntimeCacheForTests(); resetRealtimeUserActivityForTests();
   resetAutonomousTaskQueueForTest({ clearPersisted: true, markHydrated: true });
 });
@@ -96,19 +96,46 @@ it('retries a temporarily voice-blocked manual plan on the real plan-dispatch ti
 });
 
 it('does not turn explicit plan admission into external-commit authorization', async () => {
-  const requested = plan('Send an email to outside@example.invalid saying hello now.');
+  const requested = plan('Send an email to outside@example.invalid saying hello now.', 'Send an email');
   const externalHandler=vi.fn(async()=>JSON.stringify({sent:true,status:'sent'}));
-  toolRegistry.register({name:'synthetic_plan_external_send',description:'Synthetic provider boundary; no network',permission:'public',securityLevel:'confirm',parameters:{type:'object',properties:{recipient:{type:'string'},message:{type:'string'}}},capability:{operation:'communicate',lane:'messaging',risk:'high',sideEffects:[{type:'external_communication',scope:'recipient',reversible:false}]},handler:externalHandler});
-  mocks.model.mockReset().mockResolvedValueOnce({text:'',toolCalls:[{id:'attempt-external',name:'synthetic_plan_external_send',arguments:{recipient:'outside@example.invalid',message:'hello now'}}]}).mockResolvedValue({text:'The email was sent.',toolCalls:[]});
+  // Use the mail capability's routed identity so the call reaches confirmation,
+  // while the synthetic handler makes any accidental adapter invocation visible.
+  toolRegistry.register({ name: 'send_email', description: 'Send a plain-text email. Synthetic provider; no network.', permission: 'public', securityLevel: 'confirm',
+    parameters: { type: 'object', properties: { to: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' } }, required: ['to', 'subject', 'body'] },
+    capability: { id: 'mail.message.send', family: 'mail', operation: 'communicate', lane: 'messaging', risk: 'high',
+      sideEffects: [{ type: 'external_communication', scope: 'explicit email recipient and message', reversible: false }] }, handler: externalHandler });
+  mocks.model.mockReset().mockResolvedValueOnce({text:'',toolCalls:[{id:'attempt-external',name:'send_email',arguments:{to:'outside@example.invalid',subject:'Hello',body:'hello now'}}]}).mockResolvedValue({text:'The email was sent.',toolCalls:[]});
   const fixture = await httpFixture();
   try {
     await fixture.run(requested.id); await runtimeBackgroundWork.waitForIdle();
     expect(externalHandler).not.toHaveBeenCalled();
     expect(handler).not.toHaveBeenCalled();
     expect(mocks.model).toHaveBeenCalled();
+    expect(mocks.model.mock.calls[0][1].map((tool: any) => tool.function.name)).toContain('send_email');
     const task=[...getTaskHistory(50,0,userId),...getTaskQueue(userId)][0];
-    expect(task).toBeTruthy();expect(task.status).not.toBe('completed');
-    expect(task.actions?.some(action=>action.record?.name==='synthetic_plan_external_send' && action.record.envelope?.status!=='verified_success')).toBe(true);
+    expect(task).toMatchObject({ status: 'blocked', terminalReceipt: { reasonCode: 'confirmation_required' } });
+    expect(task.actions?.find(action => action.record?.name === 'send_email')?.record)
+      .toMatchObject({ adapterStarted: false, envelope: { status: 'waiting_confirmation' } });
+  } finally { await new Promise<void>(resolve => fixture.server.close(() => resolve())); }
+});
+
+it('rejects a model-selected tool outside the manual plan projection before adapter execution', async () => {
+  const requested = plan();
+  const externalHandler = vi.fn(async () => JSON.stringify({ sent: true, status: 'sent' }));
+  toolRegistry.register({ name: 'synthetic_plan_external_send', description: 'Synthetic provider boundary; no network', permission: 'public', securityLevel: 'confirm',
+    parameters: { type: 'object', properties: { recipient: { type: 'string' }, message: { type: 'string' } } },
+    capability: { operation: 'communicate', lane: 'messaging', risk: 'high', sideEffects: [{ type: 'external_communication', scope: 'recipient', reversible: false }] }, handler: externalHandler });
+  mocks.model.mockReset().mockResolvedValueOnce({ text: '', toolCalls: [{ id: 'unexposed-external', name: 'synthetic_plan_external_send', arguments: { recipient: 'outside@example.invalid', message: 'hello now' } }] })
+    .mockResolvedValue({ text: 'The email was sent.', toolCalls: [] });
+  const fixture = await httpFixture();
+  try {
+    const response = await fixture.run(requested.id); await runtimeBackgroundWork.waitForIdle();
+    expect(mocks.model).toHaveBeenCalled();
+    expect(mocks.model.mock.calls[0][1].map((tool: any) => tool.function.name)).not.toContain('synthetic_plan_external_send');
+    expect(externalHandler).not.toHaveBeenCalled(); expect(handler).not.toHaveBeenCalled();
+    const task = [...getTaskHistory(50, 0, userId), ...getTaskQueue(userId)].find(item => item.id === response.payload.task.id);
+    expect(task).toBeTruthy(); expect(task!.status).not.toBe('completed');
+    expect(task!.actions?.some(action => action.record?.name === 'synthetic_plan_external_send') || false).toBe(false);
   } finally { await new Promise<void>(resolve => fixture.server.close(() => resolve())); }
 });
 

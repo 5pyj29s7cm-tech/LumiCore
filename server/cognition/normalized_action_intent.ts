@@ -6,7 +6,7 @@ export const CLIENT_STATE_INSPECTION_REQUEST = /(?:(?:介绍|说明|讲讲|告�
 import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import { classifyExternalCliIntent, requestedCliProviders } from './external_cli_intent';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
-import { withoutLocationLiterals } from './location_literals';
+import { directoryArtifactPath, withoutLocationLiterals } from './location_literals';
 import { explicitFile } from '../conversation/targets/instruction_targets';
 import { affirmativeActionClauses, affirmativeActionInstructionClauses, actionInstructionClauses, negatedActionInstructions } from './action_instruction_clauses';
 export { affirmativeActionClauses } from './action_instruction_clauses';
@@ -226,10 +226,8 @@ function relativeArtifactPath(text: string, includeJson = true): string {
 }
 
 function explicitArtifactPath(text: string): string {
-  // A directory followed by an explicit creation verb is not one filename.
-  // i18n-allow: directory plus newly named artifact grammar.
-  const inDirectory = text.match(/(?:^|[，,。；;\n])\s*(?:请\s*)?(?:在|in)\s+((?:[A-Za-z]:[\\/]|\/)[^\r\n"'<>|?*]+?)\s+(?:创建|新建|生成|create|write)\s+([^\s\\/:"'<>|?*]+\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf))(?=$|[\s，,。；;])/iu);
-  if (inDirectory) return `${inDirectory[1].replace(/[\\/]+$/u, '')}${inDirectory[1].includes('\\') ? '\\' : '/'}${inDirectory[2]}`;
+  const inDirectory = directoryArtifactPath(text);
+  if (inDirectory) return inDirectory;
   // Most turns do not contain a supported artifact suffix. This linear gate
   // keeps them away from the more specific absolute-path matcher entirely.
   if (!ARTIFACT_FILE_EXTENSION_RE.test(text)) return '';

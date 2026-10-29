@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase } from '../db_layer';
 import { preservedSourceOutputScope, requestedSingleArtifact } from '../server/cognition/artifact_write_scope';
 import { requestedArtifactInstructions } from '../server/cognition/artifact_progress';
+import { directoryArtifactPath, withoutLocationLiterals } from '../server/cognition/location_literals';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { buildActionContract, hasCoreActionEvidence } from '../server/cognition/action_contract';
 import { executeToolCall } from '../server/tools/execution_engine';
@@ -21,6 +22,36 @@ describe('preserved input and separate output through the real executor', () => 
     expect(requestedSingleArtifact('请用 write_file 创建两个文件：C:/test/first.txt 内容为 first；C:/test/second.txt 内容为 second。')).toBeNull();
     expect(requestedSingleArtifact('在 C:\\Users\\test-user\\Documents 创建 Lumi现场验收_晨星716.txt，写入后重读核验')?.path)
       .toBe('C:\\Users\\test-user\\Documents\\Lumi现场验收_晨星716.txt');
+  });
+  it.each([
+    [String.raw`C:\Users\Test User\Documents`, String.raw`C:\Users\Test User\Documents\local-result.txt`],
+    ['D:/test files/output', 'D:/test files/output/local-result.txt'],
+    ['/tmp/local output', '/tmp/local output/local-result.txt'],
+  ])('keeps creation outside the directory operand %s', (directory, output) => {
+    expect(requestedSingleArtifact(`在 ${directory} 创建 local-result.txt，写入后重读核验。`)?.path).toBe(output);
+  });
+  it.each([
+    '不要在 D:/test 创建 local-result.txt。',
+    '原文写着“在 D:/test 创建 local-result.txt”。只解释原文。',
+    '读取“D:/test/create local-result.txt”的完整正文。',
+    '假设在 /tmp 创建 local-result.txt。',
+    '读取 D:/创建 文档/已完成.md。',
+    '在 relative/output 创建 local-result.txt。',
+  ])('does not authorize a directory creation from negation or literal content: %s', text => {
+    expect(requestedSingleArtifact(text)).toBeNull();
+  });
+  it.each(['；', '，', '。', ';', ',', '！', '!', '？', '?'])('does not mask instructions across a directory clause boundary %s', separator => {
+    const text = `在 D:/fixtures${separator}不要创建 x.md${separator}在 D:/other 创建 y.md。`;
+    expect(withoutLocationLiterals(text)).toContain('不要创建');
+    expect(requestedArtifactInstructions(text).map(item => item.path)).toEqual(['D:/other/y.md']);
+  });
+  it('keeps two directory destinations separate', () => {
+    expect(requestedArtifactInstructions('在 D:/first 创建 a.md；在 D:/second 创建 b.md。').map(item => item.path))
+      .toEqual(['D:/first/a.md', 'D:/second/b.md']);
+  });
+  it('does not treat a URL or relative directory as an explicit absolute destination', () => {
+    expect(directoryArtifactPath('在 https://example.test/tmp 创建 local-result.txt。')).toBe('');
+    expect(directoryArtifactPath('在 relative/output 创建 local-result.txt。')).toBe('');
   });
   it('does not replace a requested CSV result with an unrelated PDF in a read-calculate-save task', async () => {
     const root = fs.mkdtempSync(path.join(String(process.env.LUMI_DATA_DIR), 'csv-output-'));

@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-28T13:05:21.229Z",
-  "localDate": "2026-10-28",
+  "updatedAt": "2026-10-29T08:30:40.008875+00:00",
+  "localDate": "2026-10-29",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序网页页面与设备观察证据修复",
-    "status": "software-reviewed-live-page-and-full-answer-replay-pending",
-    "instruction": "用户已恢复网页页面核验与打印答复推断修复。软件底层改动已封存；准备正常聊天完整复测不同网页/设备材料，不打印、不发送消息、不改默认模型，其余保留项及律师归档不动。"
+    "title": "主程序分区能力审计与复测",
+    "status": "software-partial-native-input-blocked",
+    "instruction": "检查主程序各分区；本轮软件修复及隔离回归已封存。原生输入通道阻塞，未完成真人端到端。法律/设计师版不查，已验收及暂停项保持，默认模型不变；新后端源码尚未载入运行验证。"
   },
   "acceptedWholeItems": [
     3,
@@ -36,9 +36,11 @@
     "Existing file full body returned through normal Socket and persisted exactly once with terminal task/turn"
   ],
   "knownUnresolved": [
-    "Composite read/calculate/write reply still blocked by the retained analysis-finalization branch",
-    "Directory-plus-create expression remains one failing scoped check",
-    "Native input/capture and other held acceptance boundaries remain unverified"
+    "Composite read/calculate/write analysis remains unverified and blocked; verified file body preservation is only a partial repair.",
+    "Native UI input/capture blocked: 2 partial readonly partitions, 61 untested, 0 whole-partition passes.",
+    "Seven scoped tests still fail and also reproduce with HEAD production sources; see latestMainPartitionRegression evidence.",
+    "New backend changes are not loaded into the existing PID 20164; runtime and human-flow verification remain pending.",
+    "Other held acceptance boundaries and existing i18n/architecture findings remain unresolved."
   ],
   "validation": {
     "tsc": "passed in both repositories",
@@ -49,12 +51,12 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-desktop-archive-removal-20261027-1793111591896",
-    "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-desktop-archive-removal-20261027-1793111591896/evidence-seal.json",
-    "sha256": "c5047c2b52c904c9ddcd16f137d767899b71a0ad78f4529ce43a1d9cc3e66729",
+    "directory": "D:/Lumi-Audit-Temp/main-human-regression-20261029",
+    "manifest": "D:/Lumi-Audit-Temp/main-human-regression-20261029/evidence-seal.json",
+    "sha256": "dccc96912484ce79168dd5fe96aa5beb87462936658d05eacd47c41736784633",
+    "files": 397,
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
-    "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json",
-    "files": 14
+    "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
   "workflow": {
     "afterEachSubcase": [
@@ -127,16 +129,18 @@
   "currentCheckpointValidation": {
     "jsonParsed": true,
     "gitDiffCheck": "passed",
-    "sourceChanged": false,
+    "sourceChanged": true,
+    "sourceFiles": 14,
     "existingPassedOperationsReplayed": false,
-    "priorSealedFilesVerified": "135/135",
-    "currentSubsealFilesVerified": "56/56",
     "protectedAcceptedStateUnchanged": true,
     "wholeApplicationAccepted": false,
-    "deviceAndManifestTests": "110/110",
-    "relatedRoutingTests": "196/200; four existing failures retained",
+    "scopedTests": "502/509; seven failures also reproduce against HEAD production sources",
     "typecheck": "passed",
-    "checkpointOnly": true
+    "i18nNewFindings": 0,
+    "nativeWholePartitionPasses": 0,
+    "checkpointOnly": false,
+    "installerReleased": false,
+    "remotePushPerformed": false
   },
   "orderedPassSummary": {
     "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/acceptance-summary.json",
@@ -289,8 +293,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "software-reviewed-live-page-and-full-answer-replay-pending",
-    "priority": "用户已恢复网页页面核验与打印答复推断修复。软件底层改动已封存；准备正常聊天完整复测不同网页/设备材料，不打印、不发送消息、不改默认模型，其余保留项及律师归档不动。"
+    "status": "software-partial-native-input-blocked",
+    "priority": "检查主程序各分区；本轮软件修复及隔离回归已封存。原生输入通道阻塞，未完成真人端到端。法律/设计师版不查，已验收及暂停项保持，默认模型不变；新后端源码尚未载入运行验证。"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -1748,5 +1752,147 @@
       "No software causal-text injection or result truncation found in remaining failures; exact triggering factor not isolated.",
       "No fixed answer, output ban, additional verification layer, history deletion or default-model replacement introduced."
     ]
+  },
+  "latestMainPartitionRegression": {
+    "at": "2026-10-29T08:30:40.008875+00:00",
+    "status": "software-partial-native-input-blocked",
+    "version": "3.1.1",
+    "sourceBaseCommit": "b7b40e4c9ad309b2336579781e2cf96a8f32f65b",
+    "sourceFiles": 14,
+    "evidence": {
+      "directory": "D:/Lumi-Audit-Temp/main-human-regression-20261029",
+      "manifest": "D:/Lumi-Audit-Temp/main-human-regression-20261029/evidence-seal.json",
+      "sha256": "dccc96912484ce79168dd5fe96aa5beb87462936658d05eacd47c41736784633",
+      "files": 397,
+      "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
+      "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
+    },
+    "report": "D:/Lumi-Audit-Temp/main-human-regression-20261029/主程序分区审计与复测报告.txt",
+    "structuredReport": "D:/Lumi-Audit-Temp/main-human-regression-20261029/final-audit.json",
+    "coverage": {
+      "partitions": 63,
+      "sourceAnchors": 323,
+      "priorityFrontendFiles": 51,
+      "routeStrings": 57,
+      "directRouteMatches": 55,
+      "dynamicRouteMatches": 2,
+      "settingsNavigationBranches": 12,
+      "lawyerEditionInspected": false,
+      "designerEditionInspected": false
+    },
+    "nativeUI": {
+      "partialReadonlyPartitions": 2,
+      "notTestedPartitions": 61,
+      "wholePartitionPasses": 0,
+      "promptsTyped": 0,
+      "promptsSubmitted": 0,
+      "screenshotAvailable": false,
+      "evidence": "ui-cases/ui-evidence-seal-initial.json",
+      "blocker": "截图超时；点击报 coordinate input geometry is unavailable；两次用户恢复窗口/输入焦点后仍无法建立自动输入通道。属于工具通道阻塞，不能直接认定程序功能故障。"
+    },
+    "tests": {
+      "files": 37,
+      "total": 509,
+      "passed": 502,
+      "failed": 7,
+      "allSevenReproducedAgainstHeadProductionSources": true,
+      "typecheck": "passed",
+      "diffCheck": "passed",
+      "fullRepositorySuiteRun": false
+    },
+    "changes": [
+      {
+        "id": "DIRECTORY-CREATE",
+        "status": "fixed-in-source-tested-runtime-pending"
+      },
+      {
+        "id": "QUOTED-READ-CREATE",
+        "status": "fixed-scoped-grammar-tested-runtime-pending"
+      },
+      {
+        "id": "COMPOSITE-EVIDENCE",
+        "status": "partial-calculation-remains-blocked"
+      },
+      {
+        "id": "KB-OBSIDIAN-STATUS",
+        "status": "fixed-component-tests-pass-native-ui-pending"
+      },
+      {
+        "id": "PLAN-TEST-FIXTURE",
+        "status": "test-fixture-corrected-production-permission-unchanged"
+      }
+    ],
+    "runtimeObserved": {
+      "name": "lumi-core",
+      "version": "3.1.1",
+      "buildId": "b7b40e4c9ad309b2336579781e2cf96a8f32f65b",
+      "pid": 20164,
+      "sharedBackendProtocol": 1,
+      "startedAt": "2026-10-29T06:32:23.506Z",
+      "uptimeSeconds": 6630,
+      "nodeVersion": "v24.19.0",
+      "platform": "win32"
+    },
+    "runtimeLimit": "后端仍为 PID 20164 / baseCommit 旧进程；本轮后端修改没有加载到运行进程验证。前端 HMR 是否生效未做真人验证。",
+    "preservation": {
+      "defaultModelUnchanged": true,
+      "configuredModel": "relay / aliyun/deepseek-v4-pro",
+      "candidateConversationsSince0700UTC": 0,
+      "protectedRecordsUnchangedBeforeCheckpoint": true,
+      "acceptedWholeItems": [
+        3,
+        15,
+        16
+      ],
+      "heldItemsUnchanged": true,
+      "acceptedBusinessOperationsReplayed": false,
+      "paidGenerationsPerformed": false,
+      "externalMessagesSent": false,
+      "remotePushPerformed": false
+    },
+    "rejectedAction": {
+      "action": "恢复原生客户端进程环境并重新启动该客户端",
+      "reviewResult": "rejected: blocked by policy",
+      "detailedReasonProvided": false,
+      "executed": false,
+      "retriedViaAlternativeTool": false,
+      "scope": "这是客户端恢复动作的拒绝；不能说后端重启动作被拒绝。"
+    },
+    "priorCurrentItem": {
+      "id": null,
+      "title": "主程序网页页面与设备观察证据修复",
+      "status": "software-reviewed-live-page-and-full-answer-replay-pending",
+      "instruction": "用户已恢复网页页面核验与打印答复推断修复。软件底层改动已封存；准备正常聊天完整复测不同网页/设备材料，不打印、不发送消息、不改默认模型，其余保留项及律师归档不动。"
+    },
+    "priorEvidence": {
+      "directory": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-desktop-archive-removal-20261027-1793111591896",
+      "manifest": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/main-desktop-archive-removal-20261027-1793111591896/evidence-seal.json",
+      "sha256": "c5047c2b52c904c9ddcd16f137d767899b71a0ad78f4529ce43a1d9cc3e66729",
+      "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
+      "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json",
+      "files": 14
+    },
+    "priorCheckpointValidation": {
+      "jsonParsed": true,
+      "gitDiffCheck": "passed",
+      "sourceChanged": false,
+      "existingPassedOperationsReplayed": false,
+      "priorSealedFilesVerified": "135/135",
+      "currentSubsealFilesVerified": "56/56",
+      "protectedAcceptedStateUnchanged": true,
+      "wholeApplicationAccepted": false,
+      "deviceAndManifestTests": "110/110",
+      "relatedRoutingTests": "196/200; four existing failures retained",
+      "typecheck": "passed",
+      "checkpointOnly": true
+    },
+    "nextRequiredValidation": [
+      "恢复受支持的原生输入/截图通道后逐分区真人操作。",
+      "在正常启动的主程序中验证已提交修改；当前后端仍是旧进程。",
+      "继续处理7项既有失败与复合计算语义核验，不能将当前检查点当作全部验收。"
+    ],
+    "wholeApplicationAccepted": false,
+    "installerReleased": false,
+    "remotePushPerformed": false
   }
 }

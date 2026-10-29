@@ -271,3 +271,73 @@ it('keeps normal finalization blocked when source and output succeeded but the e
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+it.each(['甲仓：12袋。\n乙仓：21袋。', '原记录合计：12袋。\n补充记录：21袋。'])('preserves the complete compound answer without promoting file readback to verified calculation: %s', body => {
+  const root = fs.mkdtempSync(path.join(String(process.env.LUMI_DATA_DIR), 'compound-calculation-'));
+  const source = path.join(root, 'source.txt');
+  const output = path.join(root, 'output.txt');
+  const computed = body + '\n两仓合计：33袋。';
+  fs.writeFileSync(source, body); fs.writeFileSync(output, computed);
+  const turn = { requestId: 'compound-calculation-request', taskId: 'compound-calculation-task' };
+  const verifiedRead = { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'Current complete local read.' };
+  const records = [
+    { id: 'source-read', name: 'read_file', arguments: { path: source }, result: body, ...turn, terminalVerification: verifiedRead },
+    { id: 'output-write', name: 'write_file', arguments: { path: output, content: computed }, result: 'File written: ' + output, ...turn,
+      terminalVerification: { status: 'verified' as const, strategy: 'artifact' as const, reason: 'Current local output exists.' } },
+    { id: 'output-read', name: 'read_file', arguments: { path: output }, result: computed, ...turn, terminalVerification: verifiedRead },
+  ];
+  const text = `完整读取“${source}”并展示全部正文；创建“${output}”，保留来源的全部文字，末尾追加一行两仓合计袋数；写完后回读并检查新文件，将全部正文直接发到本聊天。不要修改原文件。`;
+  const input = { ...turn, taskText: text, responseText: computed, toolRecords: records, source: 'chat' };
+  expect(buildActionEvidenceContract(text).components, JSON.stringify(buildActionEvidenceContract(text))).toHaveLength(2);
+  const result = finalizeLumiResponse(input);
+  expect(result.blocked).toBe(true);
+  expect(result.reason).toContain('analysis_completion_unverified');
+  expect(result.text).toContain(computed);
+  expect(result.text).not.toContain('分析结论还没有生成');
+  expect(finalizeLumiResponse({ ...input, responseText: '' }).blocked).toBe(true);
+  for (const missing of ['source-read', 'output-write', 'output-read']) {
+    const incomplete = finalizeLumiResponse({ ...input, toolRecords: records.filter(record => record.id !== missing) });
+    expect(incomplete.blocked, missing + ': ' + JSON.stringify(incomplete)).toBe(true);
+  }
+  expect(finalizeLumiResponse({ ...input, toolRecords: [records[0]] }).blocked).toBe(true);
+  for (const uncomputed of [body, '报告\n' + body]) {
+    fs.writeFileSync(output, uncomputed);
+    const rawRecords = [records[0], { ...records[1], arguments: { path: output, content: uncomputed } }, { ...records[2], result: uncomputed }];
+    expect(finalizeLumiResponse({ ...input, responseText: uncomputed, toolRecords: rawRecords }).blocked, uncomputed).toBe(true);
+  }
+  for (const unrelated of ['生成结果：1个文件。', '示例文字：“合计99袋”，并非本文件计算结果。', '版本=2026。', '结果：3种颜色。']) {
+    const unrelatedBody = body + '\n' + unrelated;
+    fs.writeFileSync(output, unrelatedBody);
+    const unrelatedRecords = [records[0], { ...records[1], arguments: { path: output, content: unrelatedBody } }, { ...records[2], result: unrelatedBody }];
+    for (const responseText of ['', body, computed, unrelatedBody]) {
+      expect(finalizeLumiResponse({ ...input, responseText, toolRecords: unrelatedRecords }).blocked, unrelated + ': ' + responseText).toBe(true);
+    }
+  }
+  fs.writeFileSync(output, computed);
+  for (const invalidRead of [
+    { ...records[2], requestId: 'older-request' },
+    { ...records[2], arguments: { path: path.join(root, 'unrelated.txt') } },
+  ]) {
+    expect(finalizeLumiResponse({ ...input, toolRecords: [records[0], records[1], invalidRead] }).blocked).toBe(true);
+  }
+  const missingOutput = text + ` Then create the file "${path.join(root, 'another.txt')}" containing "SECOND" and read it back.`;
+  expect(buildActionEvidenceContract(missingOutput).components).toHaveLength(3);
+  expect(finalizeLumiResponse({ ...input, taskText: missingOutput }).blocked).toBe(true);
+  for (const analysis of ['另外总结源文件', '计算源文件总额']) {
+    const separateAnalysis = `完整读取“${source}”并展示全部正文；创建“${output}”；${analysis}。`;
+    expect(finalizeLumiResponse({ ...input, taskText: separateAnalysis, responseText: body, toolRecords: records.slice(0, 2) }).blocked, analysis).toBe(true);
+  }
+  const analysisText = `请读取并计算“${source}”中的两仓合计袋数。`;
+  for (const responseText of ['', body]) {
+    expect(finalizeLumiResponse({ ...turn, taskText: analysisText, responseText, toolRecords: [records[0]], source: 'chat' }).blocked).toBe(true);
+  }
+  expect(finalizeLumiResponse({ ...turn, taskText: `完整读取“${source}”。`, responseText: body, toolRecords: [records[0]], source: 'chat',
+    flow: { rootTaskText: analysisText } as any }).blocked).toBe(true);
+  for (const analysis of ['总结两份内容', '比较两份内容', '计算两份的合计']) {
+    const readAndAnalyze = `完整读取“${source}”并展示全部正文；完整读取“${output}”并展示全部正文；${analysis}。`;
+    const readRecords = [records[0], records[2]];
+    expect(buildActionEvidenceContract(readAndAnalyze).components).toHaveLength(2);
+    expect(finalizeLumiResponse({ ...turn, taskText: readAndAnalyze, responseText: body + '\n' + computed, toolRecords: readRecords, source: 'chat' }).blocked, analysis).toBe(true);
+  }
+  expect(fs.readFileSync(source, 'utf8')).toBe(body);
+});

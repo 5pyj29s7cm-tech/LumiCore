@@ -63,6 +63,8 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
   const [obsidianOpen, setObsidianOpen] = useState(false);
   const [obsidianPath, setObsidianPath] = useState('');
   const [obsidianVaults, setObsidianVaults] = useState<ObsidianVault[]>([]);
+  const [obsidianStatus, setObsidianStatus] = useState({ loading: true, loaded: false, error: '' });
+  const obsidianStatusRevision = React.useRef(0);
   const [obsidianSyncing, setObsidianSyncing] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const uploadRequest = React.useRef<AbortController | null>(null);
@@ -102,12 +104,20 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
   }, [domain, files]);
 
   const fetchObsidianStatus = useCallback(async () => {
+    const revision = ++obsidianStatusRevision.current;
+    setObsidianStatus(previous => ({ ...previous, loading: true, error: '' }));
     try {
       const res = await fetch(scopedFileUrl('/api/files/obsidian/status'), { credentials: 'include' });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) setObsidianVaults(Array.isArray(data.vaults) ? data.vaults : []);
-    } catch {
-      // Keep the knowledge base usable even if the optional Obsidian bridge is unavailable.
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data?.success === false || !Array.isArray(data?.vaults)) throw new Error('Invalid Obsidian status');
+      if (revision !== obsidianStatusRevision.current) return;
+      setObsidianVaults(data.vaults);
+      setObsidianStatus({ loading: false, loaded: true, error: '' });
+    } catch (error: any) {
+      if (revision === obsidianStatusRevision.current) {
+        setObsidianStatus(previous => ({ ...previous, loading: false, error: error?.message || 'network' }));
+      }
     }
   }, [scopedFileUrl]);
 
@@ -132,7 +142,10 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
   useEffect(() => () => { treeRevision.current++; }, []);
 
   useEffect(() => { if (isOpen) fetchAll(); }, [isOpen, fetchAll]);
-  useEffect(() => { if (isOpen) void fetchObsidianStatus(); }, [isOpen, fetchObsidianStatus]);
+  useEffect(() => {
+    if (isOpen) void fetchObsidianStatus();
+    return () => { obsidianStatusRevision.current++; };
+  }, [isOpen, fetchObsidianStatus]);
 
   // Socket
   useEffect(() => {
@@ -465,7 +478,7 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
   }, [isOpen, onClose, selectedId]);
 
   const totalFiles = files.length;
-  return { drop, memories, isOpen, treeNodes, branchCurves, search, selectedId, setSelectedId, loading, t, loadError, visibleFiles, totalFiles, absorbedFileCount, pendingFileCount, isZh, partialFileCount, needsAttentionFileCount, files, fileIsAbsorbed, ingestingFiles, handleIngest, setSearch, fileSearchResults, searchResults, fileInputRef, handleUpload, uploading, handleOpenKnowledgeFolder, setObsidianOpen, obsidianOpen, obsidianVaults, ingestableFiles, handleIngestAll, bulkIngesting, onClose, fetchObsidianStatus, obsidianSyncing, obsidianPath, setObsidianPath, handleObsidianConnect, syncObsidianVault, handleObsidianDisconnect, selectedNode, selectedFileData, selectedMemoryData, handleDelete, handleToggleProtect, handleChangeTier, handleEdit, referenceKnowledgeFileInChat };
+  return { drop, memories, isOpen, treeNodes, branchCurves, search, selectedId, setSelectedId, loading, t, loadError, visibleFiles, totalFiles, absorbedFileCount, pendingFileCount, isZh, partialFileCount, needsAttentionFileCount, files, fileIsAbsorbed, ingestingFiles, handleIngest, setSearch, fileSearchResults, searchResults, fileInputRef, handleUpload, uploading, handleOpenKnowledgeFolder, setObsidianOpen, obsidianOpen, obsidianVaults, obsidianStatus, ingestableFiles, handleIngestAll, bulkIngesting, onClose, fetchObsidianStatus, obsidianSyncing, obsidianPath, setObsidianPath, handleObsidianConnect, syncObsidianVault, handleObsidianDisconnect, selectedNode, selectedFileData, selectedMemoryData, handleDelete, handleToggleProtect, handleChangeTier, handleEdit, referenceKnowledgeFileInChat };
 }
 
 function KnowledgeBaseScope(props: Parameters<typeof useKnowledgeBaseScopeState>[0]) {
@@ -473,7 +486,7 @@ function KnowledgeBaseScope(props: Parameters<typeof useKnowledgeBaseScopeState>
 }
 
 function renderKnowledgeBaseScope(input: ReturnType<typeof useKnowledgeBaseScopeState>) {
-  const { drop, memories, isOpen, treeNodes, branchCurves, search, selectedId, setSelectedId, loading, t, loadError, visibleFiles, totalFiles, absorbedFileCount, pendingFileCount, isZh, partialFileCount, needsAttentionFileCount, files, fileIsAbsorbed, ingestingFiles, handleIngest, setSearch, fileSearchResults, searchResults, fileInputRef, handleUpload, uploading, handleOpenKnowledgeFolder, setObsidianOpen, obsidianOpen, obsidianVaults, ingestableFiles, handleIngestAll, bulkIngesting, onClose, fetchObsidianStatus, obsidianSyncing, obsidianPath, setObsidianPath, handleObsidianConnect, syncObsidianVault, handleObsidianDisconnect, selectedNode, selectedFileData, selectedMemoryData, handleDelete, handleToggleProtect, handleChangeTier, handleEdit, referenceKnowledgeFileInChat } = input;
+  const { drop, memories, isOpen, treeNodes, branchCurves, search, selectedId, setSelectedId, loading, t, loadError, visibleFiles, totalFiles, absorbedFileCount, pendingFileCount, isZh, partialFileCount, needsAttentionFileCount, files, fileIsAbsorbed, ingestingFiles, handleIngest, setSearch, fileSearchResults, searchResults, fileInputRef, handleUpload, uploading, handleOpenKnowledgeFolder, setObsidianOpen, obsidianOpen, obsidianVaults, obsidianStatus, ingestableFiles, handleIngestAll, bulkIngesting, onClose, fetchObsidianStatus, obsidianSyncing, obsidianPath, setObsidianPath, handleObsidianConnect, syncObsidianVault, handleObsidianDisconnect, selectedNode, selectedFileData, selectedMemoryData, handleDelete, handleToggleProtect, handleChangeTier, handleEdit, referenceKnowledgeFileInChat } = input;
 
   const totalMemories = memories.filter(m => m.nodeType !== 'branch').length;
   const totalBranches = memories.filter(m => m.nodeType === 'branch').length;
@@ -812,12 +825,12 @@ function renderKnowledgeBaseScope(input: ReturnType<typeof useKnowledgeBaseScope
                 <button
                   type="button"
                   onClick={() => void fetchObsidianStatus()}
-                  disabled={obsidianSyncing}
+                  disabled={obsidianSyncing || obsidianStatus.loading}
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/55 transition-colors hover:text-white disabled:pointer-events-none disabled:opacity-50"
                   title={uiMessage('knowledge-base.refresh-status.251b4754a3', (isZh) ? 'zh' : 'en')}
                   aria-label={uiMessage('knowledge-base.refresh-status.251b4754a3', (isZh) ? 'zh' : 'en')}
                 >
-                  <RefreshCw size={13} className={obsidianSyncing ? 'animate-spin' : ''} />
+                  <RefreshCw size={13} className={obsidianSyncing || obsidianStatus.loading ? 'animate-spin' : ''} />
                 </button>
               </div>
 
@@ -843,11 +856,14 @@ function renderKnowledgeBaseScope(input: ReturnType<typeof useKnowledgeBaseScope
               </div>
 
               <div className="mt-4 space-y-2">
-                {obsidianVaults.length === 0 ? (
+                {obsidianStatus.loading && <p role="status" className="text-xs text-white/55">{uiMessage('knowledge-base.loading.4874ccc6e7', isZh ? 'zh' : 'en')}</p>}
+                {obsidianStatus.error && <p role="alert" className="text-xs text-amber-200">{uiMessage('knowledge-base.obsidian-status-failed-to-load.9c23a1af82', isZh ? 'zh' : 'en')} ({obsidianStatus.error})</p>}
+                {obsidianStatus.loaded && (obsidianStatus.loading || obsidianStatus.error) && <p className="text-xs text-amber-200">{uiMessage('knowledge-base.previous-obsidian-status.7db26cd191', isZh ? 'zh' : 'en')}</p>}
+                {obsidianVaults.length === 0 ? (!obsidianStatus.loading && !obsidianStatus.error && obsidianStatus.loaded && (
                   <div className="rounded-xl border border-white/[0.06] bg-white/[0.035] px-3 py-4 text-center text-xs text-white/38">
                     {uiMessage('knowledge-base.no-obsidian-vault-connected-yet.125b265b01', (isZh) ? 'zh' : 'en')}
                   </div>
-                ) : (
+                )) : (
                   obsidianVaults.map(vault => {
                     const lastSync = vault.lastSyncAt ? new Date(vault.lastSyncAt).toLocaleString() : (uiMessage('knowledge-base.not-synced.74d82b0bf1', (isZh) ? 'zh' : 'en'));
                     const noteCount = Number(vault.noteCount || vault.lastSyncResult?.noteCount || 0);

@@ -604,6 +604,12 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
         blocked: true, reason: 'Missing verified current-turn external CLI status.' };
   }
   if (composite.components?.length) {
+    const outputReadbacks = requestedArtifactInstructions(actionText).flatMap(output => {
+      const delivery = resolveArtifactDelivery((input.toolRecords || []).filter(record =>
+        sameArtifactPath(artifactPathFromRecord(record), output.path)), record => isVerifiedCurrentTurnRecord(input, record));
+      return delivery?.readback && isSuccessfulExactDocumentRead(delivery.readback)
+        ? [actualDocumentReadContent(delivery.readback)] : [];
+    });
     const outcomes = composite.components.map(component => {
       const outputs = component.contract.kind === 'artifact_work' ? requestedArtifactInstructions(component.text) : [];
       const records = outputs.length === 1 ? (input.toolRecords || []).filter(record => !isArtifactProducerRecord(record)
@@ -615,12 +621,21 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       const sourceRead = !outputs.length && requestsExactReadOnlyArtifactInspection(component.text)
         ? records.find(record => isVerifiedCurrentTurnRecord(scoped, record) && isSuccessfulExactDocumentRead(record)
           && documentReadMatchesRequestedTarget(record, component.text, input.flow?.acceptedTaskTarget, input.flow?.currentAttachmentPaths)) : undefined;
+      const sourceText = sourceRead ? actualDocumentReadContent(sourceRead) : '';
       const componentInput = { ...scoped, taskText: component.text, flow: { rootTaskText: actionText } as LumiTurnFlow, completionGuard: undefined,
-        responseText: outputs.length === 1 ? '' : sourceRead && (!input.responseText || input.responseText.includes(actualDocumentReadContent(sourceRead)))
-          ? actualDocumentReadContent(sourceRead) : input.responseText };
+        responseText: outputs.length === 1 ? '' : sourceRead && (!input.responseText || input.responseText.includes(sourceText))
+          ? sourceText : input.responseText };
       const result = (outputs.length === 1 ? formatGroundedArtifactResult(componentInput) : null)
         || finalizeLumiResponse(componentInput);
-      if (sourceRead && componentInput.responseText === actualDocumentReadContent(sourceRead)) result.text = artifactPathFromRecord(sourceRead).split(/[\\/]/u).pop() + '\n' + result.text;
+      const matchingOutput = sourceText && outputReadbacks.find(text => text.includes(sourceText));
+      if (matchingOutput && result.blocked && result.reason === 'Verified document read completed, but no usable analysis was generated.') {
+        // A verified write/readback proves file contents, not the requested analysis.
+        // Preserve the existing answer as evidence without changing the blocked verdict.
+        const originalAnswer = input.responseText?.trim() === matchingOutput.trim() ? input.responseText : '';
+        result.text = [isChineseText(actionText) ? CN_EXECUTION_EVIDENCE_MESSAGES.verifiedArtifactReadbackWithoutAnalysisVerification
+          : 'The file was written and read back, but completion of the requested analysis or calculation is not yet verified.', originalAnswer].filter(Boolean).join('\n\n');
+        result.reason = 'analysis_completion_unverified';
+      } else if (sourceRead && componentInput.responseText === sourceText) result.text = artifactPathFromRecord(sourceRead).split(/[\\/]/u).pop() + '\n' + result.text;
       const complete = verified && !result.blocked && Boolean(result.text);
       return { complete, reason: result.blocked ? result.reason : undefined, text: complete || result.blocked && result.text ? result.text
         : isChineseText(actionText) ? CN_EXECUTION_EVIDENCE_MESSAGES.incompleteComponent(component.text) : `Not completed: ${component.text}` };

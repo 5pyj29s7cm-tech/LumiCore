@@ -53,6 +53,7 @@ export const CN_EXECUTION_EVIDENCE_MESSAGES = {
   mediaPauseUnconfirmed: '还没有确认播放器已暂停。',
   verifiedDocumentObservation: '文件内容已成功读取。',
   verifiedDocumentReadWithoutAnalysis: '文件内容已经成功读取，但分析结论还没有生成；当前只能确认读取完成，不能把整项分析标记为完成。',
+  verifiedArtifactReadbackWithoutAnalysisVerification: '文件已写入并回读，但尚未核验整项分析或计算要求是否完成。',
   mismatchedDocumentReadTarget: '本轮读取回执对应的不是你指定的文件，因此不能据此完成这次分析。',
   recoveryExecutorDidNotStart: '\u6267\u884c\u5668\u4ecd\u672a\u9009\u62e9\u6216\u542f\u52a8\u53ef\u5b8c\u6210\u8be5\u4efb\u52a1\u7684\u5de5\u5177',
   recoveryNoVerifiableResult: '这一步没有返回明确结果',
