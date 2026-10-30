@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-30T07:16:32.221844+00:00",
+  "updatedAt": "2026-10-30T07:20:40.635690+00:00",
   "localDate": "2026-10-30",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
     "title": "主程序未通过项修复与63分区完善性检查",
-    "status": "failures-resolved-63-reviewed-runtime-loading-pending",
-    "instruction": "上一轮7个未通过断言已逐项处理，63分区完成当前功能完善性检查；隔离回归通过，明确缺口与外部未验范围保留。新后端加载待验证，真人测试仍暂停。"
+    "status": "failures-resolved-63-reviewed-loaded-native-ui-paused",
+    "instruction": "上一轮7个未通过断言已处理并加载修复源码；63分区完成完善性检查。测试通过不等于所有功能完善，缺口和外部未验范围逐项记录；真人测试继续暂停。"
   },
   "acceptedWholeItems": [
     3,
@@ -47,7 +47,13 @@
     "完成声明采用限定语法和回执规则，不保证覆盖所有自然语言措辞；无明确应用目标时的当前前台身份、所有来源适配器、事实/权威核验仍不能从本轮测试推定完成。",
     "全局i18n有97项既有发现，架构检查也有既有失败；本轮单列增量对照，不宣称全局检查通过。",
     "5个原暂停/隔离调度任务继续保持，健康状态degraded不能写成全绿。默认模型不变；有限表计数比对不等于整个数据库或后台完全无活动。",
-    "设计技能身份漂移和code-sandbox缺E2B凭据属于此前保留项，未开展排除范围业务。无安装包发布，无远程推送。"
+    "设计技能身份漂移和code-sandbox缺E2B凭据属于此前保留项，未开展排除范围业务。无安装包发布，无远程推送。",
+    "后端按已验证源码重新加载，原生客户端PID43928保持；73份前端模块HTTP读取只证明转换和提供源码，不能证明窗口已刷新或真人操作通过。",
+    "只执行version/health/docs和前端源码读取，不发送聊天、生成、支付或外部业务。后台自身活动仍须按快照如实记录。",
+    "本轮指定四表净变化：{\"conversations\": 0, \"interactions\": 0, \"generated_archive\": 0, \"model_routing_receipts\": 13}；默认模型偏好SHA一致，SQLite quick_check=ok。这不代表全库零写入或后台零模型调用。",
+    "健康状态为degraded，暂停任务5、排队任务0；未主动恢复held任务。",
+    "首次后端刷新因保存/排队前置检查未满足而停止在检查阶段，未停止旧进程；随后重新检查通过才刷新。新进程45秒首次等待仍pending，保留进程后确认正常就绪。",
+    "时间窗内保留的模型路由回执按source分组为{\"scheduler_predictive_assistant\": 12, \"scheduler_proactive_lumi_scan\": 2, \"<empty>\": 1}，状态为{\"succeeded\": 15}，按重启前后分组为{\"before-restart\": 15}；这些是后台回执记录，不能声称本轮应用零模型活动。"
   ],
   "validation": {
     "tsc": "passed in both repositories",
@@ -59,9 +65,9 @@
   },
   "evidence": {
     "directory": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030",
-    "manifest": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/software-seal.json",
-    "sha256": "146976bf47e30daa8a568799305ce57b74d0486c88322d071f81313838cb65c1",
-    "files": 690,
+    "manifest": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/evidence-seal.json",
+    "sha256": "b0b0e0319c238af5e380758d3fe4374699ee44bcc3a299c5047bde54f5caa93c",
+    "files": 783,
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -154,12 +160,26 @@
       "meaning": "current line/text/SHA references, not dynamic line coverage"
     },
     "nativeUITesting": "paused-by-user",
-    "runtimeLoading": "pending",
+    "runtimeLoading": "loaded",
     "acceptedAndHeldStateUnchanged": true,
     "defaultModelUnchanged": true,
     "wholeApplicationAccepted": false,
     "installerReleased": false,
-    "remotePushPerformed": false
+    "remotePushPerformed": false,
+    "runtimeLoadedSourceCommit": "d72f8990dc864b255ecf5fa83ebb19e924f3ef65",
+    "backendPid": 38224,
+    "frontendModules": {
+      "moduleCount": 73,
+      "loaded": 73,
+      "failed": 0
+    },
+    "databaseCountsDelta": {
+      "conversations": 0,
+      "interactions": 0,
+      "generated_archive": 0,
+      "model_routing_receipts": 13
+    },
+    "nativeClientRestarted": false
   },
   "orderedPassSummary": {
     "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/acceptance-summary.json",
@@ -312,8 +332,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "failures-resolved-63-reviewed-runtime-loading-pending",
-    "priority": "上一轮7个未通过断言已逐项处理，63分区完成当前功能完善性检查；隔离回归通过，明确缺口与外部未验范围保留。新后端加载待验证，真人测试仍暂停。"
+    "status": "failures-resolved-63-reviewed-loaded-native-ui-paused",
+    "priority": "上一轮7个未通过断言已处理并加载修复源码；63分区完成完善性检查。测试通过不等于所有功能完善，缺口和外部未验范围逐项记录；真人测试继续暂停。"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -3386,7 +3406,13 @@
       "完成声明采用限定语法和回执规则，不保证覆盖所有自然语言措辞；无明确应用目标时的当前前台身份、所有来源适配器、事实/权威核验仍不能从本轮测试推定完成。",
       "全局i18n有97项既有发现，架构检查也有既有失败；本轮单列增量对照，不宣称全局检查通过。",
       "5个原暂停/隔离调度任务继续保持，健康状态degraded不能写成全绿。默认模型不变；有限表计数比对不等于整个数据库或后台完全无活动。",
-      "设计技能身份漂移和code-sandbox缺E2B凭据属于此前保留项，未开展排除范围业务。无安装包发布，无远程推送。"
+      "设计技能身份漂移和code-sandbox缺E2B凭据属于此前保留项，未开展排除范围业务。无安装包发布，无远程推送。",
+      "后端按已验证源码重新加载，原生客户端PID43928保持；73份前端模块HTTP读取只证明转换和提供源码，不能证明窗口已刷新或真人操作通过。",
+      "只执行version/health/docs和前端源码读取，不发送聊天、生成、支付或外部业务。后台自身活动仍须按快照如实记录。",
+      "本轮指定四表净变化：{\"conversations\": 0, \"interactions\": 0, \"generated_archive\": 0, \"model_routing_receipts\": 13}；默认模型偏好SHA一致，SQLite quick_check=ok。这不代表全库零写入或后台零模型调用。",
+      "健康状态为degraded，暂停任务5、排队任务0；未主动恢复held任务。",
+      "首次后端刷新因保存/排队前置检查未满足而停止在检查阶段，未停止旧进程；随后重新检查通过才刷新。新进程45秒首次等待仍pending，保留进程后确认正常就绪。",
+      "时间窗内保留的模型路由回执按source分组为{\"scheduler_predictive_assistant\": 12, \"scheduler_proactive_lumi_scan\": 2, \"<empty>\": 1}，状态为{\"succeeded\": 15}，按重启前后分组为{\"before-restart\": 15}；这些是后台回执记录，不能声称本轮应用零模型活动。"
     ],
     "typecheck": "passed",
     "desktopUIBuild": "passed",
@@ -3394,7 +3420,7 @@
     "installerReleased": false,
     "remotePushPerformed": false,
     "matrix": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/63-partition-completeness.json",
-    "readableReport": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/修复结果与63分区完善性检查.txt",
+    "readableReport": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/最终修复与分区检查报告.txt",
     "groupEvidence": [
       {
         "group": "settings",
@@ -3449,16 +3475,104 @@
       "architectureSameDiagnostics": true,
       "method": "Read-only fs projection of changed tracked production files to fixed baseline57284f6a; added files excluded from baseline using git ls-tree, included in current. Repo and lint baseline files unchanged."
     },
-    "status": "failures-resolved-63-reviewed-runtime-loading-pending",
+    "finalizedAtUTC": "2026-10-30T07:20:40.635690+00:00",
+    "sourceCommit": "d72f8990dc864b255ecf5fa83ebb19e924f3ef65",
+    "runtime": {
+      "atUTC": "2026-10-30T07:19:01.493567+00:00",
+      "version": "3.1.1",
+      "buildId": "d72f8990dc864b255ecf5fa83ebb19e924f3ef65",
+      "backendPid": 38224,
+      "nativePid": 43928,
+      "nativeRestarted": false,
+      "baseHTTPReads": 3,
+      "modules": {
+        "moduleCount": 73,
+        "loaded": 73,
+        "failed": 0
+      },
+      "health": {
+        "status": "degraded",
+        "fault": {
+          "degraded": false,
+          "acceptingWork": true
+        },
+        "scheduler": {
+          "degraded": true,
+          "pausedTasks": 5,
+          "queuedTasks": 0,
+          "failedTasks": 0
+        },
+        "timestamp": "2026-10-30T07:18:55.108Z",
+        "runtime": {
+          "name": "lumi-core",
+          "version": "3.1.1",
+          "buildId": "d72f8990dc864b255ecf5fa83ebb19e924f3ef65"
+        },
+        "database": {
+          "dirty": false,
+          "persistence": {
+            "degraded": false
+          }
+        }
+      },
+      "database": {
+        "countsDelta": {
+          "conversations": 0,
+          "interactions": 0,
+          "generated_archive": 0,
+          "model_routing_receipts": 13
+        },
+        "defaultPreferencesUnchanged": true,
+        "quickCheck": "ok",
+        "beforeAtUTC": "2026-10-30T06:19:22.517788+00:00",
+        "afterAtUTC": "2026-10-30T07:19:00.966204+00:00"
+      },
+      "limits": [
+        "后端按已验证源码重新加载，原生客户端PID43928保持；73份前端模块HTTP读取只证明转换和提供源码，不能证明窗口已刷新或真人操作通过。",
+        "只执行version/health/docs和前端源码读取，不发送聊天、生成、支付或外部业务。后台自身活动仍须按快照如实记录。",
+        "本轮指定四表净变化：{\"conversations\": 0, \"interactions\": 0, \"generated_archive\": 0, \"model_routing_receipts\": 13}；默认模型偏好SHA一致，SQLite quick_check=ok。这不代表全库零写入或后台零模型调用。",
+        "健康状态为degraded，暂停任务5、排队任务0；未主动恢复held任务。",
+        "首次后端刷新因保存/排队前置检查未满足而停止在检查阶段，未停止旧进程；随后重新检查通过才刷新。新进程45秒首次等待仍pending，保留进程后确认正常就绪。",
+        "时间窗内保留的模型路由回执按source分组为{\"scheduler_predictive_assistant\": 12, \"scheduler_proactive_lumi_scan\": 2, \"<empty>\": 1}，状态为{\"succeeded\": 15}，按重启前后分组为{\"before-restart\": 15}；这些是后台回执记录，不能声称本轮应用零模型活动。"
+      ],
+      "nativeUITested": false,
+      "wholeApplicationAccepted": false,
+      "routingWindowReview": {
+        "path": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/runtime/routing-window-review.json",
+        "sources": {
+          "scheduler_predictive_assistant": 12,
+          "scheduler_proactive_lumi_scan": 2,
+          "<empty>": 1
+        },
+        "statuses": {
+          "succeeded": 15
+        },
+        "phases": {
+          "before-restart": 15
+        },
+        "retainedRowsInWindow": 15
+      },
+      "startup": {
+        "firstAttempt": "preflight-held-before-stop",
+        "secondAttempt": "started-after-fresh-clean-preflight",
+        "initialReadiness": "pending-after-45-seconds",
+        "laterVerifiedReady": true
+      }
+    },
+    "softwareEvidence": {
+      "path": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/software-seal.json",
+      "sha256": "146976bf47e30daa8a568799305ce57b74d0486c88322d071f81313838cb65c1"
+    },
+    "status": "failures-resolved-63-reviewed-loaded-native-ui-paused",
     "evidence": {
       "directory": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030",
-      "manifest": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/software-seal.json",
-      "sha256": "146976bf47e30daa8a568799305ce57b74d0486c88322d071f81313838cb65c1",
-      "files": 690,
+      "manifest": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/evidence-seal.json",
+      "sha256": "b0b0e0319c238af5e380758d3fe4374699ee44bcc3a299c5047bde54f5caa93c",
+      "files": 783,
       "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
       "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
     },
-    "report": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/report.json",
+    "report": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/final-report.json",
     "independentReview": {
       "path": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/independent-review.json",
       "sha256": "1c9efccdb9c2e0e7bd006c310bfef2773a716f6acc671baed20f4dd2bbf199fc"
