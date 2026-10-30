@@ -2,6 +2,27 @@ import type { ToolExecutionRecord } from "../../tools/types";
 import { parseRecordJson } from "../action_contract_support";
 import { hasMeaningfulArguments } from "../action_desktop_evidence";
 import type { LumiActionContract } from './contracts';
+import { parseNestedJson, toolRecordSucceeded } from '../../tools/receipt_payload';
+
+/** Receipt presence for a public-source observation, not source truth or authority. */
+export function hasPublicSourceObservationEvidence(records: ToolExecutionRecord[], claimText = ''): boolean {
+  const urls = claimText.match(/https?:\/\/[^\s<>"'`，。；！？]+/giu) || [];
+  const observed = records.filter(record => {
+    if (!/^(?:web_search|url_fetch)$/iu.test(record.name) || !toolRecordSucceeded(record)
+      || record.terminalVerification?.status !== 'verified') return false;
+    const payload = parseRecordJson(record);
+    if (payload?.resultCount === 0 || Array.isArray(payload?.results) && payload.results.length === 0) return false;
+    const raw = parseNestedJson(record.result);
+    const body = typeof raw === 'string' ? raw.trim()
+      : raw && typeof raw === 'object' && !Array.isArray(raw)
+        ? String((raw as Record<string, unknown>).text || (raw as Record<string, unknown>).content || '').trim() : '';
+    if (!body || /^\(No text content extracted\)|requires authentication|appears to require login|No source was retrieved/iu.test(body)) return false;
+    return record.name === 'url_fetch' ? /^https?:\/\//iu.test(String(record.arguments?.url || ''))
+      : Boolean(String(record.arguments?.query || '').trim()) && /https?:\/\//iu.test(body);
+  });
+  return urls.length ? urls.every(url => observed.some(record => String(record.arguments?.url || '') === url
+    || String(record.result || '').includes(url))) : observed.length > 0;
+}
 
 export function hasVerifiedManifestCapabilityEvidence(
   contract: LumiActionContract,

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initDatabase, readDB, flushDBOrThrow } from '../db_layer';
-import { getOrCreateActiveConversation, addMessageIdempotent } from '../server/conversation/manager';
+import { getOrCreateActiveConversation, addMessageIdempotent, startConversationActionExecutionHeartbeat } from '../server/conversation/manager';
 import { preparePlannedConversationExecution } from '../server/conversation/planned_execution';
 import { persistConversationExecutionPlan } from '../server/conversation/manager/execution_preparation';
 import { createConversationReceiptObserver } from '../server/conversation/execution_receipt_archive';
@@ -33,26 +33,50 @@ async function accepted(task: string, tools: ToolRegistry) {
   await flushDBOrThrow();
   const execution = buildLumiExecutionPipeline({ requestId, registry: tools,
     dispatch: { userId, text: task, channel: 'chat', source: 'command-center-chat', domain: 'personal', orgId: '' } });
-  const prepared = preparePlannedConversationExecution({ execution, conversationId, userId, requestId, userMessageId, userText: task });
-  if ('bindingFailure' in prepared || !prepared.state?.taskId) throw new Error('Exact fixture turn did not acquire its accepted task');
-  const taskId = prepared.state.taskId;
-  const observer = createConversationReceiptObserver({ userId, conversationId, taskId, requestId, turnRowId: prepared.turnRowId, domain: 'personal', orgId: '' }, () => true);
-  const context: ToolContext = { userId, conversationId, taskId, requestId, turnId: requestId, turnRowId: prepared.turnRowId,
+  // Bind the accepted transcript first; the actual engine-selected read below
+  // upgrades this turn to an audit task under its existing execution lease.
+  const prepared = preparePlannedConversationExecution({ execution, conversationId, userId, requestId, userMessageId, userText: task, bindConversationTurn: true });
+  if ('bindingFailure' in prepared) throw new Error('Exact fixture turn binding failed: ' + prepared.bindingFailure);
+  expect(prepared.state).toBeNull();
+  expect(execution.taskId).toBeUndefined();
+  expect(prepared.prepareSelectedToolCall).toBeTypeOf('function');
+  await flushDBOrThrow();
+  const controller = new AbortController();
+  let observer: ReturnType<typeof createConversationReceiptObserver> | undefined;
+  const context: ToolContext = { userId, conversationId, requestId, turnId: requestId, turnRowId: prepared.turnRowId,
     authRole: 'admin', authenticated: true, localExecution: true, userConfirmed: true, domain: 'personal', orgId: '',
-    source: 'command-center-chat', actionIntent: task, routedTaskText: task, toolPolicy: execution.authorizationPolicy };
+    source: 'command-center-chat', actionIntent: task, routedTaskText: task, toolPolicy: execution.authorizationPolicy,
+    modelToolProjection: execution.modelToolProjection, executionSignal: controller.signal,
+    prepareSelectedToolCall: async () => {
+      const binding = await prepared.prepareSelectedToolCall!(controller.signal);
+      if (!prepared.state?.taskId) throw new Error('Exact fixture turn did not acquire its accepted task');
+      expect(binding.taskId).toBe(prepared.state.taskId);
+      expect(binding.turnRowId).toBe(prepared.turnRowId);
+      expect(prepared.state.activeRequestId).toBe(requestId);
+      expect(prepared.state.latestInstructionRef).toBe(userMessageId);
+      expect(prepared.state.goal).toBe(task);
+      observer = createConversationReceiptObserver({ userId, conversationId, taskId: binding.taskId, requestId, turnRowId: binding.turnRowId, domain: 'personal', orgId: '' }, () => true);
+      return binding;
+    } };
   const call = async (name: string, args: Record<string, unknown>) => {
-    const record = await executeToolCall({ registry: tools, id: requestId + ':' + name, name, arguments: args, context });
-    expect(isCanonicalToolExecutionRecord(record)).toBe(true);
-    const capability = tools.getCapabilityManifestEntry(name)!;
-    const plan = buildCapabilityExecutionPlan({ record, capability, taskId });
-    expect(persistConversationExecutionPlan({ conversationId, userId, plan })).toBe(true);
-    await observer.onToolRecord(record);
-    await flushDBOrThrow();
-    expect(readDB().conversationActionReceipts.some((receipt: any) => receipt.taskId === taskId && receipt.requestId === requestId && receipt.toolName === name)).toBe(true);
-    expect(JSON.parse(readDB().conversationActionTasks.find((row: any) => row.id === taskId)!.context).executionPlan.planId).toBe(plan.planId);
-    return record;
+    const heartbeat = startConversationActionExecutionHeartbeat({ conversationId, userId, requestId, abortController: controller });
+    try {
+      const record = await executeToolCall({ registry: tools, id: requestId + ':' + name, name, arguments: args, executionOrigin: 'model_selected', context });
+      expect(isCanonicalToolExecutionRecord(record)).toBe(true);
+      expect(observer).toBeDefined();
+      const taskId = prepared.state!.taskId;
+      expect(record.taskId).toBe(taskId);
+      const capability = tools.getCapabilityManifestEntry(name)!;
+      const plan = buildCapabilityExecutionPlan({ record, capability, taskId });
+      expect(persistConversationExecutionPlan({ conversationId, userId, plan })).toBe(true);
+      await observer!.onToolRecord(record);
+      await flushDBOrThrow();
+      expect(readDB().conversationActionReceipts.some((receipt: any) => receipt.taskId === taskId && receipt.requestId === requestId && receipt.toolName === name)).toBe(true);
+      expect(JSON.parse(readDB().conversationActionTasks.find((row: any) => row.id === taskId)!.context).executionPlan.planId).toBe(plan.planId);
+      return record;
+    } finally { heartbeat.stop(); }
   };
-  return { userId, conversationId, taskId, requestId, context, call, execution, userMessageId };
+  return { userId, conversationId, get taskId() { return prepared.state!.taskId; }, requestId, context, call, execution, userMessageId };
 }
 
 // A source read is preparation for a requested report, not the report itself.
@@ -75,7 +99,7 @@ describe('partial public text cannot be upgraded by a raw-source formatter', () 
     expect(final.blocked).toBe(true);
     expect(final.text.trim()).not.toBe('');
     expect(final.text).not.toContain(marker);
-    expect(final.text).toMatch(/未|缺|待|尚|incomplete|pending/i);
+    expect(final.text, JSON.stringify({ text: final.text, reason: final.reason })).toMatch(/未|缺|待|尚|还没有生成|incomplete|pending/i);
     expect(readDB().conversationActionTasks.find((row: any) => row.id === f.taskId)?.goal).toBe(task);
   });
 });

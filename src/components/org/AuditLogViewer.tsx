@@ -16,6 +16,7 @@ import { useAsyncOperation } from '../../hooks/useAsyncOperation';
 import { apiFetch, apiJson } from '../../services/apiClient';
 import { useT } from '../../lib/useT';
 import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
+import { organizationRecoveryCopy } from '../../i18n/locales/organizationRecovery';
 import type { AuditEntry as StoredAuditEntry } from '../../../server/org/db';
 
 type AuditEntry = Pick<StoredAuditEntry, 'id' | 'userId' | 'action' | 'resourceType' | 'resourceId' | 'details' | 'timestamp'>;
@@ -30,19 +31,27 @@ export function AuditLogViewer() {
 }
 function AuditLog() {
   const t = useT(), isZh = t.langCode !== 'en';
+  const recovery = organizationRecoveryCopy(t.langCode);
   const [records, setRecords] = useState<AuditEntry[] | null>(null);
   const [filters, setFilters] = useState({ userId: '', action: '', resourceType: '' });
+  const [appliedFilters, setAppliedFilters] = useState(filters);
+  const [offset, setOffset] = useState(0), [hasNext, setHasNext] = useState(false);
+  const [requestedPage, setRequestedPage] = useState({ filters, offset: 0 });
+  const [retryKind, setRetryKind] = useState<'load' | 'export'>('load');
   const [showFilters, setShowFilters] = useState(false), [message, setMessage] = useState('');
   const { busy, error, run, cancel } = useAsyncOperation();
   const entries = records || [], loading = busy === 'load' || (records === null && !error);
   const feedback = error ? { type: 'error' as const, text: error } : message ? { type: 'success' as const, text: message } : null;
-  const loadEntries = useCallback((value = { userId: '', action: '', resourceType: '' }) => {
+  const loadEntries = useCallback((value = { userId: '', action: '', resourceType: '' }, nextOffset = 0) => {
     cancel(); setMessage('');
+    setRetryKind('load');
+    setRequestedPage({ filters: value, offset: nextOffset });
     void run('load', async signal => {
       const params = paramsFor(value); params.set('limit', '100');
+      if (nextOffset > 0) params.set('offset', String(nextOffset));
       const data = await apiJson('/api/org/audit?' + params, { signal });
       if (!Array.isArray(data) || !data.every(item => item && ['id', 'userId', 'action', 'resourceType', 'timestamp'].every(field => typeof item[field] === 'string'))) throw new Error('Invalid audit log response');
-      return () => setRecords(data);
+      return () => { setRecords(data); setAppliedFilters(value); setOffset(nextOffset); setHasNext(data.length === 100); };
     });
   }, [run, cancel]);
   useEffect(() => { loadEntries(); }, [loadEntries]);
@@ -51,9 +60,9 @@ function AuditLog() {
     const empty = { userId: '', action: '', resourceType: '' }; setFilters(empty); loadEntries(empty);
   };
   const handleExport = () => {
-    setMessage('');
+    setMessage(''); setRetryKind('export');
     return run('export', async signal => {
-      const response = await apiFetch('/api/org/audit/export?' + paramsFor(filters), { signal });
+      const response = await apiFetch('/api/org/audit/export?' + paramsFor(appliedFilters), { signal });
       if (!response.ok) throw new Error('Audit export failed: HTTP ' + response.status);
       const blob = await response.blob();
       return () => {
@@ -119,6 +128,7 @@ function AuditLog() {
         </section>
 
         {feedback && <FeedbackBanner feedback={feedback} />}
+        {error && <button type="button" disabled={Boolean(busy)} onClick={() => retryKind === 'export' ? void handleExport() : loadEntries(requestedPage.filters, requestedPage.offset)} className="self-start rounded-lg border border-white/10 px-3 py-2 text-sm">{recovery.retry}</button>}
 
         {showFilters && (
           <motion.section
@@ -163,11 +173,11 @@ function AuditLog() {
         )}
 
         <section className="min-h-[360px] overflow-hidden rounded-lg border border-white/10 bg-white/[0.04]">
-          {loading ? (
+          {loading && records === null ? (
             <div className="flex h-72 items-center justify-center text-white/55">
               <Loader2 size={24} className="animate-spin" />
             </div>
-          ) : entries.length === 0 ? (
+          ) : entries.length === 0 && !error ? (
             <div className="flex h-72 flex-col items-center justify-center gap-2 text-center text-sm text-white/45">
               <ScrollText size={32} className="text-white/20" />
               <span>{uiMessage('audit-log-viewer.no-audit-entries-found.be752eeb23')}</span>
@@ -201,6 +211,13 @@ function AuditLog() {
             </div>
           )}
         </section>
+        {(offset > 0 || hasNext) && (
+          <div className="flex justify-end gap-3">
+            <span className="self-center text-sm text-white/50">{recovery.page} {offset / 100 + 1}</span>
+            <button type="button" disabled={Boolean(busy) || offset === 0} onClick={() => loadEntries(appliedFilters, Math.max(0, offset - 100))} className="rounded-lg border border-white/10 px-3 py-2 text-sm disabled:opacity-40">{recovery.previous}</button>
+            <button type="button" disabled={Boolean(busy) || !hasNext} onClick={() => loadEntries(appliedFilters, offset + 100)} className="rounded-lg border border-white/10 px-3 py-2 text-sm disabled:opacity-40">{recovery.next}</button>
+          </div>
+        )}
       </div>
     </div>
   );

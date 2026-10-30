@@ -1,14 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useId, useState } from 'react';
 import { motion } from 'motion/react';
-import { User, Shield, Cpu, Rocket, Activity, Wallet, Zap, Key, CheckCircle, AlertCircle } from 'lucide-react';
+import { User, Activity, Wallet, Zap, Key, CheckCircle, AlertCircle } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useApp } from '../contexts/AppContext';
 import { GlassCard } from './SharedUI';
 import { apiFetch } from '../services/apiClient';
+import { profileAvailabilityCopy } from '../i18n/locales/profileAvailability';
 
 export function Profile({ t }: { t: any }) {
   const { user } = useApp();
+  const availability = profileAvailabilityCopy(t?.langCode === 'zh' ? 'zh' : 'en');
+  const paymentStatusId = useId();
   const [health, setHealth] = useState<any>(null);
   const [passwords, setPasswords] = useState({ current: '', next: '' });
   const [status, setStatus] = useState<{ type: 'success' | 'error' | null, message: string }>({ type: null, message: '' });
@@ -95,9 +98,7 @@ export function Profile({ t }: { t: any }) {
             <p className="text-white/40 font-mono text-sm">{t.nodeId || 'Node ID'}: {user.uid.slice(0, 6)}...{user.uid.slice(-4)}</p>
           </div>
           <div className="flex flex-wrap justify-center md:justify-start gap-3">
-            <Badge icon={<Shield size={12} />} label={t.verifiedNode || 'Verified Node'} color="text-green-500 bg-green-500/10" />
-            <Badge icon={<Cpu size={12} />} label={t.levelArchitect || 'Level 12 Architect'} color="text-celestial-saturn bg-celestial-saturn/10" />
-            <Badge icon={<Rocket size={12} />} label={t.earlyExplorer || 'Early Explorer'} color="text-celestial-mars bg-celestial-mars/10" />
+            <Badge icon={<User size={12} />} label={availability.account} color="text-white/65 bg-white/5" />
           </div>
         </div>
       </div>
@@ -115,21 +116,22 @@ export function Profile({ t }: { t: any }) {
                 <Zap size={32} fill="currentColor" />
                 {user.balance || 0}
               </div>
-              <div className="text-xs text-white/45">{t.earnCredits || 'Earn by Contributing Node Power'}</div>
+              <div className="text-xs text-white/45">{availability.balanceDetail}</div>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <Button className="rounded-xl bg-white/5 border border-white/10 text-xs h-10">{t.withdraw || 'Withdraw'}</Button>
-              <Button className="rounded-xl bg-celestial-saturn text-black font-bold text-xs h-10">{t.topUp || 'Top Up'}</Button>
+              <Button disabled aria-describedby={paymentStatusId} className="rounded-xl bg-white/5 border border-white/10 text-xs h-10">{t.withdraw || 'Withdraw'}</Button>
+              <Button disabled aria-describedby={paymentStatusId} className="rounded-xl bg-celestial-saturn text-black font-bold text-xs h-10">{t.topUp || 'Top Up'}</Button>
             </div>
+            <p id={paymentStatusId} className="text-xs text-white/50">{availability.paymentsUnavailable}</p>
           </div>
         </GlassCard>
 
         <GlassCard className="p-8 rounded-[3rem] space-y-6" hoverEffect={false}>
           <h3 className="text-xl font-bold tracking-tighter">{t.nodeStats || 'Node Stats'}</h3>
           <div className="grid grid-cols-2 gap-4">
-            <StatBox label={t.totalData || 'Total Data'} value="1.2 TB" />
+            <StatBox label={t.totalData || 'Total Data'} value={availability.notCollected} />
             <StatBox label={t.uptime || 'Uptime'} value={uptimeLabel} />
-            <StatBox label={t.nodePower || 'Node Power'} value="850 GFLOPS" />
+            <StatBox label={t.nodePower || 'Node Power'} value={availability.notCollected} />
             <StatBox label={t.interactions || 'Interactions'} value={interactionCount} />
           </div>
         </GlassCard>

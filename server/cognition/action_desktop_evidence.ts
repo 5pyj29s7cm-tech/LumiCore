@@ -392,15 +392,15 @@ function verifiedWpsAutomationReceipt(
       || !compact(payload?.windowTitle)
       || !recordMatchesCurrentApp(record, target || 'WPS')
     ) return false;
-    if (requireSave) {
-      return payload?.saved === true && Boolean(compact(payload?.savePath));
+    if (requestedText) {
+      const requested = String(requestedText).trim();
+      const supplied = String(record.arguments?.text || '').trim();
+      const readBack = String(payload?.bodyTextWithoutTerminalParagraph || '');
+      if (supplied !== requested || readBack !== requested) return false;
     }
-    if (payload?.saved !== false || compact(payload?.savePath)) return false;
-    if (!requestedText) return true;
-    const requested = String(requestedText).trim();
-    const supplied = String(record.arguments?.text || '').trim();
-    const readBack = String(payload?.bodyTextWithoutTerminalParagraph || '');
-    return supplied === requested && readBack === requested;
+    return requireSave
+      ? payload?.saved === true && Boolean(compact(payload?.savePath))
+      : payload?.saved === false && !compact(payload?.savePath);
   });
 }
 
@@ -443,6 +443,19 @@ export function hasCurrentAppSaveEvidence(
     break;
   }
   if (saveIndex < 0) return false;
+  // Keyboard save receipts have no target of their own. The latest foreground
+  // observation before the save must bind them to the requested application.
+  let foregroundIndex = saveIndex - 1;
+  while (foregroundIndex >= 0 && !CURRENT_APP_FOREGROUND_TOOL_RE.test(records[foregroundIndex].name)) foregroundIndex--;
+  if (foregroundIndex < 0 || hasFailedDesktopReceipt(records[foregroundIndex])
+    || !recordMatchesCurrentApp(records[foregroundIndex], requirements.target)) return false;
+  let createIndex = -1, textIndex = -1;
+  records.forEach((record, index) => {
+    if (isCreateUiActuation(record)) createIndex = index;
+    if (isTextUiActuation(record, records, index, requirements.requestedText)) textIndex = index;
+  });
+  if (requirements.wantsCreate && (createIndex < 0 || createIndex >= saveIndex)) return false;
+  if (requirements.wantsText && (textIndex < 0 || textIndex >= saveIndex)) return false;
   let lastPositive = -1;
   let lastNegative = -1;
   records.slice(saveIndex + 1).forEach((record, offset) => {

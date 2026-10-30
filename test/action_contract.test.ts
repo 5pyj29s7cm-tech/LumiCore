@@ -211,7 +211,7 @@ describe('Lumi action contract', () => {
 
   it('accepts native semantic text writes with a later same-path readback', () => {
     const target = 'C:\\Users\\me\\Desktop\\note.txt';
-    const task = `After creating the file, read it back and verify the exact content. Target: ${target}`;
+    const task = `Create ${target}; then read it back and verify the exact content.`;
     const contract = buildActionContract(task);
     const write = {
       name: 'desktop_write_text_file',
@@ -244,6 +244,17 @@ describe('Lumi action contract', () => {
     expect(contract.kind).toBe('artifact_work');
     expect(hasCoreActionEvidence(contract, [read, write], task)).toBe(false);
     expect(hasCoreActionEvidence(contract, [write, read], task)).toBe(true);
+  });
+
+  it.each([
+    'After creating the file, read it back and verify the exact content. Target: C:\\Users\\me\\Desktop\\note.txt',
+    'Do not create C:\\Users\\me\\Desktop\\note.txt.',
+    'If requested, create C:\\Users\\me\\Desktop\\note.txt.',
+    'Explain the sentence "Create C:\\Users\\me\\Desktop\\note.txt".',
+  ])('does not turn a temporal premise or non-command into file creation: %s', task => {
+    const contract = buildActionContract(task);
+    expect(contract.kind).toBe('none');
+    expect(contract.preferredTools).not.toContain('desktop_write_text_file');
   });
 
   it('requires both exact launch and matching active-window evidence for launch verification', () => {
@@ -431,6 +442,25 @@ describe('Lumi action contract', () => {
         result: '{"root":{"name":"Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.docx - WPS Office"}}',
       },
     ], task)).toBe(true);
+  });
+
+  it.each([
+    ['matching source and readback', 'hello', 'hello', true],
+    ['wrong supplied text', 'other', 'hello', false],
+    ['wrong readback text', 'hello', 'other', false],
+    ['missing readback text', 'hello', '', false],
+  ])('binds a saved WPS automation receipt to the requested text: %s', (_label, supplied, readBack, expected) => {
+    const task = 'In WPS create a new document and type "hello".';
+    const receipt = {
+      name: 'wps_create_document_with_text', arguments: { text: supplied },
+      result: JSON.stringify({ ok: true, status: 'verified', automation: 'KWPS.Application',
+        visible: true, documentCreated: true, exactTextMatch: true,
+        processName: 'wps.exe', processId: 43210, attachmentMode: 'newVisibleInstance',
+        attachedExisting: false, newVisibleInstance: true, documentName: 'note.docx',
+        windowTitle: 'note.docx - WPS Office', saved: true, savePath: 'C:/fixtures/note.docx',
+        bodyTextWithoutTerminalParagraph: readBack }),
+    };
+    expect(hasCurrentAppSaveEvidence([receipt], task)).toBe(expected);
   });
 
   it('uses a geometry-receipt contract for extraction-only desktop images', () => {

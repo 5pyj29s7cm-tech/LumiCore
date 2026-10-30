@@ -56,8 +56,14 @@ describe('optional observation outcomes do not create an external execution obli
       expect(final.blocked).toBe(true);
     }
     const { guard, final } = check(task, answer, [failed, source]);
-    expect(guard).toMatchObject({ blocked: false, text: answer });
-    expect(final).toMatchObject({ blocked: false, text: answer });
+    // A fetched paragraph proves observation, not factual/authority verification.
+    if (/核验|verified/iu.test(answer)) {
+      expect(guard.blocked).toBe(true);
+      expect(final.blocked).toBe(true);
+    } else {
+      expect(guard).toMatchObject({ blocked: false, text: answer });
+      expect(final).toMatchObject({ blocked: false, text: answer });
+    }
   });
 
   it.each([

@@ -1,0 +1,48 @@
+const COPY = {
+  en: {
+    title: "Founder's Sanctuary", back: 'Back to Hub', category: 'Architecture concepts',
+    introduction: 'Explore three design ideas and the questions still to resolve. These notes describe goals, not verified capabilities or downloadable archives.',
+    status: 'Concept', idLabel: 'CONCEPT', open: 'Read concept', close: 'Close details',
+    goal: 'Design goal', current: 'Available here', next: 'Work still needed',
+    principlesTitle: 'Design principles',
+    principles: ['Explain what is available and what remains a proposal.', 'Keep device access and changes tied to explicit permissions.', 'Judge an outcome by its confirmed result, not its status label.'],
+    concepts: [
+      { id: 'SHARD_01', title: 'Neural Sharding Protocol', description: 'Explore how inference work could be shared across devices.',
+        goal: 'Investigate dividing model computation across participating devices without losing control of data or execution.',
+        current: 'This page provides a concept summary. It does not distribute model weights or start cross-device inference.',
+        next: 'Specify the partitioning method, device requirements and failure recovery, then measure correctness and latency with a working prototype.' },
+      { id: 'MESH_VOID', title: 'Zero-Knowledge Mesh', description: 'Explore collaboration that minimizes disclosure of private inputs.',
+        goal: 'Define which information peers need to exchange and how participants authorize that exchange.',
+        current: 'This page provides design notes. It does not establish an encrypted mesh or verify a zero-knowledge security guarantee.',
+        next: 'Define a threat model, protocol and key lifecycle, then independently review the security properties before claiming them.' },
+      { id: 'KINETIC_K', title: 'Kinetic Kernel', description: 'Explore responsive interaction between people and desktop tools.',
+        goal: 'Make interface actions understandable, responsive and reversible where possible.',
+        current: 'This page provides interaction goals. It does not enable neural-signal input or change operating-system controls.',
+        next: 'Specify supported input methods, permission boundaries and accessibility requirements, then measure response and recovery behavior.' },
+    ],
+  },
+  zh: {
+    title: '创始人圣殿', back: '返回工作台', category: '架构概念',
+    introduction: '了解三项设计构想及其待解决的问题。这些说明表达设计目标，不代表已验证能力或可下载档案。',
+    status: '概念', idLabel: '概念编号', open: '查看说明', close: '收起说明',
+    goal: '设计目标', current: '本页提供', next: '后续工作',
+    principlesTitle: '设计原则',
+    principles: ['明确区分当前可用的内容与尚待实现的方案。', '设备访问和变更应有明确的权限边界。', '以确认后的实际结果判断完成状态，不以标签代替证据。'],
+    concepts: [
+      { id: 'SHARD_01', title: '神经分片协议', description: '探索在不同设备之间分担推理计算的方式。',
+        goal: '研究如何在参与设备之间划分模型计算，同时保留对数据和执行过程的控制。',
+        current: '本页提供概念说明，不分发模型权重，也不启动跨设备推理。',
+        next: '明确分片方法、设备要求和故障恢复方式，再用可运行原型验证正确性与延迟。' },
+      { id: 'MESH_VOID', title: '零知识网格', description: '探索减少私密输入披露的协作方式。',
+        goal: '明确节点需要交换哪些信息，以及参与者如何授权这些交换。',
+        current: '本页提供设计说明，不建立加密网格，也不证明零知识安全保证。',
+        next: '定义威胁模型、通信协议和密钥生命周期，并在宣称安全属性前完成独立审查。' },
+      { id: 'KINETIC_K', title: '动态交互内核', description: '探索人与桌面工具之间清晰、及时的交互。',
+        goal: '让界面操作易于理解、及时反馈，并尽可能支持撤回。',
+        current: '本页提供交互目标，不启用神经信号输入，也不更改操作系统控制项。',
+        next: '明确输入方式、权限与无障碍要求，再验证响应速度和故障恢复行为。' },
+    ],
+  },
+};
+
+export const foundersSanctuaryCopy = (locale: 'zh' | 'en') => COPY[locale];

@@ -99,6 +99,55 @@ describe('organization dashboard dynamic component', () => {
   });
 });
 
+describe('organization audit recovery and pagination', () => {
+  it('moves beyond 100 rows and retries a failed page without losing the confirmed page', async () => {
+    fixture.json.mockResolvedValueOnce(Array.from({ length: 100 }, (_, i) => row('page-one-' + i)))
+      .mockRejectedValueOnce(new Error('Page two unavailable')).mockResolvedValueOnce([row('page-two')]);
+    render(<AuditLogViewer />); await screen.findByText('document.read.page-one-0');
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('Page two unavailable'); expect(screen.getByText('document.read.page-one-0')).toBeTruthy();
+    expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?limit=100&offset=100');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' })); await screen.findByText('document.read.page-two');
+    expect(screen.queryByText('document.read.page-one-0')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Next page' })).toHaveProperty('disabled', true);
+    fixture.json.mockResolvedValueOnce([row('returned')]); fireEvent.click(screen.getByRole('button', { name: 'Previous page' }));
+    await screen.findByText('document.read.returned'); expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?limit=100');
+  });
+  it('keeps pagination and CSV bound to the applied filter while an unsent draft differs', async () => {
+    fixture.json.mockResolvedValueOnce([]).mockResolvedValueOnce(Array.from({ length: 100 }, (_, i) => row('filtered-' + i))).mockResolvedValueOnce([row('filtered-next')]);
+    fixture.fetch.mockResolvedValue({ ok: false, status: 403 }); render(<AuditLogViewer />); await screen.findByText(labels.empty);
+    fireEvent.click(screen.getByRole('button', { name: labels.filters })); const fields = screen.getAllByRole('textbox');
+    fireEvent.change(fields[1], { target: { value: ' document.read ' } }); fireEvent.click(screen.getByRole('button', { name: labels.search }));
+    await screen.findByText('document.read.filtered-0'); fireEvent.change(fields[1], { target: { value: 'document.delete' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' })); await screen.findByText('document.read.filtered-next');
+    expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?action=document.read&limit=100&offset=100');
+    fireEvent.click(screen.getByRole('button', { name: labels.export })); await screen.findByText('Audit export failed: HTTP 403');
+    expect(fixture.fetch.mock.calls[0][0]).toBe('/api/org/audit/export?action=document.read');
+    fixture.json.mockResolvedValueOnce([row('new-filter')]); fireEvent.click(screen.getByRole('button', { name: labels.search }));
+    await screen.findByText('document.read.new-filter'); expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?action=document.delete&limit=100');
+  });
+  it('offers immediate retry for the initial read failure without calling it an empty log', async () => {
+    fixture.json.mockRejectedValueOnce(new Error('Initial unavailable')).mockResolvedValueOnce([row('recovered')]);
+    render(<AuditLogViewer />); await screen.findByText('Initial unavailable'); expect(screen.queryByText(labels.empty)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' })); await screen.findByText('document.read.recovered');
+  });
+  it('discards a delayed page when a newer filter query has replaced it', async () => {
+    const page = deferred<any>(); fixture.json.mockResolvedValueOnce(Array.from({ length: 100 }, (_, i) => row('first-' + i)))
+      .mockReturnValueOnce(page.promise).mockResolvedValueOnce([row('new-filter')]);
+    render(<AuditLogViewer />); await screen.findByText('document.read.first-0'); fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    const signal = fixture.json.mock.calls.at(-1)?.[1].signal;
+    fireEvent.click(screen.getByRole('button', { name: labels.filters })); fireEvent.change(screen.getAllByRole('textbox')[1], { target: { value: 'new-filter' } });
+    fireEvent.click(screen.getByRole('button', { name: labels.search })); await screen.findByText('document.read.new-filter'); expect(signal.aborted).toBe(true);
+    await act(async () => page.resolve([row('late-page')])); expect(screen.queryByText('document.read.late-page')).toBeNull();
+  });
+  it('retries a denied CSV export without replacing it with an unrelated list read', async () => {
+    fixture.json.mockResolvedValue([row('confirmed')]); fixture.fetch.mockResolvedValue({ ok: false, status: 403 });
+    render(<AuditLogViewer />); await screen.findByText('document.read.confirmed'); fireEvent.click(screen.getByRole('button', { name: labels.export }));
+    await screen.findByText('Audit export failed: HTTP 403'); fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(fixture.fetch).toHaveBeenCalledTimes(2)); expect(fixture.json).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('organization audit dynamic component', () => {
   it('renders confirmed rows, structured details and the existing 100-row request cap', async () => {
     fixture.json.mockResolvedValue([row('confirmed', '{"reason":"fixture evidence"}')]); render(<AuditLogViewer />);

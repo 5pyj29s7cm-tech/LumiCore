@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-30T06:11:51.301239+00:00",
+  "updatedAt": "2026-10-30T07:16:32.221844+00:00",
   "localDate": "2026-10-30",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序63分区完整查证",
-    "status": "all-63-reviewed-with-7-failed-assertions-native-ui-paused",
-    "instruction": "主程序63/63分区均已当前查证；1345个限定用例1338通过、7失败，新增自治配置加载风险明确保留。生产源码未改，真人测试暂停；法律、设计师及已封存业务不重放。"
+    "title": "主程序未通过项修复与63分区完善性检查",
+    "status": "failures-resolved-63-reviewed-runtime-loading-pending",
+    "instruction": "上一轮7个未通过断言已逐项处理，63分区完成当前功能完善性检查；隔离回归通过，明确缺口与外部未验范围保留。新后端加载待验证，真人测试仍暂停。"
   },
   "acceptedWholeItems": [
     3,
@@ -36,18 +36,18 @@
     "Existing file full body returned through normal Socket and persisted exactly once with terminal task/turn"
   ],
   "knownUnresolved": [
-    "63项均有本轮源码、加载及相关隔离测试记录；覆盖深度不同。1345个用例来自139个文件的限定选择，不是全仓测试或所有功能路径覆盖。",
-    "真人坐标操作继续暂停，实际麦克风/摄像头/原生窗口、供应商与外部平台业务链路未验收；页面加载、模拟返回和子例通过不能算整分区通过。",
-    "法律与设计师业务仍排除；已验收3/15/16封存，2暂停、10保留及其他held状态不变。合成会议/消息组件测试没有重放已验收业务。",
-    "自治配置加载风险、创始人档案动作/中文标签、额外保存声明检查均未修复；两项前提或政策冲突的旧断言另行保留，不冒称产品已修好。",
-    "复合计算仅验证正文保留和缺失证据时blocked；没有有效算术核验证据，不能宣称计算完成。",
-    "本轮8次向127.0.0.1:11434的嵌入探测被隔离守卫阻断。个人及组织知识库只证明关键词回退/索引缺失如实报告，不证明向量服务可用。",
-    "组织审计前端100条且无分页控件；组织聊天没有停止按钮，历史加载失败静默回退等已知限制保持。",
-    "设计技能design-studio-pack启用但因既有运行身份漂移拒载，按排除范围保留；此前8个已恢复技能的43项声明不等于逐技能真实业务验收。code-sandbox仍缺E2B凭据。",
-    "全局i18n的97条既有发现与架构检查失败沿用前轮证据；本轮生产源码未改，未重新宣称这些全局检查通过，也未重建安装包。",
-    "5个原暂停/隔离调度任务保持，健康接口仍degraded。指定四表计数/默认偏好比对不代表后台、整个数据库或供应商完全没有活动。",
-    "行号和SHA用于定位当前源码，341个锚点不是341行动态执行覆盖。测试中的工具、消息和模型响应有明确隔离边界。",
-    "本轮只新增6份回归测试和检查点，不修改生产源码、默认模型或真实业务数据，不重启主程序，不推送远程。"
+    "63/63 是当前源码功能完善性检查，不是63个分区都已完善或真人验收。每个分区的入口、主流程、异常恢复、持久化、依赖和未测范围见逐项记录。",
+    "本轮最终计数只包含明确选定的相关隔离回归；未重跑全仓测试，也没有动态行覆盖率。行号和SHA只用于精确定位源码。",
+    "真人坐标测试按用户要求暂停；实际原生窗口、麦克风/摄像头、模型供应商、平台发布、支付和真实生成未验收。",
+    "法律和设计师业务不开展，3/15/16已验收项保持封存，2暂停、10保留及其他held状态不变。早期扩大筛选误包含1个混合法律契约纯fixture，已透明记录且后续排除，没有重放业务。",
+    "仍有加载失败无就地重试、异步请求缺期限、知识导入未区分部分成功、联系人删除缺确认等明确缺口；财税、电商部分页面只提供辅助草稿，不等于已连接正式账务或平台执行。",
+    "创始人页是概念说明，资料页支付服务尚未接入；本轮修正误导界面，不宣称这些后端能力已实现。",
+    "知识库真实向量服务未验收；既有关键词回退证据不能证明嵌入服务可用。复合计算仍需要有效算术证据。",
+    "来源读取后生成分析文件的限定隔离场景仍有错误诊断：没有输出时正确阻断，却把读取输入源的回执误写成文件目标不匹配。未修改最终化owner，定位见cross-regression/result.json。",
+    "完成声明采用限定语法和回执规则，不保证覆盖所有自然语言措辞；无明确应用目标时的当前前台身份、所有来源适配器、事实/权威核验仍不能从本轮测试推定完成。",
+    "全局i18n有97项既有发现，架构检查也有既有失败；本轮单列增量对照，不宣称全局检查通过。",
+    "5个原暂停/隔离调度任务继续保持，健康状态degraded不能写成全绿。默认模型不变；有限表计数比对不等于整个数据库或后台完全无活动。",
+    "设计技能身份漂移和code-sandbox缺E2B凭据属于此前保留项，未开展排除范围业务。无安装包发布，无远程推送。"
   ],
   "validation": {
     "tsc": "passed in both repositories",
@@ -58,10 +58,10 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "D:/Lumi-Audit-Temp/main-all-partitions-20261030",
-    "manifest": "D:/Lumi-Audit-Temp/main-all-partitions-20261030/evidence-seal.json",
-    "sha256": "86b45f1a63fc83d26aeb15f5f06ac31a9f6712ff7bce1517bb21a7013d157509",
-    "files": 423,
+    "directory": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030",
+    "manifest": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/software-seal.json",
+    "sha256": "146976bf47e30daa8a568799305ce57b74d0486c88322d071f81313838cb65c1",
+    "files": 690,
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -136,34 +136,27 @@
   "currentCheckpointValidation": {
     "jsonParsed": true,
     "gitDiffCheck": "passed",
-    "sourceChanged": false,
-    "testFilesAdded": 6,
-    "newPassingTestCases": 51,
+    "sourceChanged": true,
     "tests": {
-      "uniqueExecutedFiles": 139,
-      "executed": 1345,
-      "passed": 1338,
-      "failed": 7,
-      "duplicateExecutedCases": 0,
-      "conflictingResults": 0,
-      "countingRule": "Unique (file, fullName, same-name occurrence). This preserves distinct parameterized cases sharing a title and deduplicates repeated runs across groups. Unselected inventories and non-final attempts are not added."
+      "files": 37,
+      "executed": 917,
+      "passed": 917,
+      "failed": 0,
+      "duplicateExecutions": 0,
+      "conflictingResults": 0
     },
     "typecheck": "passed",
-    "frontendModuleLoading": "73/73 HTTP200 JavaScript",
-    "desktopBuild": "not-rerun-production-source-unchanged",
-    "sourceAnchorsVerified": 341,
-    "nativeUITesting": "paused-by-user",
-    "runtimeLoadedSourceCommit": "c41c940de2d602076aa64b7fac66f1bac261f7cd",
-    "backendPid": 33520,
-    "runtimeRestartedThisRound": false,
-    "defaultModelUnchanged": true,
-    "databaseCountsDelta": {
-      "conversations": 0,
-      "interactions": 0,
-      "generated_archive": 0,
-      "model_routing_receipts": 0
+    "desktopUIBuild": "passed",
+    "sourceAnchorsVerified": {
+      "referencesChecked": 432,
+      "unique": 340,
+      "sourceFiles": 160,
+      "meaning": "current line/text/SHA references, not dynamic line coverage"
     },
+    "nativeUITesting": "paused-by-user",
+    "runtimeLoading": "pending",
     "acceptedAndHeldStateUnchanged": true,
+    "defaultModelUnchanged": true,
     "wholeApplicationAccepted": false,
     "installerReleased": false,
     "remotePushPerformed": false
@@ -319,8 +312,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "all-63-reviewed-with-7-failed-assertions-native-ui-paused",
-    "priority": "主程序63/63分区均已当前查证；1345个限定用例1338通过、7失败，新增自治配置加载风险明确保留。生产源码未改，真人测试暂停；法律、设计师及已封存业务不重放。"
+    "status": "failures-resolved-63-reviewed-runtime-loading-pending",
+    "priority": "上一轮7个未通过断言已逐项处理，63分区完成当前功能完善性检查；隔离回归通过，明确缺口与外部未验范围保留。新后端加载待验证，真人测试仍暂停。"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -3126,5 +3119,349 @@
     "nativeUITested": false,
     "installerReleased": false,
     "remotePushPerformed": false
+  },
+  "latestMainPartitionFixesAndCompleteness": {
+    "schema": "lumi.main-partition-fixes-completeness.v1",
+    "atUTC": "2026-10-30T07:12:56.659162+00:00",
+    "baseCommit": "57284f6ad7148de1f3641c68a7b7d14ecbacaefa",
+    "version": "3.1.1",
+    "priorFailureResolution": [
+      {
+        "id": "AUTONOMY-UNCONFIRMED-EDITABLE",
+        "classification": "product-fix",
+        "summaryZh": "自治配置尚未确认时锁定编辑，避免把默认值显示为已读取配置。",
+        "wholeItemAccepted": false
+      },
+      {
+        "id": "AUTONOMY-LOAD-ERROR-HIDDEN",
+        "classification": "product-fix",
+        "summaryZh": "自治配置读取失败、无效回包和超时明确显示错误并可重试；保存和任务切换核对回执。",
+        "wholeItemAccepted": false
+      },
+      {
+        "id": "FOUNDERS-ARCHIVE-NO-ACTION",
+        "classification": "truthful-capability-fix",
+        "summaryZh": "创始人页无效的档案按钮改为可展开/收起的概念说明；没有凭空实现档案库。",
+        "wholeItemAccepted": false
+      },
+      {
+        "id": "FOUNDERS-CHINESE-FALLBACK",
+        "classification": "localization-fix",
+        "summaryZh": "创始人页概念动作和说明已提供中文及英文。",
+        "wholeItemAccepted": false
+      },
+      {
+        "id": "EXTRA-SAVE-SUCCESS-CLAIM",
+        "classification": "product-fix",
+        "summaryZh": "额外宣称已保存必须有本轮正确应用、编辑后保存及保存后证据；WPS 回读还需匹配要求正文。",
+        "wholeItemAccepted": false
+      },
+      {
+        "id": "NATIVE-WRITE-FIXTURE-PREMISE",
+        "classification": "test-premise-correction",
+        "summaryZh": "原生文件写入正例改为明确的创建后回读指令；原时间前提、条件、否定和引用继续作为不可授权负例。",
+        "wholeItemAccepted": false
+      },
+      {
+        "id": "HISTORY-PROSE-ASSERTION-CONFLICT",
+        "classification": "test-policy-correction",
+        "summaryZh": "历史正文旧断言对齐现行保真规则：普通中英文正文原样保留，显式工具协议仍清理。",
+        "wholeItemAccepted": false
+      }
+    ],
+    "additionalRepairs": [
+      "组织审计补上分页和读取/导出重试，导出使用已应用的筛选条件。",
+      "组织聊天历史加载错误可见并可重试；补上按当前请求停止及已结束状态回放。ACK 不冒充终止结果。",
+      "资料页保留真实余额，未接入支付动作禁用并说明；移除固定资源数值和没有依据的认证等级。",
+      "完成声明检查补充当前回执、目标文件和来源约束；普通建议、条件说明和核验过的源正文保留。"
+    ],
+    "expandedRegression": {
+      "summaryZh": "扩大回归保留了全部中间失败和旧源码对照，按产品证据缺口、建议误拦、旧文案断言、测试前提逐项归因；只将最终执行结果纳入本轮计数。详细分类见 core/result.json 和 cross-regression/result.json。",
+      "core": {
+        "ledger": "D:\\Lumi-Audit-Temp\\main-partition-fixes-completeness-20261030\\core\\expanded-failure-ledger.json",
+        "baseline": {
+          "report": "D:\\Lumi-Audit-Temp\\main-partition-fixes-completeness-20261030\\core\\related-baseline.json",
+          "command": "D:\\Lumi-Audit-Temp\\main-partition-fixes-completeness-20261030\\core\\related-baseline-command.json",
+          "passed": 476,
+          "failed": 76,
+          "skipped": 23,
+          "discovered": 575,
+          "sourceUnchanged": true
+        },
+        "earlyRepair": {
+          "report": "D:\\Lumi-Audit-Temp\\main-partition-fixes-completeness-20261030\\core\\related-final.json",
+          "command": "D:\\Lumi-Audit-Temp\\main-partition-fixes-completeness-20261030\\core\\related-final-command.json",
+          "passed": 489,
+          "failed": 63,
+          "skipped": 23,
+          "discovered": 575,
+          "sourceUnchanged": true
+        },
+        "categories": {
+          "fixture-or-policy-conflict": 3,
+          "obsolete-reason-copy": 13,
+          "product-unsupported-claim": 29,
+          "product-guidance-replaced": 18
+        },
+        "interpretation": "29 unsupported-claim defects and 18 guidance-replacement cases were fixed through one reply-only owner; 13 obsolete copy assertions and 3 fixture/policy conflicts were corrected without weakening blocked assertions or target contracts."
+      },
+      "cross": null
+    },
+    "tests": {
+      "files": 37,
+      "executed": 917,
+      "passed": 917,
+      "failed": 0,
+      "duplicateExecutions": 0,
+      "conflictingResults": 0
+    },
+    "finalTestReports": [
+      {
+        "path": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/root-tests/shell/vitest.json",
+        "sha256": "a783796c67d80cb4e50efeb7012043da9c55e7d6102e7e14f90a5b445fb751f9",
+        "executed": 45,
+        "passed": 45,
+        "failed": 0,
+        "totalReported": 45,
+        "pendingNotExecuted": 0,
+        "todoNotExecuted": 0
+      },
+      {
+        "path": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/settings/final-stable.json",
+        "sha256": "c52d9a3d840a61ef9ffcda83512239bc1d3b6688cc0ab59949080c075e0495a9",
+        "executed": 100,
+        "passed": 100,
+        "failed": 0,
+        "totalReported": 100,
+        "pendingNotExecuted": 0,
+        "todoNotExecuted": 0
+      },
+      {
+        "path": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/org-business/terminal-recovery-final-v2.json",
+        "sha256": "f4b8ede13655050984a23448d716a949799bec5a6793ebfedb58ad47b9a46913",
+        "executed": 105,
+        "passed": 105,
+        "failed": 0,
+        "totalReported": 105,
+        "pendingNotExecuted": 0,
+        "todoNotExecuted": 0
+      },
+      {
+        "path": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/core/related-final-v4.json",
+        "sha256": "f4a93d660971780332cfda13a8109f4ae9bc27d30ff005b3e9f8aa4cce2bb3a7",
+        "executed": 611,
+        "passed": 611,
+        "failed": 0,
+        "totalReported": 634,
+        "pendingNotExecuted": 23,
+        "todoNotExecuted": 0
+      },
+      {
+        "path": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/cross-regression/final-v2.json",
+        "sha256": "92f38fc741f8f60b93bab9429f60766e0f127f7a64e47733cf2cc66dc6cf578d",
+        "executed": 56,
+        "passed": 56,
+        "failed": 0,
+        "totalReported": 56,
+        "pendingNotExecuted": 0,
+        "todoNotExecuted": 0
+      }
+    ],
+    "partitionCount": 63,
+    "partitionsWithStaticGaps": 43,
+    "wholePartitionsAccepted": 0,
+    "sourceAnchors": {
+      "referencesChecked": 432,
+      "unique": 340,
+      "sourceFiles": 160,
+      "meaning": "current line/text/SHA references, not dynamic line coverage"
+    },
+    "changedFiles": [
+      {
+        "path": "server/cognition/action_desktop_evidence.ts",
+        "sha256": "226ffc32fdafd7a768294028f0f7464279c728836e182c73afd2f33958559328"
+      },
+      {
+        "path": "server/cognition/contracts/receipt_evidence.ts",
+        "sha256": "b953496dd49feca3d8b959c2714b0602948f52c974f1ba65170907d4d1a1df33"
+      },
+      {
+        "path": "server/work_product/completion_guard.ts",
+        "sha256": "193fd98e2c938358b8114c0b955696a8f94d363db755581b9f4c4b5271795906"
+      },
+      {
+        "path": "server/work_product/response_execution_claims.ts",
+        "sha256": "e38c16d5eef08596769f9d199261eb186f2b7e92a87460a64de599c4bb97d62f"
+      },
+      {
+        "path": "src/components/FoundersSanctuary.tsx",
+        "sha256": "1fac192e6b6dcecc6e2ab0aa18cc39dd690ee17c4ab9f014bcaedfd0c8bc2b8d"
+      },
+      {
+        "path": "src/components/Profile.tsx",
+        "sha256": "4a707ce1c3ee8db22de9ae7418b265746c009a91cab398b14fd25bb3d891e2f6"
+      },
+      {
+        "path": "src/components/org/AuditLogViewer.tsx",
+        "sha256": "09d45bb738c2ea6352f908926c76ca0c0b370dd423d46335c73ca70e9d552bc6"
+      },
+      {
+        "path": "src/components/org/CentralLumiChat.tsx",
+        "sha256": "c01f75fb7794be1650e9e5fb044e9544cf52c8a1b199a3b04355dc564bf30488"
+      },
+      {
+        "path": "src/components/settings/autonomy.tsx",
+        "sha256": "961f17d200105f6de03cfaba9f5a3c6bfe7ca5582a60a1c7f421fdb396cab3ee"
+      },
+      {
+        "path": "src/i18n/locales/foundersSanctuary.ts",
+        "sha256": "97c0aa8a427dbea8649b335fc196704e0ac1f572322459a2edcff4e16a86fdca"
+      },
+      {
+        "path": "src/i18n/locales/organizationRecovery.ts",
+        "sha256": "51b095ba54bc66c4e93f0473dea304c5d226193e2cad095225efad80fc035956"
+      },
+      {
+        "path": "src/i18n/locales/profileAvailability.ts",
+        "sha256": "29c08f0ff421f64d03476e56fbdf29c3d5c59cbcc117618946ed3cc73143bba6"
+      },
+      {
+        "path": "src/i18n/locales/unifiedCore.ts",
+        "sha256": "349350346540fe0e0370e75222c4135b3953bb1347ec038aafd41c10f15571b2"
+      },
+      {
+        "path": "test/action_contract.test.ts",
+        "sha256": "0312bd6c8a7e6c52a56f5763b6dabb3f074629fd7f09bccc15b550127f3c77d0"
+      },
+      {
+        "path": "test/all_partitions_settings_runtime.test.tsx",
+        "sha256": "53f032986f7e4b276f992792fdec0670859a0f3c6be45acfba801467b51e4159"
+      },
+      {
+        "path": "test/completion_guard.test.ts",
+        "sha256": "cf2b5b8aae018fad6db89c47ca459803ff5ddccc847f4d11d3d9f5a3db087a62"
+      },
+      {
+        "path": "test/completion_truth_and_prose_gap.test.ts",
+        "sha256": "a08e3cb7cbb5d941f37615d8ba0d82874d1a477860951cdda7ded1f01347f18e"
+      },
+      {
+        "path": "test/conversation_routes.test.ts",
+        "sha256": "14f6e0f2c83cdd9d63c8940de2f9c7cb39a5933a62a7513e8f1698a70b009e84"
+      },
+      {
+        "path": "test/optional_observation_completion_scope.test.ts",
+        "sha256": "451ee8e3d9549f3e09af0ae13fd8df2330892d548d2200463893011379da377a"
+      },
+      {
+        "path": "test/org_chat_dynamic.test.tsx",
+        "sha256": "3cec383872e1567a06e17d24be37ae4295d07403ee35640eafbe2897a2e2a04d"
+      },
+      {
+        "path": "test/org_dashboard_audit_dynamic.test.tsx",
+        "sha256": "43861235842672e60319b78edcaff0f17623182ceb4dfe9bda639705af172ccf"
+      },
+      {
+        "path": "test/partition_profile_availability.test.tsx",
+        "sha256": "c04a8ceb3ae2fa49c10495429fc2fc248df1585808a875a83dc1e68d78aaf3e2"
+      },
+      {
+        "path": "test/partition_settings_reliability.test.tsx",
+        "sha256": "b701e9e1ab1bb8fc37f84fcf44817a576675629dd918fae28d9c88611c9bbd0d"
+      },
+      {
+        "path": "test/response_execution_claim_boundaries.test.ts",
+        "sha256": "57a1506216ebc450c0e7205307059c07fdb2b6e6c9934761ca22a4a8c0515d2a"
+      }
+    ],
+    "limits": [
+      "63/63 是当前源码功能完善性检查，不是63个分区都已完善或真人验收。每个分区的入口、主流程、异常恢复、持久化、依赖和未测范围见逐项记录。",
+      "本轮最终计数只包含明确选定的相关隔离回归；未重跑全仓测试，也没有动态行覆盖率。行号和SHA只用于精确定位源码。",
+      "真人坐标测试按用户要求暂停；实际原生窗口、麦克风/摄像头、模型供应商、平台发布、支付和真实生成未验收。",
+      "法律和设计师业务不开展，3/15/16已验收项保持封存，2暂停、10保留及其他held状态不变。早期扩大筛选误包含1个混合法律契约纯fixture，已透明记录且后续排除，没有重放业务。",
+      "仍有加载失败无就地重试、异步请求缺期限、知识导入未区分部分成功、联系人删除缺确认等明确缺口；财税、电商部分页面只提供辅助草稿，不等于已连接正式账务或平台执行。",
+      "创始人页是概念说明，资料页支付服务尚未接入；本轮修正误导界面，不宣称这些后端能力已实现。",
+      "知识库真实向量服务未验收；既有关键词回退证据不能证明嵌入服务可用。复合计算仍需要有效算术证据。",
+      "来源读取后生成分析文件的限定隔离场景仍有错误诊断：没有输出时正确阻断，却把读取输入源的回执误写成文件目标不匹配。未修改最终化owner，定位见cross-regression/result.json。",
+      "完成声明采用限定语法和回执规则，不保证覆盖所有自然语言措辞；无明确应用目标时的当前前台身份、所有来源适配器、事实/权威核验仍不能从本轮测试推定完成。",
+      "全局i18n有97项既有发现，架构检查也有既有失败；本轮单列增量对照，不宣称全局检查通过。",
+      "5个原暂停/隔离调度任务继续保持，健康状态degraded不能写成全绿。默认模型不变；有限表计数比对不等于整个数据库或后台完全无活动。",
+      "设计技能身份漂移和code-sandbox缺E2B凭据属于此前保留项，未开展排除范围业务。无安装包发布，无远程推送。"
+    ],
+    "typecheck": "passed",
+    "desktopUIBuild": "passed",
+    "nativeUITested": false,
+    "installerReleased": false,
+    "remotePushPerformed": false,
+    "matrix": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/63-partition-completeness.json",
+    "readableReport": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/修复结果与63分区完善性检查.txt",
+    "groupEvidence": [
+      {
+        "group": "settings",
+        "path": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/settings/result.json",
+        "sha256": "744b585d9fdbc2549c1d3a6c25156ed9f33b8adb02a666344b8f951b23a92872"
+      },
+      {
+        "group": "org-business",
+        "path": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/org-business/result.json",
+        "sha256": "dfa1de8bbda4a31848eec32e4fcd2bbdbf63346fb2b0a9e9a8d3607d08156deb"
+      },
+      {
+        "group": "core",
+        "path": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/core/result.json",
+        "sha256": "f7eb9688dbe367515005315d9831a2c6dbcd8acad468dc49c20a7e59afd1c0db"
+      },
+      {
+        "group": "cross-regression",
+        "path": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/cross-regression/result.json",
+        "sha256": "71a0884ae5b33f0e0f11021be0afdf5b6b99776bd6d77f47ee5c962eab0b6d65"
+      }
+    ],
+    "staticChecks": {
+      "records": [
+        {
+          "check": "i18n",
+          "mode": "base",
+          "exitCode": 1
+        },
+        {
+          "check": "i18n",
+          "mode": "current",
+          "exitCode": 1
+        },
+        {
+          "check": "architecture",
+          "mode": "base",
+          "exitCode": 1
+        },
+        {
+          "check": "architecture",
+          "mode": "current",
+          "exitCode": 1
+        }
+      ],
+      "i18n": {
+        "baseUnique": 97,
+        "currentUnique": 97,
+        "added": [],
+        "resolved": []
+      },
+      "architectureSameDiagnostics": true,
+      "method": "Read-only fs projection of changed tracked production files to fixed baseline57284f6a; added files excluded from baseline using git ls-tree, included in current. Repo and lint baseline files unchanged."
+    },
+    "status": "failures-resolved-63-reviewed-runtime-loading-pending",
+    "evidence": {
+      "directory": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030",
+      "manifest": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/software-seal.json",
+      "sha256": "146976bf47e30daa8a568799305ce57b74d0486c88322d071f81313838cb65c1",
+      "files": 690,
+      "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
+      "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
+    },
+    "report": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/report.json",
+    "independentReview": {
+      "path": "D:/Lumi-Audit-Temp/main-partition-fixes-completeness-20261030/independent-review.json",
+      "sha256": "1c9efccdb9c2e0e7bd006c310bfef2773a716f6acc671baed20f4dd2bbf199fc"
+    }
   }
 }

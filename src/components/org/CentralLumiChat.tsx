@@ -12,6 +12,7 @@ import { useApp } from '../../contexts/AppContext';
 import { useSocket } from '../../hooks/useSocket';
 import { useT } from '../../lib/useT';
 import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
+import { organizationRecoveryCopy } from '../../i18n/locales/organizationRecovery';
 import {
   isTerminalAgentStatus,
   sanitizeAgentResponseTextForDisplay,
@@ -95,6 +96,8 @@ function useCentralChatAttachmentsAndHistory() {
   const [messages, setMessageState] = useState<Message[]>(() => [greeting()]);
   const messagesRef = useRef(messages);
   const historyReadRef = useRef<AbortController | null>(null);
+  const historyDiscoveryRef = useRef<AbortController | null>(null);
+  const [historyError, setHistoryError] = useState(false);
   const setMessages = useCallback((update: React.SetStateAction<Message[]>) => {
     const next = typeof update === 'function' ? update(messagesRef.current) : update;
     messagesRef.current = next;
@@ -109,6 +112,8 @@ function useCentralChatAttachmentsAndHistory() {
   const uploadWorkRef = useRef<ReturnType<ChatViewWorkRegistry['begin']> | null>(null);
   const [loading, setLoading] = useState(false);
   const [requestActive, setRequestActive] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const cancelWorkRef = useRef<{ requestId: string; timer: ReturnType<typeof setTimeout> | null } | null>(null);
   const [requestNotice, setRequestNotice] = useState('');
   const [modelPreference, setModelPreference] = useState<LumiModelPreference | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -143,6 +148,9 @@ function useCentralChatAttachmentsAndHistory() {
   }, [attachmentContextStoragePrefix]);
 
   const clearActiveRequest = useCallback(() => {
+    if (cancelWorkRef.current?.timer) clearTimeout(cancelWorkRef.current.timer);
+    cancelWorkRef.current = null;
+    setCancelling(false);
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
@@ -156,6 +164,7 @@ function useCentralChatAttachmentsAndHistory() {
   }, []);
   useEffect(() => () => {
     chatViewWorkRef.current.invalidate();
+    historyDiscoveryRef.current?.abort();
     historyReadRef.current?.abort();
     clearActiveRequest();
   }, [clearActiveRequest]);
@@ -302,39 +311,51 @@ function useCentralChatAttachmentsAndHistory() {
     const controller = new AbortController();
     historyReadRef.current = controller;
     const visibleMessages = messagesRef.current;
+    const ownsRead = () => !controller.signal.aborted && historyReadRef.current === controller
+      && conversationId === attachmentConversationIdRef.current
+      && visibleMessages === messagesRef.current && !activeRequestIdRef.current;
+    setHistoryError(false);
     try {
       const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/messages?domain=work&limit=80`, {
-        credentials: 'include', signal: controller.signal,
+        credentials: 'include', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
       });
       const body = await res.json();
-      if (!res.ok || controller.signal.aborted || !Array.isArray(body.messages)
-        || conversationId !== attachmentConversationIdRef.current
-        || visibleMessages !== messagesRef.current || activeRequestIdRef.current) return;
+      if (!ownsRead()) return;
+      if (!res.ok || !Array.isArray(body.messages)) throw new Error('Conversation history unavailable');
       const history = body.messages.map((item: any) => normalizeHistoryMessage(item, locale)).filter(Boolean) as Message[];
       streamingMessageIdRef.current = null;
       streamingRawTextRef.current = '';
       setMessages(history.length > 0 ? history : [greeting()]);
-    } catch {} finally {
+    } catch { if (ownsRead()) setHistoryError(true); } finally {
       if (historyReadRef.current === controller) historyReadRef.current = null;
     }
   }, [attachmentConversationIdRef, greeting, locale, setMessages]);
 
-  useEffect(() => {
+  const retryHistory = useCallback(async () => {
+    if (activeRequestIdRef.current) return;
+    historyDiscoveryRef.current?.abort();
     const controller = new AbortController();
+    historyDiscoveryRef.current = controller;
     const ownsView = chatViewWorkRef.current.capture(), visibleMessages = messagesRef.current;
-    void (async () => {
+    const ownsRead = () => !controller.signal.aborted && historyDiscoveryRef.current === controller && ownsView()
+      && visibleMessages === messagesRef.current && !activeRequestIdRef.current;
+    setHistoryError(false);
       try {
-        const res = await fetch('/api/conversations/active?domain=work&agentId=lumi', { credentials: 'include', signal: controller.signal });
+        const res = await fetch('/api/conversations/active?domain=work&agentId=lumi', { credentials: 'include', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]) });
         const body = await res.json();
+        if (!ownsRead()) return;
+        if (!res.ok || !body || !('activeConversation' in body)) throw new Error('Conversation discovery unavailable');
         const conversationId = body.activeConversation?.id;
-        if (!res.ok || !conversationId || controller.signal.aborted || !ownsView()
-          || visibleMessages !== messagesRef.current || activeRequestIdRef.current) return;
+        if (body.activeConversation != null && (typeof conversationId !== 'string' || !conversationId)) throw new Error('Invalid active conversation');
+        if (!conversationId) return;
         bindAttachmentContextToConversation(conversationId);
         await loadConversationMessages(conversationId);
-      } catch {}
-    })();
-    return () => { controller.abort(); historyReadRef.current?.abort(); };
+      } catch { if (ownsRead()) setHistoryError(true); }
   }, [bindAttachmentContextToConversation, loadConversationMessages]);
+  useEffect(() => {
+    void retryHistory();
+    return () => { historyDiscoveryRef.current?.abort(); historyReadRef.current?.abort(); };
+  }, [retryHistory]);
   return {
     socket, activeRequestIdRef, setMessages, streamingMessageIdRef, setLoading, setRequestNotice,
     streamingRawTextRef, locale, clearActiveRequest, attachmentConversationIdRef,
@@ -343,12 +364,14 @@ function useCentralChatAttachmentsAndHistory() {
     orgConnection, messages, timeoutRef, setInput, pendingAttachmentsRef, setPendingAttachments,
     rememberConversationAttachments, previewFile, isZh, setPreviewFile, dragActive, t, modelPreferenceValue,
     modelPreferenceLabel, openModelSettings, endRef, fileInputRef, requestNotice, conversationAttachments,
-    clearConversationAttachments, removePendingAttachment, uploading
+    clearConversationAttachments, removePendingAttachment, uploading, historyError, retryHistory, cancelling, setCancelling, cancelWorkRef
   } as const;
 }
 
 function useCentralChatEventsAndView(previousBindings: ReturnType<typeof useCentralChatAttachmentsAndHistory>) {
   const { socket, activeRequestIdRef, setMessages, streamingMessageIdRef, setLoading, setRequestNotice, streamingRawTextRef, locale, clearActiveRequest, attachmentConversationIdRef, bindAttachmentContextToConversation, loadConversationMessages, setDragActive, uploadChatAttachments, input, pendingAttachments, conversationAttachmentsRef, loading, requestActive, setRequestActive, uploadWorkRef, orgConnection, messages, timeoutRef, setInput, pendingAttachmentsRef, setPendingAttachments, rememberConversationAttachments, previewFile, isZh, setPreviewFile, dragActive, t, modelPreferenceValue, modelPreferenceLabel, openModelSettings, endRef, fileInputRef, requestNotice, conversationAttachments, clearConversationAttachments, removePendingAttachment, uploading } = previousBindings;
+  const { historyError, retryHistory, cancelling, setCancelling, cancelWorkRef } = previousBindings;
+  const recovery = organizationRecoveryCopy(locale);
 
 
   useEffect(() => {
@@ -386,7 +409,7 @@ function useCentralChatEventsAndView(previousBindings: ReturnType<typeof useCent
     const onChunk = (data: { text?: string; agentName?: string; requestId?: string }) => {
       if (!isCurrent(data) || !data.text) return;
       setLoading(false);
-      setRequestNotice('');
+      if (!cancelWorkRef.current) setRequestNotice('');
       streamingRawTextRef.current += data.text;
       const publicText = sanitizeAgentStreamingTextForDisplay(streamingRawTextRef.current, locale);
       if (publicText) updateReply(publicText);
@@ -412,7 +435,7 @@ function useCentralChatEventsAndView(previousBindings: ReturnType<typeof useCent
       if (!isCurrent(data)) return;
       if (data.status === 'thinking' || data.status === 'responding') {
         setLoading(true);
-        setRequestNotice('');
+        if (!cancelWorkRef.current) setRequestNotice('');
       }
       if (data.status && isTerminalAgentStatus(data.status)) {
         const streamingId = streamingMessageIdRef.current;
@@ -581,6 +604,58 @@ function useCentralChatEventsAndView(previousBindings: ReturnType<typeof useCent
     });
   };
 
+  const handleStop = () => {
+    const requestId = activeRequestIdRef.current;
+    if (!socket || !requestId || cancelWorkRef.current) return;
+    const work = { requestId, timer: null as ReturnType<typeof setTimeout> | null };
+    cancelWorkRef.current = work;
+    setCancelling(true); setRequestNotice(recovery.cancelling);
+    const current = () => cancelWorkRef.current === work && activeRequestIdRef.current === requestId;
+    const failed = (message: string) => {
+      if (!current()) return;
+      if (work.timer) clearTimeout(work.timer);
+      cancelWorkRef.current = null; setCancelling(false); setRequestNotice(message);
+    };
+    work.timer = setTimeout(() => failed(recovery.cancelUnknown), 8000);
+    const scope = {
+      requestId, source: 'org-chat', domain: 'work', orgId: orgConnection?.orgId || null,
+      conversationId: attachmentConversationIdRef.current || undefined,
+    };
+    try {
+      socket.emit('agent:abort_chat', scope, (result?: { ok?: boolean; requestId?: string; status?: string; error?: string }) => {
+        if (!current()) return;
+        if (result?.ok !== true || result.requestId !== requestId) { failed(result?.error || recovery.cancelFailed); return; }
+        if (work.timer) clearTimeout(work.timer);
+        work.timer = null;
+        if (result.status === 'completed' || (result.status && isTerminalAgentStatus(result.status))) {
+          // A terminal abort ACK carries no transcript. Request the existing
+          // scoped replay and let the normal terminal handlers render it.
+          setRequestNotice(recovery.recovering);
+          work.timer = setTimeout(() => failed(recovery.recoveryFailed), 8000);
+          try {
+            socket.emit('agent:execution_resume', scope, (resumed?: {
+              ok?: boolean; error?: string;
+              snapshot?: { requestId?: string; source?: string; conversationId?: string; terminal?: boolean };
+            }) => {
+              if (!current()) return;
+              const snapshot = resumed?.snapshot;
+              if (resumed?.ok !== true || snapshot?.requestId !== requestId || snapshot.source !== scope.source || !snapshot.terminal
+                || (scope.conversationId && snapshot.conversationId !== scope.conversationId)) {
+                failed(resumed?.error || recovery.recoveryFailed);
+              }
+              // Keep the deadline until the replay arrives: a successful ACK
+              // alone must not leave the stop control disabled indefinitely.
+            });
+          } catch { failed(recovery.recoveryFailed); }
+          return;
+        }
+        // An accepted abort is not a terminal result. The original request stays
+        // active until its normal response/status/error settles it.
+        setRequestNotice(recovery.cancelling);
+      });
+    } catch { failed(recovery.cancelFailed); }
+  };
+
   return (
     <div
       className="relative flex flex-col h-[calc(100vh-12rem)]"
@@ -638,6 +713,12 @@ function useCentralChatEventsAndView(previousBindings: ReturnType<typeof useCent
       </div>
 
       {/* Messages */}
+      {historyError && (
+        <div role="alert" className="mx-6 mt-3 rounded-xl border border-amber-300/20 bg-amber-300/10 p-3 text-sm text-amber-100">
+          <p>{recovery.historyError}</p>
+          <button type="button" disabled={requestActive} onClick={() => void retryHistory()} className="mt-2 rounded-lg border border-white/15 px-3 py-1 disabled:opacity-40">{recovery.retryHistory}</button>
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {messages.map((msg) => (
           <motion.div
@@ -807,6 +888,7 @@ function useCentralChatEventsAndView(previousBindings: ReturnType<typeof useCent
           >
             {loading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
           </button>
+          {requestActive && <button type="button" disabled={cancelling} onClick={handleStop} className="rounded-xl border border-rose-300/25 px-3 py-2 text-sm text-rose-100 disabled:opacity-40">{recovery.stop}</button>}
         </div>
       </div>
     </div>

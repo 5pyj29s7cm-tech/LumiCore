@@ -1,9 +1,10 @@
 import { unifiedCoreCopy } from "../../i18n/locales/unifiedCore";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch } from "@/services/apiClient";
 import { formatUiMessage, uiMessage } from "../../i18n/uiMessages";
+import { useApp } from "@/contexts/AppContext";
 
 export type AutonomyGateConfig = {
   autonomyLevel: 'reactive' | 'semi' | 'full';
@@ -49,23 +50,72 @@ export const DEFAULT_AUTONOMY_GATE: AutonomyGateConfig = {
 
 export function AutonomousSettingsPanel({ t }: { t: any }) {
   const coreCopy = unifiedCoreCopy(t?.langCode === 'en' ? 'en' : 'zh');
+  const { user, workDomain, orgConnection } = useApp();
+  const scope = JSON.stringify([user?.uid, user?.role, workDomain, orgConnection?.orgId, orgConnection?.orgRole]);
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  type BackgroundPolicy = Pick<AutonomyGateConfig, 'autoProcessEnabled' | 'requireIdle'>;
+  type ScheduledTask = { id: string; enabled: boolean; cron?: string; lastRun?: string };
+  const policy = (value: any): BackgroundPolicy => {
+    if (typeof value?.autoProcessEnabled !== 'boolean' || typeof value?.requireIdle !== 'boolean') throw new Error('invalid_background_policy');
+    return { autoProcessEnabled: value.autoProcessEnabled, requireIdle: value.requireIdle };
+  };
   const [gateSaving, setGateSaving] = useState(false);
-  const [gateConfig, setGateConfig] = useState<AutonomyGateConfig>(DEFAULT_AUTONOMY_GATE);
+  const [gateState, setGateState] = useState<{ scope: string; value: BackgroundPolicy | null; error: boolean }>({ scope, value: null, error: false });
+  const [gateRetry, setGateRetry] = useState(0);
+  const [gateSaveState, setGateSaveState] = useState<'idle' | 'saved' | 'failed'>('idle');
+  const gateMutation = useRef<AbortController | null>(null);
+  const gateConfig = gateState.scope === scope ? gateState.value : null;
+  const gateError = gateState.scope === scope && gateState.error;
   const [nativeRuntime, setNativeRuntime] = useState<NativeRuntimeStatus | null>(null);
   const [nativeRuntimeError, setNativeRuntimeError] = useState('');
-  const [taskList, setTaskList] = useState<any[]>([]);
+  const [taskState, setTaskState] = useState<{ scope: string; value: ScheduledTask[] | null; error: boolean }>({ scope, value: null, error: false });
+  const [taskRetry, setTaskRetry] = useState(0);
+  const [taskSaving, setTaskSaving] = useState(false);
+  const [taskSaveState, setTaskSaveState] = useState<'idle' | 'saved' | 'failed'>('idle');
+  const taskMutation = useRef<AbortController | null>(null);
+  const taskList = taskState.scope === scope ? taskState.value : null;
+  const taskError = taskState.scope === scope && taskState.error;
   const [tasksExpanded, setTasksExpanded] = useState(false);
 
   useEffect(() => {
-    fetch('/api/autonomy/gate_config')
-      .then(r => r.json())
-      .then(d => setGateConfig({ ...DEFAULT_AUTONOMY_GATE, ...(d || {}) }))
-      .catch(() => {});
-    fetch('/api/scheduler/tasks')
-      .then(r => r.json())
-      .then(d => setTaskList(d.tasks || []))
-      .catch(() => {});
-  }, []);
+    const controller = new AbortController();
+    setGateState({ scope, value: null, error: false });
+    setGateSaveState('idle');
+    setGateSaving(false);
+    void (async () => {
+      try {
+        if (!user?.uid) throw new Error('authentication_required');
+        const response = await fetch('/api/autonomy/gate_config', { credentials: 'include', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]) });
+        if (!response.ok) throw new Error('load_failed');
+        const value = policy(await response.json());
+        if (!controller.signal.aborted && currentScope.current === scope) setGateState({ scope, value, error: false });
+      } catch {
+        if (!controller.signal.aborted && currentScope.current === scope) setGateState({ scope, value: null, error: true });
+      }
+    })();
+    return () => { controller.abort(); gateMutation.current?.abort(); gateMutation.current = null; };
+  }, [scope, gateRetry]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setTaskState({ scope, value: null, error: false });
+    setTaskSaveState('idle');
+    setTaskSaving(false);
+    void (async () => {
+      try {
+        if (!user?.uid) throw new Error('authentication_required');
+        const response = await fetch('/api/scheduler/tasks', { credentials: 'include', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]) });
+        if (!response.ok) throw new Error('load_failed');
+        const body = await response.json();
+        if (!Array.isArray(body?.tasks) || !body.tasks.every((task: any) => typeof task?.id === 'string' && typeof task.enabled === 'boolean')) throw new Error('invalid_tasks');
+        if (!controller.signal.aborted && currentScope.current === scope) setTaskState({ scope, value: body.tasks, error: false });
+      } catch {
+        if (!controller.signal.aborted && currentScope.current === scope) setTaskState({ scope, value: null, error: true });
+      }
+    })();
+    return () => { controller.abort(); taskMutation.current?.abort(); taskMutation.current = null; };
+  }, [scope, taskRetry]);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,17 +144,27 @@ export function AutonomousSettingsPanel({ t }: { t: any }) {
   }, []);
 
   const updateBackgroundPolicy = async (patch: Partial<AutonomyGateConfig>) => {
-    if (gateSaving) return;
+    if (!gateConfig || gateMutation.current) return;
+    const controller = new AbortController();
+    gateMutation.current = controller;
     setGateSaving(true);
+    setGateSaveState('idle');
     try {
       const response = await apiFetch('/api/autonomy/gate_config', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
+        body: JSON.stringify(patch), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
       });
       if (!response.ok) throw new Error('save_failed');
-      setGateConfig(await response.json());
-    } catch { toast.error(coreCopy.failed); }
-    finally { setGateSaving(false); }
+      const value = policy(await response.json());
+      if (!Object.entries(patch).every(([key, expected]) => value[key as keyof BackgroundPolicy] === expected)) throw new Error('unconfirmed_save');
+      if (!controller.signal.aborted && currentScope.current === scope) {
+        setGateState({ scope, value, error: false }); setGateSaveState('saved');
+      }
+    } catch {
+      if (!controller.signal.aborted && currentScope.current === scope) { setGateSaveState('failed'); toast.error(coreCopy.failed); }
+    } finally {
+      if (gateMutation.current === controller) { gateMutation.current = null; setGateSaving(false); }
+    }
   };
 
   const refreshNativeRuntime = async () => {
@@ -141,11 +201,24 @@ export function AutonomousSettingsPanel({ t }: { t: any }) {
   };
 
   const toggleTask = async (taskId: string) => {
+    if (!taskList || taskMutation.current || taskSaveState === 'failed') return;
+    const controller = new AbortController();
+    taskMutation.current = controller;
+    setTaskSaving(true); setTaskSaveState('idle');
     try {
-      const r = await fetch(`/api/scheduler/tasks/${taskId}/toggle`, { method: 'POST', credentials: 'include' });
+      const r = await apiFetch(`/api/scheduler/tasks/${encodeURIComponent(taskId)}/toggle`, { method: 'POST', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]) });
+      if (!r.ok) throw new Error('save_failed');
       const data = await r.json();
-      setTaskList(prev => prev.map(t => t.id === taskId ? { ...t, enabled: data.enabled } : t));
-    } catch {}
+      if (data?.id !== taskId || typeof data.enabled !== 'boolean') throw new Error('invalid_task_receipt');
+      if (!controller.signal.aborted && currentScope.current === scope) {
+        setTaskState(prev => prev.scope === scope ? { ...prev, value: prev.value?.map(task => task.id === taskId ? { ...task, enabled: data.enabled } : task) || null } : prev);
+        setTaskSaveState('saved');
+      }
+    } catch {
+      if (!controller.signal.aborted && currentScope.current === scope) { setTaskSaveState('failed'); toast.error(coreCopy.taskFailed); }
+    } finally {
+      if (taskMutation.current === controller) { taskMutation.current = null; setTaskSaving(false); }
+    }
   };
 
   const ToggleRow = ({
@@ -167,6 +240,7 @@ export function AutonomousSettingsPanel({ t }: { t: any }) {
         <div className="mt-1 text-[11px] leading-relaxed text-white/36">{desc}</div>
       </div>
       <button
+        type="button" aria-label={label} aria-pressed={checked}
         onClick={onClick}
         className={`h-5 w-10 shrink-0 rounded-full transition-all ${checked ? (danger ? 'bg-amber-400' : 'bg-cyan-500') : 'bg-white/10'}`}
       >
@@ -177,16 +251,21 @@ export function AutonomousSettingsPanel({ t }: { t: any }) {
 
   return (
     <div className="space-y-4">
-      <fieldset disabled={gateSaving} className="space-y-3 rounded-2xl border border-white/5 bg-white/5 p-4 disabled:opacity-60">
+      {gateError ? <div role="alert" className="text-xs text-amber-200">{coreCopy.loadFailed} <button type="button" onClick={() => setGateRetry(value => value + 1)} className="underline">{coreCopy.retry}</button></div>
+        : !gateConfig && <p role="status" className="text-xs text-white/50">{coreCopy.loading}</p>}
+      <fieldset disabled={!gateConfig || gateSaving} className="space-y-3 rounded-2xl border border-white/5 bg-white/5 p-4 disabled:opacity-60">
         <div className="text-xs font-bold text-white/70">{coreCopy.backgroundTitle}</div>
         <p className="text-xs leading-relaxed text-white/40">{coreCopy.backgroundDetail}</p>
         <ToggleRow label={coreCopy.enabled} desc={coreCopy.enabledDetail}
-          checked={gateConfig.autoProcessEnabled}
-          onClick={() => void updateBackgroundPolicy({ autoProcessEnabled: !gateConfig.autoProcessEnabled })} />
+          checked={gateConfig?.autoProcessEnabled ?? false}
+          onClick={() => void updateBackgroundPolicy({ autoProcessEnabled: !gateConfig?.autoProcessEnabled })} />
         <ToggleRow label={coreCopy.idle} desc={coreCopy.idleDetail}
-          checked={gateConfig.requireIdle}
-          onClick={() => void updateBackgroundPolicy({ requireIdle: !gateConfig.requireIdle })} />
+          checked={gateConfig?.requireIdle ?? false}
+          onClick={() => void updateBackgroundPolicy({ requireIdle: !gateConfig?.requireIdle })} />
       </fieldset>
+      {gateSaving && <p role="status" className="text-xs text-white/50">{coreCopy.saving}</p>}
+      {gateSaveState === 'failed' && <p role="alert" className="text-xs text-amber-200">{coreCopy.failed}</p>}
+      {gateSaveState === 'saved' && <p role="status" className="text-xs text-white/60">{coreCopy.saved}</p>}
 
       {/* Resident Runtime */}
       <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
@@ -254,20 +333,26 @@ export function AutonomousSettingsPanel({ t }: { t: any }) {
 
       {/* Scheduler Tasks */}
       <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
-        <button onClick={() => setTasksExpanded(!tasksExpanded)} className="w-full flex items-center justify-between">
+        <button type="button" aria-expanded={tasksExpanded} onClick={() => setTasksExpanded(!tasksExpanded)} className="w-full flex items-center justify-between">
           <div className="text-xs font-black uppercase tracking-widest text-white/60">{uiMessage('settings.scheduled-routines.5f06751a14', t?.langCode === 'en' ? 'en' : 'zh')}</div>
           <ChevronDown size={14} className={`text-white/40 transition-transform ${tasksExpanded ? 'rotate-180' : ''}`} />
         </button>
+        {taskError ? <div role="alert" className="text-xs text-amber-200">{coreCopy.tasksFailed} <button type="button" onClick={() => setTaskRetry(value => value + 1)} className="underline">{coreCopy.retry}</button></div>
+          : !taskList && <p role="status" className="text-xs text-white/50">{coreCopy.tasksLoading}</p>}
+        {taskSaveState === 'failed' && <div role="alert" className="text-xs text-amber-200">{coreCopy.taskFailed} <button type="button" onClick={() => setTaskRetry(value => value + 1)} className="underline">{coreCopy.retry}</button></div>}
+        {taskSaveState === 'saved' && <p role="status" className="text-xs text-white/60">{coreCopy.taskSaved}</p>}
 
         {tasksExpanded && (
           <div className="max-h-60 overflow-y-auto custom-scrollbar space-y-1">
-            {taskList.map((task: any) => (
+            {taskList?.length === 0 && <p className="text-xs text-white/50">{coreCopy.tasksEmpty}</p>}
+            {taskList?.map(task => (
               <div key={task.id} className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-white/[0.02]">
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-bold text-white/60 truncate">{task.id}</div>
                   <div className="text-[11px] text-white/30">{task.cron} {task.lastRun ? formatUiMessage('settings.last-value0.ad05dbfaea', { value0: new Date(task.lastRun).toLocaleTimeString() }) : ''}</div>
                 </div>
                 <button
+                  type="button" aria-label={task.id} aria-pressed={task.enabled} disabled={taskSaving || taskSaveState === 'failed'}
                   onClick={() => toggleTask(task.id)}
                   className={`w-8 h-4 rounded-full transition-all ${task.enabled !== false ? 'bg-cyan-500/50' : 'bg-white/10'}`}
                 >

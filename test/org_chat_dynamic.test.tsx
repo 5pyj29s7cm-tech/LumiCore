@@ -71,6 +71,113 @@ afterEach(() => {
   fixture.listeners.clear();
 });
 
+it.each(['active', 'messages'])('history recovery shows the failed %s read and retries without sending a business turn', async stage => {
+  let failing = true;
+  fixture.net.mockImplementation(async (url: string) => {
+    if (failing && url.includes(stage === 'active' ? '/active?' : '/messages?')) return reply({ error: 'Forbidden fixture history' }, 403);
+    return defaultFetch(url);
+  });
+  render(<CentralLumiChat />); await screen.findByRole('alert'); expect(screen.queryByText(historyText())).toBeNull();
+  failing = false; fireEvent.click(screen.getByRole('button', { name: 'Retry history' })); await ready();
+  expect(screen.queryByRole('alert')).toBeNull(); expect(fixture.emit).not.toHaveBeenCalled();
+});
+it('stop control sends only the exact scoped abort request and waits for terminal evidence', async () => {
+  render(<CentralLumiChat />); await ready(); const requestId = send('Long review');
+  act(() => event('agent:chunk', { requestId, text: 'Partial review' })); draft('Keep next draft');
+  const stop = screen.getByRole('button', { name: 'Stop this request' });
+  act(() => { fireEvent.click(stop); fireEvent.click(stop); });
+  const cancel = fixture.emit.mock.calls.filter(([name]) => name === 'agent:abort_chat'); expect(cancel).toHaveLength(1);
+  expect(cancel[0][1]).toEqual({ requestId, source: 'org-chat', domain: 'work', orgId: 'org-a', conversationId: conversation() });
+  act(() => cancel[0][2]({ ok: true, requestId, status: 'cancelling' }));
+  expect(sendButton().disabled).toBe(true); expect(screen.getByText('Cancellation requested; waiting for the final result.')).toBeTruthy();
+  act(() => event('agent:response', { requestId, text: 'Stopped by the fixture backend.', finalized: true, status: 'cancelled' }));
+  expect(sendButton().disabled).toBe(false); expect(screen.getByRole('textbox')).toHaveProperty('value', 'Keep next draft');
+  expect(screen.queryByRole('button', { name: 'Stop this request' })).toBeNull();
+});
+it('stop control permits retry after a denial and ignores its old acknowledgement after scope change', async () => {
+  const view = render(<CentralLumiChat />); await ready(); const requestId = send();
+  fireEvent.click(screen.getByRole('button', { name: 'Stop this request' })); const first = fixture.emit.mock.calls.at(-1)!;
+  act(() => first[2]({ ok: false, requestId, error: 'Cancellation denied' }));
+  expect(screen.getByText('Cancellation denied')).toBeTruthy(); expect(sendButton().disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Stop this request' })); expect(fixture.emit.mock.calls.filter(([name]) => name === 'agent:abort_chat')).toHaveLength(2);
+  const old = fixture.emit.mock.calls.at(-1)!; fixture.orgId = 'org-b'; view.rerender(<CentralLumiChat />); await ready();
+  send('New organization review'); act(() => old[2]({ ok: false, error: 'Stale cancellation denied' }));
+  expect(screen.queryByText('Stale cancellation denied')).toBeNull();
+});
+it('stop control retains the active request and permits retry when no acknowledgement arrives', async () => {
+  render(<CentralLumiChat />); await ready(); vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); send();
+  fireEvent.click(screen.getByRole('button', { name: 'Stop this request' }));
+  act(() => vi.advanceTimersByTime(8000));
+  expect(screen.getByText('Cancellation was not confirmed. You can retry stopping this request.')).toBeTruthy();
+  expect(sendButton().disabled).toBe(true); expect(screen.getByRole('button', { name: 'Stop this request' })).toHaveProperty('disabled', false);
+});
+it('stop control rejects a mismatched ACK and ignores an old ACK after the original terminal', async () => {
+  render(<CentralLumiChat />); await ready(); const requestId = send();
+  fireEvent.click(screen.getByRole('button', { name: 'Stop this request' })); const first = fixture.emit.mock.calls.at(-1)!;
+  act(() => first[2]({ ok: true, requestId: 'another-request' })); expect(screen.getByRole('button', { name: 'Stop this request' })).toHaveProperty('disabled', false);
+  fireEvent.click(screen.getByRole('button', { name: 'Stop this request' })); const old = fixture.emit.mock.calls.at(-1)!;
+  finish(requestId); send('Next request'); act(() => old[2]({ ok: false, error: 'Old terminal callback' }));
+  expect(screen.queryByText('Old terminal callback')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Stop this request' })).toHaveProperty('disabled', false);
+});
+it.each(['completed', 'cancelled', 'failed'])('terminal stop recovery requests the existing %s result instead of inventing a cancellation', async status => {
+  render(<CentralLumiChat />); await ready(); const requestId = send('Recover existing result'); draft('Preserved next draft');
+  fireEvent.click(screen.getByRole('button', { name: 'Stop this request' })); const abort = fixture.emit.mock.calls.at(-1)!;
+  act(() => abort[2]({ ok: true, requestId, status }));
+  const resumes = fixture.emit.mock.calls.filter(([name]) => name === 'agent:execution_resume'); expect(resumes).toHaveLength(1);
+  expect(resumes[0][1]).toEqual(abort[1]);
+  expect(sendButton().disabled).toBe(true); expect(screen.queryByText('Recovered final result')).toBeNull();
+  act(() => resumes[0][2]({ ok: true, snapshot: { requestId, source: 'org-chat', conversationId: conversation(), terminal: true, status } }));
+  expect(sendButton().disabled).toBe(true);
+  act(() => event('agent:response', { requestId, text: 'Recovered final result', finalized: true, replayed: true }));
+  expect(screen.getByText('Recovered final result')).toBeTruthy(); expect(sendButton().disabled).toBe(false);
+  expect(screen.getByRole('textbox')).toHaveProperty('value', 'Preserved next draft');
+  expect(screen.queryByRole('button', { name: 'Stop this request' })).toBeNull();
+});
+it('terminal stop recovery denial permits retry without releasing the unresolved request', async () => {
+  render(<CentralLumiChat />); await ready(); const requestId = send();
+  fireEvent.click(screen.getByRole('button', { name: 'Stop this request' }));
+  act(() => fixture.emit.mock.calls.at(-1)![2]({ ok: true, requestId, status: 'completed' }));
+  const recoveryCall = fixture.emit.mock.calls.find(([name]) => name === 'agent:execution_resume'); expect(recoveryCall).toBeTruthy();
+  act(() => recoveryCall![2]({ ok: false, error: 'Workspace access is unavailable.' }));
+  expect(screen.getByText('Workspace access is unavailable.')).toBeTruthy(); expect(sendButton().disabled).toBe(true);
+  expect(screen.getByRole('button', { name: 'Stop this request' })).toHaveProperty('disabled', false);
+});
+it('terminal stop recovery remains retryable if its successful ACK has no terminal replay', async () => {
+  render(<CentralLumiChat />); await ready(); vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); const requestId = send();
+  fireEvent.click(screen.getByRole('button', { name: 'Stop this request' }));
+  act(() => fixture.emit.mock.calls.at(-1)![2]({ ok: true, requestId, status: 'completed' }));
+  const recoveryCall = fixture.emit.mock.calls.find(([name]) => name === 'agent:execution_resume'); expect(recoveryCall).toBeTruthy();
+  act(() => recoveryCall![2]({ ok: true, snapshot: { requestId, source: 'org-chat', conversationId: conversation(), terminal: true } }));
+  act(() => vi.advanceTimersByTime(8000));
+  expect(screen.getByText('The final result could not be recovered. You can retry.')).toBeTruthy();
+  expect(sendButton().disabled).toBe(true); expect(screen.getByRole('button', { name: 'Stop this request' })).toHaveProperty('disabled', false);
+});
+it('terminal stop recovery rejects an unrelated snapshot and ignores stale callbacks after scope change', async () => {
+  const view = render(<CentralLumiChat />); await ready(); const requestId = send();
+  fireEvent.click(screen.getByRole('button', { name: 'Stop this request' }));
+  act(() => fixture.emit.mock.calls.at(-1)![2]({ ok: true, requestId, status: 'completed' }));
+  const recoveryCall = fixture.emit.mock.calls.find(([name]) => name === 'agent:execution_resume'); expect(recoveryCall).toBeTruthy();
+  act(() => recoveryCall![2]({ ok: true, snapshot: { requestId: 'wrong-request', source: 'org-chat', terminal: true } }));
+  expect(screen.getByRole('button', { name: 'Stop this request' })).toHaveProperty('disabled', false);
+  fireEvent.click(screen.getByRole('button', { name: 'Stop this request' }));
+  act(() => fixture.emit.mock.calls.at(-1)![2]({ ok: true, requestId, status: 'completed' })); const old = fixture.emit.mock.calls.at(-1)!;
+  fixture.orgId = 'org-b'; view.rerender(<CentralLumiChat />); await ready(); send('New scope request');
+  act(() => old[2]({ ok: false, error: 'Stale recovery failure' }));
+  act(() => event('agent:response', { requestId, text: 'Stale recovered result', finalized: true, replayed: true }));
+  expect(screen.queryByText('Stale recovery failure')).toBeNull(); expect(screen.queryByText('Stale recovered result')).toBeNull();
+});
+it('history recovery cannot overwrite a turn sent while the retry read was pending', async () => {
+  fixture.net.mockImplementation(async (url: string) => url.includes('/active?') ? reply({}, 503) : defaultFetch(url));
+  render(<CentralLumiChat />); await screen.findByRole('alert');
+  let resolve!: (value: any) => void; const pending = new Promise<any>(done => { resolve = done; });
+  fixture.net.mockImplementation(async (url: string) => url.includes('/active?') ? pending : defaultFetch(url));
+  fireEvent.click(screen.getByRole('button', { name: 'Retry history' })); const requestId = send('Current visible turn');
+  await act(async () => resolve(reply({ activeConversation: { id: 'obsolete-retry' } })));
+  expect(fixture.net.mock.calls.some(([url]) => String(url).includes('obsolete-retry'))).toBe(false);
+  expect(screen.getByText('Current visible turn')).toBeTruthy(); finish(requestId);
+});
+
 it.each(['owner', 'admin', 'member', 'viewer'])('sends within the selected organization for allowed %s chat access', async role => {
   fixture.orgRole = role;
   expect(canAccessOrganizationWorkspaceView(role, 'chat')).toBe(true);

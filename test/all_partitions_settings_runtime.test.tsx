@@ -3,6 +3,7 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const f = vi.hoisted(() => ({ fetch: vi.fn(), api: vi.fn(), invoke: vi.fn(), success: vi.fn(), error: vi.fn(), permission: vi.fn(), setSensor: vi.fn(), setPresence: vi.fn(), snapshot: vi.fn() }));
+vi.mock('../src/contexts/AppContext', () => ({ useApp: () => ({ user: { uid: 'synthetic-owner' }, workDomain: 'personal', orgConnection: null }) }));
 vi.mock('../src/services/apiClient', () => ({ apiFetch: (...args: any[]) => f.api(...args) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: any[]) => f.invoke(...args) }));
 vi.mock('sonner', () => ({ toast: { success: f.success, error: f.error } }));
