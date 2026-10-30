@@ -153,7 +153,7 @@ const REGISTERED_CLIENT_SURFACE_RULES: ReadonlyArray<{ pattern: RegExp; target: 
     if (!action) return [];
     const aliases = Array.from(new Set([
       surface.id, surface.label, ...(surface.navigationAliases || []),
-    ].map(value => String(value || '').trim()).filter(Boolean)));
+    ].map(value => String(value || '').trim()).filter(Boolean))).sort((left, right) => right.length - left.length);
     if (!aliases.length) return [];
     return [{ pattern: new RegExp(`(?:${aliases.map(escapePattern).join('|')})`, 'iu'), target: surface.target, action }];
   });
@@ -250,7 +250,13 @@ function affirmativeArtifactAction(text: string, only?: 'create' | 'mutate'): bo
   const create = /^(?:创建|新建|生成|写入|保存|另存|导出|起草|撰写|制作|整理成|做一份|给我一份)|^(?:creat(?:e|ing)|write|writ(?:e|ing)|generate|save|export|draft)\b/iu;
   // i18n-allow: Editing a bound document or field is an operation, not a mention of a revised draft.
   const mutate = /^(?:编辑|修改|修订|调整|更新|追加|替换|删除|重命名|移动|复制|覆盖|合并|改成|改为|换成)|^(?:edit|modify|revise|update|append|replace|delete|remove|rename|move|copy|overwrite|merge|combine)\b/iu;
-  for (const clause of affirmativeActionClauses(currentTurnText(text))) {
+  // i18n-allow: A complete direct attachment handoff can bind an omitted object in its next clause.
+  const attachmentHandoff = (value: string) => /^(?:把|将)/u.test(value)
+    && /附件(?:返回|取回|提供|交付)(?:这里|当前聊天|本次聊天)?[，,。；;\s]*$/u.test(value);
+  let priorAttachmentEnd: number | null = null;
+  for (const { probe: clause, start, text: sourceClause } of affirmativeActionInstructionClauses(currentTurnText(text))) {
+    const followsPriorHandoff = priorAttachmentEnd === start;
+    priorAttachmentEnd = null;
     const value = withoutLocationLiterals(clause).trim()
       .replace(/^(?:\[[^\]\r\n]*\]\s*)+/u, '')
       .replace(/^(?:\d+[.)、]\s*)/u, '');
@@ -260,11 +266,29 @@ function affirmativeArtifactAction(text: string, only?: 'create' | 'mutate'): bo
     const head = value
       // i18n-allow: A continuation discourse prefix leaves the existing imperative predicate unchanged.
       .replace(/^(?:(?:请你?|麻烦你?|帮我)\s*)?(?:继续|接着)(?:同一|这个|该|当前|原)?任务\s*[:：,，]\s*|^(?:please\s+)?(?:continue|resume)\s+(?:(?:the\s+)?same|this|that|current|original|the)?\s*task\s*[:：,]\s*/iu, '')
-      .replace(/^(?:(?:请你?|麻烦你?|帮我|给我(?!一份)|现在|直接|立即|务必|先|再|继续|然后|接着|同时|并且|并|也|本次|这次|(?:我)?(?:需要|要求|希望)你?|我想让你|你必须|你需要)\s*)+/u, '')
+      .replace(/^(?:(?:请你?|麻烦你?|帮我|给我(?!一份)|现在|直接|立即|务必|先|再|重新|继续|然后|接着|同时|并且|并|也|本次|这次|(?:我)?(?:需要|要求|希望)你?|我想让你|你必须|你需要)\s*)+/u, '')
       .replace(/^(?:(?:please|now|then|next|you\s+must|you\s+should|must|should|need\s+to|required\s+to|i\s+(?:need|want)\s+you\s+to|(?:can|could|would)\s+you)\s+)+/iu, '');
     // A replacement read predicate changes the selected action/target, not file contents.
     if (mutate.test(head) && explicitLocalArtifactReadIntent(clause)) continue;
     const predicates = head.split(/\s+(?:and\s+then|then|afterwards)\s+/iu);
+    // An explicit attachment handoff can coordinate a second edit without punctuation. Keep
+    // this under the affirmative/quote projection: mentions and prohibitions
+    // must not turn into edits merely because they contain a coordinator.
+    // i18n-allow: Existing delivery predicates followed by a coordinated edit.
+    for (const coordination of head.matchAll(/并且|并/gu)) {
+      const before = head.slice(0, coordination.index).trim();
+      const next = head.slice(coordination.index! + coordination[0].length).trim();
+      const followsHandoff = (attachmentHandoff(before) || followsPriorHandoff
+        && /^(?:返回|取回|提供|交付)$/u.test(before)) && !/[？?]/u.test(next); // i18n-allow: Direct Chinese handoff predicate and question boundary.
+      // A later relative-clause closure still belongs to the object being
+      // returned, rather than an edit following a completed handoff predicate.
+      // i18n-allow: Chinese object-relative and terminal handoff grammar.
+      const relativeObject = /的[^，,。；;\n]*(?:返回|取回|提供|交付)(?:这里|当前聊天|本次聊天)?[，,。；;\s]*$/u.test(next);
+      if (followsHandoff && !relativeObject && mutate.test(next)) predicates.push(next);
+    }
+    // Ellipsis binds only the immediately following comma-coordinated clause,
+    // not a later independent sentence containing the same delivery words.
+    priorAttachmentEnd = attachmentHandoff(head) && /[，,]\s*$/u.test(head) ? start + sourceClause.length : null;
     // i18n-allow: Explicit object/location/tool prefixes retain their following operation.
     if (/^(?:把|将|对|为|在|用|使用|通过|根据)/u.test(head)) {
       for (let index = 1; index < Math.min(head.length, 180); index++) {
@@ -848,7 +872,7 @@ function clientNavigation(text: string): NormalizedActionIntent | null {
   text = withoutLocationLiterals(text);
   const clauses = affirmativeActionInstructionClauses(text);
   // i18n-allow: A client surface is the direct navigation operand, with only client/determiner qualifiers between them.
-  const directPrefix = new RegExp('^(?:(?:请你?|帮我|麻烦你?|现在|直接|先|再|然后|接着|也|并|只|仅)\\s*|(?:please|now|directly|first|then|next|also|just)\\s+)*(?:' + CLIENT_NAVIGATION_VERB_RE.source + ')\\s*(?:(?:到|(?:Lumi|露米|当前客户端)(?:的)?|当前|我的)\\s*|(?:to|the|current|my|personal|lumi|client)\\s+)*$', 'iu');
+  const directPrefix = new RegExp('^(?:(?:请你?|帮我|麻烦你?|现在|直接|先|再|然后|接着|也|并|只|仅)\\s*|(?:please|now|directly|first|then|next|also|just)\\s+)*(?:' + CLIENT_NAVIGATION_VERB_RE.source + ')\\s*(?:(?:到|(?:Lumi|露米|当前客户端)(?:的)?|当前|我的)\\s*|\\b(?:to|the|current|my|personal|lumi|client)(?:\\s+|$))*$', 'iu');
   const surface = CLIENT_SURFACE_RULES.find(candidate => clauses.some(({ text: clauseText, probe }) => {
     if (!CLIENT_NAVIGATION_VERB_RE.test(probe)) return false;
     const match = clauseText.match(candidate.pattern);

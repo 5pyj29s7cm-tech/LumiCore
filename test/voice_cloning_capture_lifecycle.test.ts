@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { loadSourceModule } from './source_expression';
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import * as React from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 vi.mock('../src/services/voiceService', () => ({
@@ -56,20 +56,31 @@ it('releases a late voiceprint grant after stop without creating audio processin
   expect(stop).toHaveBeenCalledOnce(); expect(audio).not.toHaveBeenCalled(); hook.unmount();
 });
 
-it('releases a late wake-word grant after unmount without opening a server wake session', async () => {
+it('releases a late wake-word grant after enabled server readiness and unmount without starting audio processing', async () => {
   let grant!: (stream: MediaStream) => void;
   vi.mocked(requestMicrophoneStream).mockImplementation(() => new Promise(resolve => { grant = resolve; }));
   const audio = vi.fn(); vi.stubGlobal('AudioContext', audio);
   const stop = vi.fn(); const stream = { getTracks: () => [{ stop }] } as any;
-  const socket = { id: 'synthetic', connected: true, on: vi.fn(), off: vi.fn(), emit: vi.fn() } as any;
-  const hook = renderHook(() => useWakeWord({ socket, enabled: false, startCallRef: { current: vi.fn() } }));
+  const listeners = new Map<string, (...args: any[]) => any>();
+  const socket = { id: 'synthetic', connected: true,
+    on: vi.fn((event: string, handler: (...args: any[]) => any) => listeners.set(event, handler)),
+    off: vi.fn((event: string, handler: (...args: any[]) => any) => { if (listeners.get(event) === handler) listeners.delete(event); }), emit: vi.fn() } as any;
+  const startCall = vi.fn();
+  const hook = renderHook(() => useWakeWord({ socket, enabled: true, startCallRef: { current: startCall } }));
+  await waitFor(() => expect(socket.emit).toHaveBeenCalledWith('wake:start'));
+  expect(requestMicrophoneStream).not.toHaveBeenCalled();
+  const ready = listeners.get('wake:started')!;
   let pending!: Promise<void>;
-  act(() => { pending = hook.result.current.enable(); });
-  await act(async () => { await hook.result.current.enable(); });
-  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  act(() => { pending = ready(); void ready(); });
   expect(requestMicrophoneStream).toHaveBeenCalledOnce();
+  const signal = vi.mocked(requestMicrophoneStream).mock.calls[0][1]!;
   hook.unmount();
+  expect(signal.aborted).toBe(true); expect(listeners.has('wake:started')).toBe(false);
   await act(async () => { grant(stream); await pending; });
   expect(stop).toHaveBeenCalledOnce(); expect(audio).not.toHaveBeenCalled();
-  expect(socket.emit.mock.calls.some((call: any[]) => call[0] === 'wake:start')).toBe(false);
+  expect(socket.emit.mock.calls.filter((call: any[]) => call[0] === 'wake:start')).toHaveLength(1);
+  expect(socket.emit).toHaveBeenCalledWith('wake:stop');
+  expect(socket.emit.mock.calls.some((call: any[]) => call[0] === 'wake:audio')).toBe(false);
+  await act(async () => { await ready(); });
+  expect(requestMicrophoneStream).toHaveBeenCalledOnce(); expect(startCall).not.toHaveBeenCalled();
 });

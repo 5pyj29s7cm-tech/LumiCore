@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-29T09:11:33.318642+00:00",
-  "localDate": "2026-10-29",
+  "updatedAt": "2026-10-30T04:28:35.299278+00:00",
+  "localDate": "2026-10-30",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序已加载验证与其余分区隔离复测",
-    "status": "runtime-loaded-regression-partial-native-ui-paused-by-user",
-    "instruction": "用户要求加载验证并测试其余分区，真人坐标测试先停。主后端已加载f7352d35，原生客户端自动重连。新增隔离回归已封存，5处产品问题及安装技能校验限制保持显式未修；默认模型、已验收和原暂停项不变。"
+    "title": "主程序问题修复与加载验证",
+    "status": "software-verified-runtime-loading-and-installed-skill-recovery-pending",
+    "instruction": "5处原产品问题、同源义务遗漏及技能私有依赖重签边界已修；82文件1095项隔离测试全过，类型/前端构建通过。待加载新源码及执行已审查技能恢复；真人测试暂停、已验收/保留项和默认模型不变。"
   },
   "acceptedWholeItems": [
     3,
@@ -36,12 +36,12 @@
     "Existing file full body returned through normal Socket and persisted exactly once with terminal task/turn"
   ],
   "knownUnresolved": [
-    "Five confirmed unmodified product gaps: terminal replacement lifecycle, two English navigation cases, compound retrieval/edit obligation, and documentation search binding.",
-    "Seven assertions failed in this round: three product navigation/contract assertions and four stale test-premise/owner-layer assertions; separate terminal/docs probes confirm two additional product gaps.",
-    "Some installed skills are skipped by runtime identity validation; current installation availability is not established by passing isolated tests.",
-    "Prior round seven scoped failures and composite calculation semantic verification remain open; they were not replayed in this round.",
-    "Native coordinate/UI testing is paused by user request; hardware/provider business end-to-end and some organization branches remain unverified.",
-    "Other held acceptance boundaries and prior i18n/architecture findings remain unresolved."
+    "Source-level and isolated tests, not native UI or whole-business acceptance.",
+    "Installed8Skill recovery has only been rehearsed; live maintenance pending.",
+    "Legacy disabled Skills and missing E2B credential are not enabled or fabricated.",
+    "Prior7scoped failures and composite calculation semantic verification remain open, outside this repair round.",
+    "Global i18n97findings and existing architecture diagnostics remain.",
+    "Cross-night baseline already had14more interactions and303more routing records before resumed tests; do not claim zero background activity."
   ],
   "validation": {
     "tsc": "passed in both repositories",
@@ -52,10 +52,10 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "D:/Lumi-Audit-Temp/main-loaded-regression-20261029",
-    "manifest": "D:/Lumi-Audit-Temp/main-loaded-regression-20261029/evidence-seal.json",
-    "sha256": "68607399b9cba71303979c7c626e306d3c19a1b908b65a558f9f92a615107982",
-    "files": 130,
+    "directory": "D:/Lumi-Audit-Temp/main-partition-repair-20261029",
+    "manifest": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/software-seal.json",
+    "sha256": "4754fc6728862b4b5f655d16a39c193849771835162c968beca1468ef4f38981",
+    "files": 120,
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -130,18 +130,15 @@
   "currentCheckpointValidation": {
     "jsonParsed": true,
     "gitDiffCheck": "passed",
-    "productionSourceChanged": false,
-    "runtimeLoadedSourceCommit": "f7352d35e5a12054e8d5514518de419b392d0d1b",
-    "backendPid": 47516,
-    "nativeClientAutomaticallyReconnected": true,
-    "scopedTests": "672/679 across73 unique existing files;7 failures retained with classification",
-    "typecheck": "not repeated; unchanged production source has prior f7352d35 passing check",
-    "existingPassedOperationsReplayed": false,
-    "protectedAcceptedStateUnchanged": true,
-    "defaultModelUnchanged": true,
+    "sourceChanged": true,
+    "productionFiles": 4,
+    "tests": "1095/1095 across82files;45unselected",
+    "typecheck": "passed",
+    "desktopUIBuild": "passed",
     "nativeUITesting": "paused-by-user",
+    "installedSkillLiveRecovery": "pending",
     "wholeApplicationAccepted": false,
-    "checkpointOnly": true,
+    "installerReleased": false,
     "remotePushPerformed": false
   },
   "orderedPassSummary": {
@@ -295,8 +292,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "runtime-loaded-regression-partial-native-ui-paused-by-user",
-    "priority": "用户要求加载验证并测试其余分区，真人坐标测试先停。主后端已加载f7352d35，原生客户端自动重连。新增隔离回归已封存，5处产品问题及安装技能校验限制保持显式未修；默认模型、已验收和原暂停项不变。"
+    "status": "software-verified-runtime-loading-and-installed-skill-recovery-pending",
+    "priority": "5处原产品问题、同源义务遗漏及技能私有依赖重签边界已修；82文件1095项隔离测试全过，类型/前端构建通过。待加载新源码及执行已审查技能恢复；真人测试暂停、已验收/保留项和默认模型不变。"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -2050,5 +2047,163 @@
     "wholeApplicationAccepted": false,
     "installerReleased": false,
     "remotePushPerformed": false
+  },
+  "latestMainPartitionRepair": {
+    "schema": "lumi.partition-repair.software.v1",
+    "atUTC": "2026-10-30T04:28:35.299278+00:00",
+    "clientDate": "2026-10-30",
+    "baseCommit": "859bdb35298da6e1e03416af4126f5a11dc45c46",
+    "sourceFiles": [
+      {
+        "path": "server/cognition/normalized_action_intent.ts",
+        "sha256": "91ccfe9a76d787ddc0e1ad496ede45573065ba34d58088e0245b0a7b89840270",
+        "bytes": 95465
+      },
+      {
+        "path": "server/mcp/client/skill_runtime.ts",
+        "sha256": "3d6e99e7442f94229174471a2ac202e29143efb9c0b83a61e96208e071b0688c",
+        "bytes": 14115
+      },
+      {
+        "path": "server/socket/terminal.ts",
+        "sha256": "ad4464ecd23bf3bb9e34f276ccd9a1bd42b742a033bf7ebceedc51bfbc932492",
+        "bytes": 4791
+      },
+      {
+        "path": "src/components/Docs.tsx",
+        "sha256": "312a36fe26ab7f3e612ddf9865aeeb7c03e2ffc05fa487137ec99187ba987ff0",
+        "bytes": 21437
+      },
+      {
+        "path": "test/artifact_retrieval_contract.test.ts",
+        "sha256": "b67620a74bb49c09f25660cb58d20db9d40b40947bca9f818192882465fcc8f3",
+        "bytes": 7830
+      },
+      {
+        "path": "test/chat_song_navigation_boundary.test.ts",
+        "sha256": "0b6b0bc4af0582c09a9992d4410db4c230b5cd8c7919c8f75de68646a9f65407",
+        "bytes": 4019
+      },
+      {
+        "path": "test/mcp_skill_install_resilience.test.ts",
+        "sha256": "e18f4be1d2ee348ae5c3554ed52343bf3f6e08944f4fc844c83fb92c6cbd897e",
+        "bytes": 80439
+      },
+      {
+        "path": "test/media_request_lifecycle.test.ts",
+        "sha256": "438f83d6b687bfabc1a7c02cba5d8ce867796bef956ff392e31482352a902b9a",
+        "bytes": 4324
+      },
+      {
+        "path": "test/memory_territory_navigation.test.ts",
+        "sha256": "0f71e0ee5c88c9ac873157259b4872891d19dd3d40b0a208d63f1d305f015088",
+        "bytes": 3955
+      },
+      {
+        "path": "test/operation_mode_commands.test.ts",
+        "sha256": "97f07ee52e34399eda3d66a0b9570a3e559ba437bf27ab63bad8f33dcd5f6b26",
+        "bytes": 7885
+      },
+      {
+        "path": "test/voice_cloning_capture_lifecycle.test.ts",
+        "sha256": "c69a792efebc92cb5741110a80c2c64ad3d5bc41bd7fad8722cca6e8c1b4f9b9",
+        "bytes": 5695
+      },
+      {
+        "path": "test/docs_search.test.tsx",
+        "sha256": "2e33d18f08614de6d2399aac889717c7f3cbe76652a4f2cff85d4b50d6c7ddf2",
+        "bytes": 4200
+      },
+      {
+        "path": "test/terminal_session_lifecycle.test.ts",
+        "sha256": "8ee44b335239704279194922a2464890b62e0249315b178cd1ea9cbfaedbceaf",
+        "bytes": 6680
+      }
+    ],
+    "status": "software-verified-runtime-loading-and-installed-skill-recovery-pending",
+    "version": "3.1.1",
+    "originalProductIssuesFixed": [
+      "terminal stale callbacks",
+      "English navigation qualifiers",
+      "plural navigation alias precedence",
+      "attachment retrieval with edit obligation",
+      "documentation search"
+    ],
+    "additionalFixes": [
+      "same-owner retrieval/edit and resave obligations",
+      "managed Skill repair rejects changed private dependencies"
+    ],
+    "fixtureAssertionsCorrected": 4,
+    "tests": {
+      "files": 82,
+      "passed": 1095,
+      "failed": 0,
+      "skipped": 45,
+      "runnerExitCodes": [
+        0,
+        0
+      ]
+    },
+    "validation": {
+      "typecheck": "passed",
+      "desktopUIBuild": "passed",
+      "diffCheck": "passed",
+      "i18n": {
+        "baseUnique": 97,
+        "currentUnique": 97,
+        "added": [],
+        "resolved": []
+      },
+      "architectureSameExistingFailures": true,
+      "postTestChange": "One inline grammar annotation only; emitted JavaScript identical"
+    },
+    "preservation": {
+      "nativeUI": "paused-by-user",
+      "acceptedWholeItems": [
+        3,
+        15,
+        16
+      ],
+      "heldItemsUnchanged": true,
+      "defaultModelUnchanged": true,
+      "lawyerDesignerExcluded": true,
+      "businessToolCallsRequested": 0,
+      "remotePushPerformed": false
+    },
+    "limits": [
+      "Source-level and isolated tests, not native UI or whole-business acceptance.",
+      "Installed8Skill recovery has only been rehearsed; live maintenance pending.",
+      "Legacy disabled Skills and missing E2B credential are not enabled or fabricated.",
+      "Prior7scoped failures and composite calculation semantic verification remain open, outside this repair round.",
+      "Global i18n97findings and existing architecture diagnostics remain.",
+      "Cross-night baseline already had14more interactions and303more routing records before resumed tests; do not claim zero background activity."
+    ],
+    "testPreparation": "Transitional integrated run overlapped final grammar edit and retained one failing new boundary; source-consistency gate rejected it. Only integrated-final is authoritative.",
+    "cleanupLimit": "Automatic approval rejected cleanup of3isolated temporary config directories with blocked by policy; no alternate deletion attempted.",
+    "evidence": {
+      "directory": "D:/Lumi-Audit-Temp/main-partition-repair-20261029",
+      "manifest": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/software-seal.json",
+      "sha256": "4754fc6728862b4b5f655d16a39c193849771835162c968beca1468ef4f38981",
+      "files": 120,
+      "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
+      "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
+    },
+    "report": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/代码修复结果.txt",
+    "priorCurrentItem": {
+      "id": null,
+      "title": "主程序已加载验证与其余分区隔离复测",
+      "status": "runtime-loaded-regression-partial-native-ui-paused-by-user",
+      "instruction": "用户要求加载验证并测试其余分区，真人坐标测试先停。主后端已加载f7352d35，原生客户端自动重连。新增隔离回归已封存，5处产品问题及安装技能校验限制保持显式未修；默认模型、已验收和原暂停项不变。"
+    },
+    "priorEvidence": {
+      "directory": "D:/Lumi-Audit-Temp/main-loaded-regression-20261029",
+      "manifest": "D:/Lumi-Audit-Temp/main-loaded-regression-20261029/evidence-seal.json",
+      "sha256": "68607399b9cba71303979c7c626e306d3c19a1b908b65a558f9f92a615107982",
+      "files": 130,
+      "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
+      "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
+    },
+    "wholeApplicationAccepted": false,
+    "installerReleased": false
   }
 }

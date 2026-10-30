@@ -1,5 +1,21 @@
 import './helpers';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { buildLumiExecutionPipeline } from '../server/cognition/execution_pipeline';
+import { ToolRegistry } from '../server/tools/registry';
+import { registerFileOpsTools } from '../server/tools/definitions/file_ops';
+
+function modePipeline(text: string) {
+  const registry = new ToolRegistry(); registerFileOpsTools(registry);
+  const handler = vi.spyOn(registry.get('write_file')!, 'handler').mockResolvedValue('Unexpected write');
+  const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'mode-policy-fixture', text,
+    channel: 'chat', source: 'chat', operationMode: 'chat', targetIsLumi: true }, registry });
+  const attemptWrite = () => registry.execute('write_file', { path: process.env.LUMI_DATA_DIR + '/not-executed.txt', content: 'Must not write' }, {
+    userId: 'mode-policy-fixture', authenticated: true, authRole: 'admin', localExecution: true,
+    currentTurnExecutionRequested: pipeline.executionRequested, actionIntent: text, toolPolicy: pipeline.authorizationPolicy,
+  });
+  return { pipeline, handler, attemptWrite };
+}
+afterEach(() => vi.restoreAllMocks());
 
 beforeAll(async () => {
   const { initDatabase } = await import('../db_layer');
@@ -75,7 +91,13 @@ describe('shared Lumi operation mode commands', () => {
     });
 
     expect(ordinary.effectiveOperationMode).toBe('assistant');
-    expect(ordinary.allowToolUseForTurn).toBe(false);
+    // Tool availability is not an action request or approval to mutate files.
+    const { pipeline, handler, attemptWrite } = modePipeline(ordinary.routeText);
+    expect(pipeline.executionRequested).toBe(false);
+    expect(pipeline.modelToolProjection.toolNames).toEqual([]);
+    expect(pipeline.authorizationPolicy.requireConfirmation).toContain('write_file');
+    await expect(attemptWrite()).rejects.toThrow(/requires user confirmation/i);
+    expect(handler).not.toHaveBeenCalled();
     for (const action of [messagingAction, desktopAction]) {
       expect(action.autoPromoteToAssistant).toBe(false);
       expect(action.effectiveOperationMode).toBe('assistant');
@@ -97,7 +119,13 @@ describe('shared Lumi operation mode commands', () => {
     expect(flow.requestedMode).toBeNull();
     expect(flow.effectiveOperationMode).toBe('assistant');
     expect(flow.clientActionOnlyTurn).toBe(false);
-    expect(flow.allowToolUseForTurn).toBe(false);
+    expect(flow.conceptualCapabilityQuestion).toBe(true);
+    const { pipeline, handler, attemptWrite } = modePipeline('\u5207\u6362\u5230\u81ea\u4e3b\u6a21\u5f0f');
+    expect(pipeline.executionRequested).toBe(false);
+    expect(pipeline.modelToolProjection.toolNames).toEqual([]);
+    expect(pipeline.authorizationPolicy.forbiddenTools).toContain('write_file');
+    await expect(attemptWrite()).rejects.toThrow(/forbidden/i);
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it('keeps a compound mode switch and external task in one executable turn', async () => {

@@ -55,6 +55,14 @@ describe('existing artifact handoff is not new production', () => {
   it('keeps an affirmative action after a prohibited clause', () => {
     expect(buildArtifactRetrievalContract(`${base}，不要修改原视频，但另存一个副本。`)).toBeNull();
   });
+  it.each(['并修改对白', '并且编辑字幕', '并修订台词'])('does not finalize a coordinated edit from the retrieved attachment alone: %s', edit => {
+    const taskText = base + edit;
+    const record = fixture();
+    expect(buildActionContract(taskText)).toMatchObject({ kind: 'artifact_work', applies: true });
+    expect(buildArtifactRetrievalContract(taskText)).toBeNull();
+    expect(hasCompletedCoreAction(taskText, [record], identity)).toBe(false);
+    expect(finalizeLumiResponse({ ...identity, taskText, responseText: '已取回原视频。', source: 'chat', toolRecords: [record] }).blocked).toBe(true);
+  });
   it('keeps owner, current turn, exact revision, declared observe capability and hash requirements', () => {
     const record = fixture(); const payload = JSON.parse(record.result!);
     for (const bad of [

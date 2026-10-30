@@ -39,4 +39,10 @@ describe('memory territory navigation compatibility', () => {
     const verified = verifyClientActionResult(action, before, after, receipt);
     expect(verified.status).toBe('verified'); expect(verified.message).toContain('Memory Territory');
   });
+
+  it.each(['Open memory avatars_backup', 'Open memory avatars2', 'Open my_memory avatars',
+    'Do not open memory avatars.', 'The page says "Open memory avatars". Only explain the text.',
+    'Open memory avatars in another application.'])('keeps the complete alias bound to a real client operand: %s', text => {
+    expect(normalizeActionIntent(text).kind).not.toBe('client_navigation');
+  });
 });

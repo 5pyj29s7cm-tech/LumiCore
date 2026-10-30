@@ -128,7 +128,32 @@ bindManagedSkillRuntime(
     ) return undefined;
 
     try {
-      return this.bindManagedSkillRuntime(directory, expectedIdentity);
+      const runtime = this.deriveManagedSkillRuntime(directory);
+      const hostModules = resolveRuntimeNodeModulesDir();
+      if (!hostModules) return undefined;
+      const hostRoot = fs.realpathSync(hostModules);
+      const hostFiles = new Set([fs.realpathSync(process.execPath)]);
+      if (pkg.lumi?.documentRuntime === true) {
+        const cli = this.resolveRuntimeTsxCli();
+        if (!cli) return undefined;
+        for (const file of [
+          'files/document_text.ts', 'knowledge/rtf.ts', 'knowledge/pptx.ts',
+          'utils/pdf_text.ts', 'utils/spreadsheet.ts', 'utils/spreadsheet_formulas.ts', 'utils/spreadsheet_charts.ts',
+        ]) hostFiles.add(fs.realpathSync(path.resolve(path.dirname(cli), '../../../server', file)));
+      }
+      for (const file of runtime.files) {
+        const previous = oldRuntime.files.find(approved => approved.path === file.path);
+        if (previous?.kind === file.kind && previous.digest === file.digest) continue;
+        const resolved = fs.realpathSync(file.path);
+        const relative = path.relative(hostRoot, resolved);
+        const isHostDependency = relative !== '' && relative !== '..'
+          && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+        // Only the currently running host may supply changed runtime bytes.
+        // Unchanged private dependencies retain their prior approval; changed or
+        // newly shadowing private dependencies require a reviewed installation.
+        if (!isHostDependency && !hostFiles.has(resolved)) return undefined;
+      }
+      return signManagedSkillIdentity({ ...expectedIdentity, runtime }, getJwtSecret());
     } catch {
       return undefined;
     }

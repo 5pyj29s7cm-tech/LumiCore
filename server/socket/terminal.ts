@@ -9,6 +9,14 @@ interface TerminalSession {
 
 const sessions: Map<string, TerminalSession> = new Map();
 
+function retireSession(sessionId: string) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  // Retire ownership before kill: even a synchronous exit/error callback is stale.
+  sessions.delete(sessionId);
+  try { session.proc.kill(); } catch {}
+}
+
 function getShell(): { cmd: string; args: string[] } {
   if (process.platform === 'win32') {
     // Use PowerShell with UTF-8
@@ -43,10 +51,7 @@ export function registerTerminalHandlers(socket: any, _getUserId: (s: any) => st
     const sessionId = socket.id;
 
     // Clean up existing session for this socket
-    if (sessions.has(sessionId)) {
-      try { sessions.get(sessionId)!.proc.kill(); } catch {}
-      sessions.delete(sessionId);
-    }
+    retireSession(sessionId);
 
     const { cmd, args } = getShell();
 
@@ -65,21 +70,25 @@ export function registerTerminalHandlers(socket: any, _getUserId: (s: any) => st
     sessions.set(sessionId, session);
 
     proc.stdout?.on('data', (data: Buffer) => {
+      if (sessions.get(sessionId) !== session) return;
       socket.emit('terminal:output', { data: data.toString('utf-8') });
     });
 
     proc.stderr?.on('data', (data: Buffer) => {
+      if (sessions.get(sessionId) !== session) return;
       socket.emit('terminal:output', { data: data.toString('utf-8') });
     });
 
     proc.on('exit', (code: number | null) => {
-      socket.emit('terminal:exit', { code: code ?? -1 });
+      if (sessions.get(sessionId) !== session) return;
       sessions.delete(sessionId);
+      socket.emit('terminal:exit', { code: code ?? -1 });
     });
 
     proc.on('error', (err: Error) => {
-      socket.emit('terminal:output', { data: `\r\n\x1b[31mTerminal error: ${err.message}\x1b[0m\r\n` });
+      if (sessions.get(sessionId) !== session) return;
       sessions.delete(sessionId);
+      socket.emit('terminal:output', { data: `\r\n\x1b[31mTerminal error: ${err.message}\x1b[0m\r\n` });
     });
 
     socket.emit('terminal:ready', { sessionId });
@@ -122,8 +131,7 @@ export function registerTerminalHandlers(socket: any, _getUserId: (s: any) => st
   socket.on('terminal:destroy', socketGuard(() => {
     const session = sessions.get(socket.id);
     if (session) {
-      try { session.proc.kill(); } catch {}
-      sessions.delete(socket.id);
+      retireSession(socket.id);
       console.log(`[Terminal] Session destroyed for socket ${socket.id}`);
     }
   }));
@@ -131,8 +139,7 @@ export function registerTerminalHandlers(socket: any, _getUserId: (s: any) => st
   socket.on('disconnect', socketGuard(() => {
     const session = sessions.get(socket.id);
     if (session) {
-      try { session.proc.kill(); } catch {}
-      sessions.delete(socket.id);
+      retireSession(socket.id);
       console.log(`[Terminal] Cleaned up session for disconnected socket ${socket.id}`);
     }
   }));

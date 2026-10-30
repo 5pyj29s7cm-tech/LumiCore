@@ -8,6 +8,7 @@ import { LoadingSpinner, GlassCard, IconBox } from './SharedUI';
 export function Docs({ t }: { t: any }) {
   const { data, loading } = useModuleData<any>('/api/modules/docs');
   const [activeTab, setActiveTab] = React.useState('philosophy');
+  const [query, setQuery] = React.useState('');
 
   if (loading) return <LoadingSpinner />;
 
@@ -19,44 +20,9 @@ export function Docs({ t }: { t: any }) {
     { id: 'api', title: t.apiReference || 'API Reference', icon: <Code size={18} /> },
   ];
 
-  return (
-    <div className="max-w-6xl mx-auto space-y-12">
-      <div className="text-center space-y-6">
-        <h1 className="text-6xl font-bold tracking-tighter glow-text">{data?.title || t.docs}</h1>
-        <p className="text-xl text-white/60 max-w-2xl mx-auto">{t.docsTagline || 'Learn how LumiCore uses tools, memory, workflows, and local device capabilities.'}</p>
-        <div className="max-w-md mx-auto relative">
-          <Input placeholder={t.searchDocs || "Search documentation..."} className="bg-white/5 border-white/10 rounded-2xl p-6 h-auto text-lg pl-12" />
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40" size={20} />
-        </div>
-      </div>
-
-      {/* Secondary Navigation */}
-      <div className="flex flex-wrap justify-center gap-4 border-b border-white/5 pb-8">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-2 px-6 py-3 rounded-full transition-all ${
-              activeTab === tab.id 
-                ? 'bg-celestial-nebula text-white shadow-[0_0_20px_rgba(255,45,85,0.3)]' 
-                : 'bg-white/5 text-white/40 hover:bg-white/10'
-            }`}
-          >
-            {tab.icon}
-            <span className="font-bold text-sm uppercase tracking-widest">{tab.title}</span>
-          </button>
-        ))}
-      </div>
-
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={activeTab}
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -20 }}
-          className="space-y-12"
-        >
-          {activeTab === 'philosophy' && (
+  // Search the same localized content that the page renders, including card text.
+  const builtInSections = [
+    { id: 'philosophy', content: (
             <div className="space-y-12">
               <div className="text-center space-y-4">
                 <h2 className="text-4xl font-bold tracking-tighter">{t.corePhilosophy}</h2>
@@ -80,9 +46,8 @@ export function Docs({ t }: { t: any }) {
                 />
               </div>
             </div>
-          )}
-
-          {activeTab === 'hosts' && (
+    ) },
+    { id: 'hosts', content: (
             <div className="space-y-16">
               <div className="text-center space-y-4">
                 <h2 className="text-4xl font-bold tracking-tighter glow-text">{t.smartHostProgram}</h2>
@@ -115,9 +80,8 @@ export function Docs({ t }: { t: any }) {
                 </GlassCard>
               </div>
             </div>
-          )}
-
-          {activeTab === 'clients' && (
+    ) },
+    { id: 'clients', content: (
             <div className="space-y-16">
               <div className="text-center space-y-4">
                 <h2 className="text-4xl font-bold tracking-tighter glow-text">{t.multiClientTitle}</h2>
@@ -188,9 +152,8 @@ export function Docs({ t }: { t: any }) {
                 </div>
               </div>
             </div>
-          )}
-
-          {activeTab === 'getting-started' && (
+    ) },
+    { id: 'getting-started', content: (
             <div className="grid md:grid-cols-3 gap-8">
               <DocCard
                 icon={<Book className="text-celestial-mars" />}
@@ -211,9 +174,8 @@ export function Docs({ t }: { t: any }) {
                 links={['Tools and skills', 'Task continuity', t.securityDoc || 'Security']}
               />
             </div>
-          )}
-
-          {activeTab === 'api' && (
+    ) },
+    { id: 'api', content: (
             <div className="grid md:grid-cols-3 gap-8">
               <DocCard
                 icon={<Code className="text-celestial-saturn" />}
@@ -234,9 +196,8 @@ export function Docs({ t }: { t: any }) {
                 links={[t.keyManagementDoc || 'Key Management', t.accessControlDoc || 'Access Control', t.privacyLevelsDoc || 'Privacy Levels']}
               />
             </div>
-          )}
-
-          {activeTab === 'advanced' && (
+    ) },
+    { id: 'advanced', content: (
             <div className="grid md:grid-cols-3 gap-8">
               <DocCard
                 icon={<Terminal className="text-celestial-glow" />}
@@ -257,26 +218,9 @@ export function Docs({ t }: { t: any }) {
                 links={['Task continuity', 'Model fallback', 'Failure diagnostics']}
               />
             </div>
-          )}
-
-          <div className="grid lg:grid-cols-2 gap-12">
-            {data?.sections?.map((section: any) => (
-              <GlassCard key={section.id} className="space-y-6" hoverEffect={false}>
-                <h3 className="text-2xl font-bold tracking-tighter">{section.title}</h3>
-                <div className="space-y-4 text-white/60 leading-relaxed">
-                  <p>{section.content}</p>
-                  {section.id === 1 && (
-                    <div className="p-6 bg-white/5 rounded-2xl border border-white/10 font-mono text-sm overflow-x-auto">
-                      <code>
-                        lumi status --details
-                      </code>
-                    </div>
-                  )}
-                </div>
-              </GlassCard>
-            ))}
-            
-            {!data?.sections && activeTab === 'philosophy' && (
+    ) },
+  ];
+  const fallbackContent = (
               <>
                 <GlassCard className="space-y-6" hoverEffect={false}>
                   <h3 className="text-2xl font-bold tracking-tighter">{t.neuralSynthesisProtocol || 'Neural Synthesis Protocol'}</h3>
@@ -303,7 +247,72 @@ export function Docs({ t }: { t: any }) {
                   </div>
                 </GlassCard>
               </>
-            )}
+  );
+  const normalizedQuery = normalizeDocumentationText(query);
+  const matches = (content: React.ReactNode) => normalizeDocumentationText(documentationText(content)).includes(normalizedQuery);
+  const visibleBuiltIns = builtInSections.filter(section => normalizedQuery
+    ? tabs.some(tab => tab.id === section.id) && matches(section.content)
+    : section.id === activeTab);
+  const visibleSections = (data?.sections ?? []).filter((section: any) => matches([section.title, section.content, section.id === 1 ? 'lumi status --details' : '']));
+  const showFallback = !data?.sections && (normalizedQuery ? matches(fallbackContent) : activeTab === 'philosophy');
+  const noMatches = normalizedQuery && !visibleBuiltIns.length && !visibleSections.length && !showFallback;
+
+  return (
+    <div className="max-w-6xl mx-auto space-y-12">
+      <div className="text-center space-y-6">
+        <h1 className="text-6xl font-bold tracking-tighter glow-text">{data?.title || t.docs}</h1>
+        <p className="text-xl text-white/60 max-w-2xl mx-auto">{t.docsTagline || 'Learn how LumiCore uses tools, memory, workflows, and local device capabilities.'}</p>
+        <div className="max-w-md mx-auto relative">
+          <Input value={query} onChange={event => setQuery(event.target.value)} aria-label={t.searchDocs || "Search documentation..."} placeholder={t.searchDocs || "Search documentation..."} className="bg-white/5 border-white/10 rounded-2xl p-6 h-auto text-lg pl-12" />
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40" size={20} />
+        </div>
+      </div>
+
+      {/* Secondary Navigation */}
+      <div className="flex flex-wrap justify-center gap-4 border-b border-white/5 pb-8">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => { setActiveTab(tab.id); setQuery(''); }}
+            className={`flex items-center gap-2 px-6 py-3 rounded-full transition-all ${
+              activeTab === tab.id
+                ? 'bg-celestial-nebula text-white shadow-[0_0_20px_rgba(255,45,85,0.3)]'
+                : 'bg-white/5 text-white/40 hover:bg-white/10'
+            }`}
+          >
+            {tab.icon}
+            <span className="font-bold text-sm uppercase tracking-widest">{tab.title}</span>
+          </button>
+        ))}
+      </div>
+
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={normalizedQuery ? 'search' : activeTab}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -20 }}
+          className="space-y-12"
+        >
+          {noMatches && <p role="status" className="text-center text-white/60">{t.noMatchesFound}</p>}
+          {visibleBuiltIns.map(section => <React.Fragment key={section.id}>{section.content}</React.Fragment>)}
+          <div className="grid lg:grid-cols-2 gap-12">
+            {visibleSections.map((section: any) => (
+              <GlassCard key={section.id} className="space-y-6" hoverEffect={false}>
+                <h3 className="text-2xl font-bold tracking-tighter">{section.title}</h3>
+                <div className="space-y-4 text-white/60 leading-relaxed">
+                  <p>{section.content}</p>
+                  {section.id === 1 && (
+                    <div className="p-6 bg-white/5 rounded-2xl border border-white/10 font-mono text-sm overflow-x-auto">
+                      <code>
+                        lumi status --details
+                      </code>
+                    </div>
+                  )}
+                </div>
+              </GlassCard>
+            ))}
+            {showFallback && fallbackContent}
           </div>
         </motion.div>
       </AnimatePresence>
@@ -341,4 +350,17 @@ function DocCard({ icon, title, desc, links }: { icon: React.ReactNode; title: s
       </ul>
     </GlassCard>
   );
+}
+
+function normalizeDocumentationText(text: string): string {
+  return text.trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+}
+
+function documentationText(node: React.ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(documentationText).join(' ');
+  if (!React.isValidElement(node)) return '';
+  // Docs owns these card props; never execute a component to inspect its text.
+  const props = node.props as { children?: React.ReactNode; title?: string; desc?: string; links?: string[] };
+  return [props.children, props.title, props.desc, props.links].map(documentationText).join(' ');
 }

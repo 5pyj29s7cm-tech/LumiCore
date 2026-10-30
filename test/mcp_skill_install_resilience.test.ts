@@ -530,6 +530,73 @@ describe('MCP skill install resilience', () => {
     expect(() => manager.assertLocalSkillRuntimeIdentity(skillName, reboundConfig)).not.toThrow();
   });
 
+  it.each(['private content drift', 'new private shadow', 'unchanged private with host drift'] as const)(
+    'keeps the host-runtime repair boundary for %s', async (scenario) => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const skillName = 'content-ops';
+    const source = path.resolve('server', 'skills', 'bundled', skillName);
+    const installed = await installActiveFixtureSkill(manager, skillName, source, {
+      managedSkill: createBundledSkillIdentity(`skill-${skillName}`, source),
+    });
+    const previousHostIdentity = manager.getConfig()[skillName].managedSkill;
+    const modules = path.join(installed, 'node_modules');
+    expect(fs.lstatSync(modules).isSymbolicLink()).toBe(true);
+    fs.unlinkSync(modules);
+    fs.mkdirSync(modules);
+    const dependencies = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8')).dependencies;
+    for (const dependency of Object.keys(dependencies).filter(name => name !== 'zod')) {
+      const target = path.join(modules, dependency);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.symlinkSync(path.resolve('node_modules', dependency), target, process.platform === 'win32' ? 'junction' : 'dir');
+    }
+    const privateDependency = path.join(modules, 'zod');
+    fs.mkdirSync(privateDependency);
+    fs.writeFileSync(path.join(privateDependency, 'package.json'), JSON.stringify({ name: 'zod', version: '3.22.0' }));
+    const privateEntry = path.join(privateDependency, 'index.js');
+    fs.writeFileSync(privateEntry, 'exports.fixture = 1;\n');
+    // Establish a previously reviewed synthetic installation, then change only its private dependency.
+    let identity = (manager as any).runtime.bindManagedSkillRuntime(
+      installed, createBundledSkillIdentity(`skill-${skillName}`, source),
+    );
+    if (scenario === 'new private shadow') identity = previousHostIdentity;
+    if (scenario === 'unchanged private with host drift') {
+      const { signManagedSkillIdentity } = await import('../server/marketplace/official_identity');
+      const { getJwtSecret } = await import('../server/config/local_identity');
+      const hostDependency = identity.runtime.files.find((file: { path: string }) =>
+        file.path === path.resolve('node_modules', 'fast-uri'));
+      expect(hostDependency).toBeTruthy();
+      hostDependency.digest = `sha256:${'0'.repeat(64)}`;
+      identity = signManagedSkillIdentity(identity, getJwtSecret());
+    }
+    const pkgPath = path.join(installed, 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    pkg.lumi.managedSkill = identity;
+    fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+    const config = manager.getConfig();
+    config[skillName].managedSkill = identity;
+    manager.saveConfig(config);
+    if (scenario === 'private content drift') {
+      fs.writeFileSync(privateEntry, 'exports.fixture = "changed after approval";\n');
+    }
+    expect(() => manager.assertLocalSkillRuntimeIdentity(skillName, config[skillName])).toThrow(/runtime/i);
+    const beforePackage = fs.readFileSync(pkgPath, 'utf8');
+    const restart = vi.spyOn(manager, 'restartServer').mockResolvedValue([]);
+
+    const result = await manager.repairSkill(skillName);
+    if (scenario === 'unchanged private with host drift') {
+      expect(result).toMatchObject({ success: true, action: 'runtime_rebound' });
+      expect(restart).toHaveBeenCalledOnce();
+      expect(() => manager.assertLocalSkillRuntimeIdentity(skillName, manager.getConfig()[skillName])).not.toThrow();
+      return;
+    }
+    expect(result).toMatchObject({ success: false, reviewRequired: true });
+    expect(restart).not.toHaveBeenCalled();
+    expect(fs.readFileSync(pkgPath, 'utf8')).toBe(beforePackage);
+    expect(manager.getConfig()[skillName]).toEqual(config[skillName]);
+  });
+
   it('rolls back both managed identities and the full server config when rebound restart fails', async () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager } = await importClientWithExec(execMock);
