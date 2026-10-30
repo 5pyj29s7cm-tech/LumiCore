@@ -16,6 +16,7 @@ const reply = (data: object, status = 200) => ({ ok: status < 400, status, json:
 beforeEach(() => {
   Object.values(ui).forEach(mock => mock.mockReset()); requests.length = 0; denied = true;
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+    url = new URL(url, 'http://fixture.local').pathname;
     requests.push({ url, init });
     if (url.endsWith('/bindings/code')) return denied ? reply({ error: 'Synthetic permission denied' }, 403) : reply({ code: 'FIXTURE-ONLY-CODE', expiresAt: '2099-01-01T00:00:00Z' });
     if (url.endsWith('/bindings')) return reply({ bindings: [] });
@@ -24,6 +25,23 @@ beforeEach(() => {
     if (url.endsWith('/status')) return reply({ configured: false });
     throw new Error('Unexpected fixture request: ' + url);
   }));
+});
+
+it.each(['feishu','wecom'] as const)('%s exposes failed config and retries without a channel mutation', async channel => {
+  let failed = true; requests.length = 0;
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+    const pathname = new URL(url, 'http://fixture.local').pathname; requests.push({url:pathname,init});
+    if(pathname.endsWith('/bindings')) return reply({bindings:[]});
+    if(pathname.endsWith('/status')) return reply({configured:false});
+    if(pathname.endsWith('/config')) return failed && pathname.includes(channel) ? reply({error:'Config read denied'},403) : reply({enabled:false,appId:'cli_synthetic',botId:'bot_synthetic',mode:'aibot_long_connection'});
+    throw new Error(pathname);
+  }));
+  render(<MessagingHub t={{langCode:'en',feishu:'Feishu',wecom:'WeCom'}}/>);
+  if(channel==='wecom') { await screen.findByPlaceholderText('cli_xxxxxxxxxxxxxxxx'); fireEvent.click(screen.getByRole('button',{name:'WeCom'})); }
+  await screen.findByRole('alert'); failed=false;
+  fireEvent.click(screen.getByRole('button',{name:'Retry loading'}));
+  await waitFor(()=>expect(screen.queryByRole('alert')).toBeNull());
+  expect(requests.every(item=>!item.init.method || item.init.method==='GET')).toBe(true);
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 

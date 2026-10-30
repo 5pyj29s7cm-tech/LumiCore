@@ -27,8 +27,12 @@ import {
   type EcommerceOutcomeId,
 } from '../i18n/locales/ecommerceModules';
 import { useIndustryWorkflow } from '../hooks/useIndustryWorkflow';
+import { IndustryWorkflowRecovery } from './IndustryWorkflowRecovery';
+import { businessRecoveryCopy } from '../i18n/locales/businessRecovery';
 import type { EcommerceReportKind, EcommerceWorkbenchSnapshot } from '../../shared/ecommerce_workbench';
 import { EcommerceHub, type EcommerceWorkbenchDraft } from './EcommerceHub';
+import { EcommerceDraftRecovery } from './EcommerceDraftRecovery';
+import { BusinessLocalBoard } from './BusinessLocalBoard';
 
 export type EcommerceWorkspaceTarget =
   | 'reviews'
@@ -366,9 +370,7 @@ function ModuleVisualization({
   if (module.id === 'today-operations') {
     return <TodayOperationsBoard module={module} lang={lang} snapshot={snapshot} onOpenWorkspace={onOpenWorkspace} />;
   }
-  if (module.id === 'trend-discovery') return <TrendSignalBoard module={module} lang={lang} />;
-  if (module.id === 'listing-automation') return <ListingQueue module={module} lang={lang} />;
-  return <ContentServiceBoard module={module} lang={lang} />;
+  return <section className="rounded-xl border border-white/10 p-4 text-sm text-white/60">{businessRecoveryCopy(lang).pending}<p>{businessRecoveryCopy(lang).scope}</p></section>;
 }
 
 interface EcommerceAutomationWorkspaceProps {
@@ -381,10 +383,11 @@ interface EcommerceAutomationWorkspaceProps {
   onSnapshotChange?: (snapshot: EcommerceWorkbenchSnapshot | null) => void;
   onOpenWorkspace?: (target: EcommerceWorkspaceTarget) => void;
   initialReportKind?: EcommerceReportKind;
+  workspaceId?: string;
 }
 
 export function EcommerceAutomationWorkspace(props: EcommerceAutomationWorkspaceProps) {
-  return <EcommerceAutomationContent key={props.appId} {...props} />;
+  return <EcommerceAutomationContent key={`${props.workspaceId || ''}:${props.appId}`} {...props} />;
 }
 
 function EcommerceAutomationContent({
@@ -397,14 +400,16 @@ function EcommerceAutomationContent({
   onSnapshotChange,
   onOpenWorkspace,
   initialReportKind = 'orders',
+  workspaceId,
 }: EcommerceAutomationWorkspaceProps) {
   const module = ecommerceModuleCopy(lang, appId);
   const common = ecommerceModuleCommonCopy(lang);
   const [input, setInput] = useState('');
-  const { busy: preparing, taskId, text: result, status: workflowStatus, error, run, stop, reset } = useIndustryWorkflow();
+  const workflow = useIndustryWorkflow(appId, workspaceId);
+  const { busy: preparing, taskId, text: result, status: workflowStatus, error, run, stop, reset } = workflow;
 
   if (appId === 'store-data') {
-    return <EcommerceHub draft={draft} onDraftChange={onDraftChange} lang={lang} initialReportKind={initialReportKind} workflowEntryId="store-data" onSnapshotChange={onSnapshotChange} />;
+    return <EcommerceDraftRecovery workspaceId={workspaceId} draft={draft} onDraftChange={onDraftChange} lang={lang} initialReportKind={initialReportKind} onSnapshotChange={onSnapshotChange} />;
   }
 
   const prepare = async () => {
@@ -436,7 +441,10 @@ function EcommerceAutomationContent({
           </div>
         </header>
 
-        <ModuleVisualization module={module} lang={lang} snapshot={snapshot} onOpenWorkspace={onOpenWorkspace} />
+        {['trend-discovery', 'listing-automation', 'ai-customer-service'].includes(appId)
+          ? <BusinessLocalBoard boardId={appId} workspaceId={workspaceId || '_unbound'} lang={lang} />
+          : <ModuleVisualization module={module} lang={lang} snapshot={snapshot} onOpenWorkspace={onOpenWorkspace} />}
+        <IndustryWorkflowRecovery workflow={workflow} lang={lang} />
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(310px,0.75fr)]">
           <article className="rounded-3xl border border-white/9 bg-black/20 p-5">

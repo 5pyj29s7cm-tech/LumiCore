@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Maximize, Pause, ScanLine, Send, Volume2, VolumeX } from 'lucide-react';
 import type { MemoryAvatar } from '../../shared/memory_avatar';
 import { avatarLiveCopy } from '../i18n/locales/avatarLive';
+import { personalCompletenessCopy } from '../i18n/locales/personalCompleteness';
 import { useAvatarLivePreview } from '../hooks/useAvatarLivePreview';
 import { captureLiveScreen, validateLiveRegion, type LiveScreenFrame, type LiveScreenRegion } from '../lib/avatarLiveScreen';
 import { useAliyunAvatarConfig } from '../hooks/useAliyunAvatarConfig';
@@ -77,7 +78,7 @@ export function AvatarLiveWorkbench({ avatar, ownerId, locale, onClose }: { avat
         <div className="flex items-center justify-between text-xs text-white/50"><span>{live.busy ? copy.busy : copy.comments}</span><span>{copy.queue} {live.queue.queued} · {copy.skipped} {live.queue.skipped}</span></div>
         <div className="min-h-40 space-y-2 rounded-2xl border border-white/10 p-4">{!live.comments.length && <p className="text-sm text-white/40">{copy.empty}</p>}{live.comments.slice(-20).map(row => <div key={row.id} className="flex items-start gap-3 rounded-lg bg-white/[.035] p-3"><div className="min-w-0 flex-1"><p className="text-xs text-foreground">{row.nickname}</p><p className="mt-1 break-words text-sm leading-6">{row.text}</p></div>{!automatic && <button type="button" disabled={live.busy || !live.audioReady || !hasBrief || Boolean(row.status) || Date.now() - row.receivedAt > 60_000} onClick={() => void live.respond(row, brief)} className="shrink-0 text-xs text-foreground disabled:opacity-30">{row.status === 'done' ? '✓' : copy.respond}</button>}</div>)}</div>
         <h3 className="text-sm text-white/70">{copy.history}</h3><div className="space-y-3">{live.history.slice(-10).map((row, index) => <div key={index} className="rounded-xl bg-white/[.035] p-4 text-sm leading-6"><p className="text-white/40">{row.nickname}: {row.comment}</p><p className="mt-2">{row.reply}</p></div>)}</div>
-        {live.historyError && <p role="status" className="text-xs text-amber-100">{copy.historyError}</p>}
+        {live.historyError && <div role="status" className="text-xs text-amber-100">{copy.historyError}<button disabled={live.historyBusy || live.busy} onClick={() => void live.retryHistory()} className="ml-3 underline">{personalCompletenessCopy(locale).retryHistory}</button></div>}
         <details className="rounded-xl border border-white/10 p-4"><summary className="cursor-pointer text-sm">{copy.archive}</summary><div className="mt-3 max-h-80 space-y-3 overflow-y-auto">{live.archivedHistory.map(row => <div key={row.requestId} className="rounded-lg bg-white/[.035] p-3 text-sm leading-6"><p className="text-xs text-white/40">{new Date(row.createdAt).toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US')} · {row.spokenAt ? copy.spoken : copy.generated}</p><p className="text-white/60">{row.nickname}: {row.comment}</p><p>{row.reply}</p></div>)}</div></details>
         </div>
       </div>

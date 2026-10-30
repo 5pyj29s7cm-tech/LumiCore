@@ -20,6 +20,28 @@ const event = (extra = {}) => { for (const handler of fixture.listeners.get('per
 beforeEach(() => { fixture.uid = 'first'; fixture.orgId = ''; fixture.langCode = 'en'; fixture.net.mockImplementation(async (url: string) => reply(snapshot('first', url.split('/')[3]))); vi.stubGlobal('fetch', fixture.net); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); fixture.net.mockReset(); fixture.listeners.clear(); });
 
+it('personal-completeness evolution read timeout exposes retry, and write timeout requires readback without replay', async () => {
+  vi.useFakeTimers();
+  try {
+    fixture.net.mockImplementation(() => new Promise(() => {})); render(page());
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_001); });
+    expect(screen.getByRole('alert').textContent).toMatch(/timed out/i);
+    fixture.net.mockResolvedValue(reply(snapshot('reloaded')));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /retry/i })));
+    expect(screen.getByText('story-reloaded')).toBeTruthy();
+    fixture.net.mockImplementation(() => new Promise(() => {}));
+    fireEvent.click(screen.getByRole('button', { name: 'Evolve' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_001); });
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Evolve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(fixture.net.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+    fixture.net.mockResolvedValue(reply(snapshot('confirmed')));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /retry/i })));
+    expect(screen.getByText('story-confirmed')).toBeTruthy();
+    expect(fixture.net.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  } finally { cleanup(); vi.useRealTimers(); }
+});
+
 it.each(['freeze', 'revert', 'evolve'])('serializes %s through readback, without duplicate writes or premature success', async action => {
   const write = deferred(), readback = deferred(); render(page()); await screen.findByText('story-first');
   fixture.net.mockImplementation((_url: string, init?: RequestInit) => init?.method === 'POST' ? write.promise : readback.promise);

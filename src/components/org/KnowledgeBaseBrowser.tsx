@@ -30,6 +30,8 @@ import type { KnowledgeStats as ServerKnowledgeStats } from '../../../server/org
 import { useFileDrop } from '../../hooks/useFileDrop';
 import { importKnowledgeFiles, type KnowledgeFileSource } from '../../lib/knowledgeFileImport';
 import { fileImportCopy } from '../../i18n/locales/fileImport';
+import { apiFetch } from '../../services/apiClient';
+import { organizationRemediationCopy } from '../../i18n/locales/organizationRemediation';
 
 type ArticleStatus = 'draft' | 'published' | 'archived' | string;
 
@@ -176,18 +178,24 @@ function useKnowledgeBaseBrowserState() {
   const [indexingId, setIndexingId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const loadOwner = React.useRef<AbortController | null>(null);
 
   const loadKnowledgeBase = useCallback(async () => {
+    loadOwner.current?.abort();
+    const owner = new AbortController(); loadOwner.current = owner;
+    const signal = AbortSignal.any([owner.signal, AbortSignal.timeout(15_000)]);
     setLoading(true);
     setError('');
     try {
       const [articlesRes, statsRes] = await Promise.all([
-        fetch('/api/org/kb/articles', { credentials: 'include' }),
-        fetch('/api/org/kb/stats', { credentials: 'include' }),
+        apiFetch('/api/org/kb/articles', { signal }),
+        apiFetch('/api/org/kb/stats', { signal }),
       ]);
-      const articleData = await articlesRes.json().catch(() => []);
-      if (!articlesRes.ok) throw new Error(articleData.error || formatUiMessage('knowledge-base-browser.failed-to-load-articles-value0.8ac0721d7b', { value0: articlesRes.status }));
-      const list = Array.isArray(articleData) ? articleData : [];
+      const articleData = await articlesRes.json().catch(() => null);
+      if (!articlesRes.ok) throw new Error(articleData?.error || formatUiMessage('knowledge-base-browser.failed-to-load-articles-value0.8ac0721d7b', { value0: articlesRes.status }));
+      if (!Array.isArray(articleData) || !articleData.every(item => item && ['id', 'title', 'content'].every(key => typeof item[key] === 'string'))) throw new Error(organizationRemediationCopy(t.langCode).invalidArticles);
+      signal.throwIfAborted();
+      const list = articleData;
       setArticles(list);
       setSelectedArticle(prev => {
         if (prev && list.some((item: Article) => item.id === prev.id)) {
@@ -197,22 +205,23 @@ function useKnowledgeBaseBrowserState() {
       });
 
       if (statsRes.ok) {
-        setStats(await statsRes.json().catch(() => null));
+        const nextStats = await statsRes.json().catch(() => null);
+        signal.throwIfAborted();
+        setStats(nextStats);
       } else {
         setStats(null);
       }
     } catch (err: any) {
+      if (owner.signal.aborted) return;
       setError(err.message || String(err));
-      setArticles([]);
-      setSelectedArticle(null);
-      setStats(null);
     } finally {
-      setLoading(false);
+      if (!owner.signal.aborted) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     loadKnowledgeBase();
+    return () => loadOwner.current?.abort();
   }, [loadKnowledgeBase]);
 
   useEffect(() => {
@@ -447,7 +456,7 @@ function renderKnowledgeBaseBrowser(input: ReturnType<typeof useKnowledgeBaseBro
       </div>
 
       {error && (
-        <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+        <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-200">
           <AlertCircle size={16} className="mt-0.5 shrink-0" />
           <span>{error}</span>
         </div>

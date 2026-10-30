@@ -42,6 +42,7 @@ export function hasExplicitNoLookupInstruction(text: string): boolean {
     // i18n-allow: Coordination delimiters and local scope qualifiers reuse shared file recognition.
     const objects = clause.instruction.slice(predicate[0].length).split(/或者|以及|并且|或|和|\s+(?:and|or)\s+/iu).map(value => value.trim());
     return !objects.every(object => FILE_NAME_RE.test(object) || ABSOLUTE_FILE_RE.test(object) || POSIX_ABSOLUTE_FILE_RE.test(object)
+      // i18n-allow: Existing local-file operands in a negative action instruction.
       || ((FILE_TASK_RE.test(object) || /\b(?:files|documents|folders)\b/iu.test(object)) && /本地|桌面|\b(?:local|desktop)\b/iu.test(object)));
   });
 }

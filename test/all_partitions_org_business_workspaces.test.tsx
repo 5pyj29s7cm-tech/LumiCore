@@ -7,6 +7,7 @@ import { FinanceWorkbench } from '../src/components/FinanceWorkbench';
 import { ecommerceModuleCommonCopy, ecommerceModuleCopy } from '../src/i18n/locales/ecommerceModules';
 import { financeModuleCopy } from '../src/i18n/locales/financeModules';
 import { financeDeliveryFormCopy } from '../src/i18n/locales/financeDeliveryForm';
+vi.mock('../src/contexts/AppContext', () => ({ useApp: () => ({ user: { uid: 'synthetic-partition-owner', role: 'user' }, workDomain: 'personal', orgConnection: null }) }));
 
 // Real components, hook and HTTP client. Only the transport is synthetic; no model,
 // business account, external connector or production API is invoked by this file.
@@ -27,6 +28,7 @@ beforeEach(() => {
     requests.push({ url, init, body });
     if (url.endsWith('/api/version')) return respond({ version: 'fixture-version' });
     if (url.endsWith('/contracts')) return respond({ contracts: [{ productLine: 'finance' }] });
+    if (url.includes('/business/local-boards/') || url.includes('/business/finance-worksheets/')) return respond({ record: null, scope: { userId: 'synthetic-partition-owner', domain: 'personal', orgId: '' } });
     if (url.endsWith('/finance-delivery')) return respond({ ok: true, persisted: true, status: 'verified', task: { id: 'fixture-task', result: 'Synthetic finance review only' }, artifacts: [] });
     if (url.includes('/api/chat?')) return stream({ done: true, text: 'Synthetic review result', industryWorkflow: { status: nextStatus } });
     if (url.endsWith('/api/industry/workflows')) return respond({ task: { id: 'fixture-task' }, handoffPrompt: 'Fixture-only handoff', contract: { entryId: body.entryId } });
@@ -51,7 +53,9 @@ describe('current commerce partition entry contracts', () => {
     expect(executions()[0].body).toMatchObject({ industryWorkflowTaskId: 'fixture-task', industryWorkflowSourceInput: `Synthetic ${entry} source; review only.` });
     const prompt = executions()[0].body.messages[0].content;
     expect(prompt).toContain(copy.prompt); expect(prompt).toContain(copy.confirmation);
-    expect(requests.every(item => /\/api\/(industry\/workflows|chat\?)/.test(item.url))).toBe(true);
+    expect(requests.every(item => /\/api\/(industry\/workflows|chat\?)/.test(item.url)
+      || (!item.init.method && item.url.includes(`/api/business/local-boards/${entry}/_unbound?`)))).toBe(true);
+    expect(requests.filter(item => item.url.includes('/local-boards/'))).toHaveLength(entry === 'today-operations' ? 0 : 1);
     fireEvent.click(screen.getByRole('button', { name: ecommerceModuleCommonCopy('en').openConnections })); expect(settings).toHaveBeenCalledTimes(1);
   });
   it('store-data uses the real importer and preserves its source snapshot without starting a model', () => {
@@ -69,7 +73,9 @@ describe('current commerce partition entry contracts', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Synthetic SKU with missing authorization' } });
     fireEvent.click(screen.getByRole('button', { name: ecommerceModuleCommonCopy('en').start }));
     await screen.findByText('blocked'); expect(screen.queryByText('delivered')).toBeNull();
-    expect(requests).toHaveLength(2);
+    expect(created()).toHaveLength(1); expect(executions()).toHaveLength(1);
+    expect(requests.filter(item => item.url.includes('/local-boards/listing-automation/_unbound?') && !item.init.method)).toHaveLength(1);
+    expect(requests).toHaveLength(3);
   });
 });
 

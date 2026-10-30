@@ -4,7 +4,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import jwt from 'jsonwebtoken';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createOrg, addMember, updateMemberRole, removeMember } from '../server/org/db';
 import { flushDBOrThrow } from '../db_layer';
 import {
   issueDesktopSessionProof as issueBoundDesktopSessionProof,
@@ -180,6 +181,80 @@ describe('deterministic Finance delivery E2E', () => {
       totalEquity: '600000.00',
       tolerance: '0.01',
     },
+  });
+
+  it('retrieves only the scoped hash-verified workbook and preserves delivery when stop arrives late', async () => {
+    const started = await start('report-delivery', 'Remediation download fixture');
+    const response = await deliver(started.task.id, validReportInput(), issueDesktopSessionProof(ownerId).proof);
+    expect(response.status).toBe(200);
+    const result = await response.json() as any, artifact = result.artifacts[0]; generatedFiles.add(artifact.path);
+    const url = `${baseUrl}/api/industry/workflows/${started.task.id}/artifacts/${artifact.sha256}`;
+    const downloaded = await fetch(url, { headers: authHeaders() });
+    expect(downloaded.status).toBe(200);
+    expect(crypto.createHash('sha256').update(Buffer.from(await downloaded.arrayBuffer())).digest('hex')).toBe(artifact.sha256);
+    const foreign = jwt.sign({ uid: ownerId + '-other', role: 'user' }, JWT_SECRET);
+    expect((await fetch(url, { headers: { Authorization: `Bearer ${foreign}` } })).status).toBe(404);
+    expect((await fetch(url.replace(artifact.sha256, 'a'.repeat(64)), { headers: authHeaders() })).status).toBe(404);
+    const cancelled = await fetch(`${baseUrl}/api/industry/workflows/${started.task.id}/finance-cancel`, { method: 'POST', headers: authHeaders(), body: '{}' });
+    expect(await cancelled.json()).toMatchObject({ status: 'delivered', cancelled: false, cancellationRequested: false });
+    fs.appendFileSync(artifact.path, 'tampered');
+    expect((await fetch(url, { headers: authHeaders() })).status).toBe(409);
+  });
+
+  it('awaits backend cancellation, blocks later tools and does not fabricate a delivered result', async () => {
+    const original = registry.get('business_finance_tax_period_checklist')!;
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    registry.unregister(original.name);
+    registry.register({ ...original, handler: async (args, context) => { enter(); await gate; return original.handler(args, context); } });
+    try {
+      const started = await start('tax-filing', 'Remediation stop fixture');
+      const delivery = deliver(started.task.id, validTaxInput(), issueDesktopSessionProof(ownerId).proof);
+      await entered;
+      let settled = false;
+      const cancellation = fetch(`${baseUrl}/api/industry/workflows/${started.task.id}/finance-cancel`, { method: 'POST', headers: authHeaders(), body: '{}' }).then(value => { settled = true; return value; });
+      await new Promise(resolve => setTimeout(resolve, 25)); expect(settled).toBe(false);
+      release();
+      expect((await delivery).status).toBe(409);
+      expect(await (await cancellation).json()).toMatchObject({ cancelled: true, status: 'cancelled', cancellationRequested: true });
+      const stored = await task(started.task.id);
+      expect(stored.status).toBe('cancelled');
+      expect(stored.metadata?.workTakeoverVerification?.passed).not.toBe(true);
+      expect(stored.artifacts.filter((item: any) => item.path)).toHaveLength(0);
+    } finally { release(); registry.unregister(original.name); registry.register(original); }
+  });
+
+  it.each(['cleanup','persistence'])('does not confirm cancellation when %s fails', async mode => {
+    const tool = mode === 'cleanup' ? 'create_xlsx' : 'business_finance_tax_period_checklist';
+    const original=registry.get(tool)!; let enter!:()=>void,release!:()=>void,file='';
+    const entered=new Promise<void>(resolve=>{enter=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;});
+    registry.unregister(tool);registry.register({...original,handler:async(args,context)=>{const result=await original.handler(args,context);if(mode==='cleanup'){file=JSON.parse(String(result)).path;generatedFiles.add(file);}enter();await gate;return result;}});
+    let spy:ReturnType<typeof vi.spyOn>|undefined;
+    try {
+      const started=await start('tax-filing','Cancellation failure fixture');
+      const delivery=deliver(started.task.id,validTaxInput(),issueDesktopSessionProof(ownerId).proof);await entered;
+      if(mode==='cleanup'){const remove=fs.rmSync;spy=vi.spyOn(fs,'rmSync').mockImplementation(((target:any,options:any)=>{if(path.resolve(String(target))===path.resolve(file))throw new Error('Fixture cleanup denied');return remove(target,options);}) as typeof fs.rmSync);}
+      else {let calls=0;setFinanceDeliveryStateFlusherForTests(async()=>{if(++calls===2)throw new Error('Fixture cancellation flush denied');await flushDBOrThrow();});}
+      const cancel=fetch(`${baseUrl}/api/industry/workflows/${started.task.id}/finance-cancel`,{method:'POST',headers:authHeaders(),body:'{}'});
+      await new Promise(resolve=>setTimeout(resolve,25));release();
+      expect((await delivery).status).toBe(500);const response=await cancel;expect(response.status).toBe(500);const body=await response.json() as any;expect(body.cancelled).not.toBe(true);expect(body.code).toBe(mode==='cleanup'?'FINANCE_DELIVERY_CLEANUP_FAILED':'FINANCE_DELIVERY_PERSISTENCE_FAILED');
+    } finally {release();spy?.mockRestore();setFinanceDeliveryStateFlusherForTests();registry.unregister(tool);registry.register(original);}
+  });
+
+  it('rechecks organization viewer and revoked membership for cancellation and workbook access',async()=>{
+    const org=createOrg('Finance access fixture',crypto.randomUUID(),ownerId);addMember(org.id,ownerId,'owner');
+    const token=jwt.sign({uid:ownerId,orgId:org.id,role:'user'},JWT_SECRET), headers={...authHeaders(),Authorization:`Bearer ${token}`};
+    const started=await(await fetch(`${baseUrl}/api/industry/workflows`,{method:'POST',headers,body:JSON.stringify({entryId:'report-delivery',sourceInput:'Organization fixture'})})).json() as any;
+    const delivered=await fetch(`${baseUrl}/api/industry/workflows/${started.task.id}/finance-delivery`,{method:'POST',headers:{...headers,'x-lumi-desktop-session':issueDesktopSessionProof(ownerId).proof},body:JSON.stringify({financeInput:validReportInput()})});
+    expect(delivered.status).toBe(200);const body=await delivered.json() as any;generatedFiles.add(body.artifacts[0].path);
+    const artifact=`${baseUrl}/api/industry/workflows/${started.task.id}/artifacts/${body.artifacts[0].sha256}`,cancel=`${baseUrl}/api/industry/workflows/${started.task.id}/finance-cancel`;
+    updateMemberRole(org.id,ownerId,'viewer');
+    expect((await fetch(cancel,{method:'POST',headers,body:'{}'})).status).toBe(403);
+    expect((await fetch(artifact,{headers})).status).toBe(200);
+    removeMember(org.id,ownerId);
+    expect((await fetch(cancel,{method:'POST',headers,body:'{}'})).status).toBe(403);
+    expect((await fetch(artifact,{headers})).status).toBe(403);
   });
 
   it.each([

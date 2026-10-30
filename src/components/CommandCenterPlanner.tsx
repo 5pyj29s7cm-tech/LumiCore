@@ -24,6 +24,8 @@ import {
   type TaskCompletionFeedback,
 } from './workflowTypes';
 import { isCurrentScopeRequest } from './scopeRequestGuard';
+import { withRequestDeadline } from '../lib/requestDeadline';
+import { personalCompletenessCopy } from '../i18n/locales/personalCompleteness';
 
 type PlanKind = 'daily_task' | 'long_term_goal' | 'periodic_report';
 type PlanCadence = 'none' | 'daily' | 'weekly' | 'monthly';
@@ -99,17 +101,20 @@ export function CommandCenterPlanner({
 
   const copy = commandCenterPlannerCopy(isZh ? 'zh' : 'en');
   const feedbackCopy = taskCompletionFeedbackCopy(isZh ? 'zh' : 'en');
+  const refreshController = useRef<AbortController | null>(null);
   const refresh = useCallback(async (quiet = false) => {
     const requestToken = { scopeKey, generation: scopeGenerationRef.current };
     if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
     const revision = ++refreshRevisionRef.current;
+    refreshController.current?.abort();
+    const controller = refreshController.current = new AbortController();
     if (!quiet) setLoading(true);
     const [planResult, taskResult] = await Promise.allSettled(
-      ['/api/command-center/plans', '/api/autonomy/work'].map(url => apiFetch(url).then(async response => {
+      ['/api/command-center/plans', '/api/autonomy/work'].map(url => withRequestDeadline(signal => apiFetch(url, { signal }).then(async response => {
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         return payload;
-      })),
+      }), controller.signal)),
     );
     if (revision !== refreshRevisionRef.current || !isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
     if (planResult.status === 'fulfilled') {
@@ -157,6 +162,7 @@ export function CommandCenterPlanner({
     const timer = window.setInterval(update, 15_000);
     return () => {
       refreshRevisionRef.current++;
+      refreshController.current?.abort();
       window.clearInterval(timer);
       events.forEach(event => socket.off(event, update));
     };
@@ -309,7 +315,7 @@ export function CommandCenterPlanner({
       </label>}
     </div>}
 
-    {error && <div className="mb-3 rounded-xl border border-rose-300/15 bg-rose-400/[0.06] px-3 py-2 text-[10px] text-rose-100/70">{error}</div>}
+    {error && <div role="alert" className="mb-3 rounded-xl border border-rose-300/15 bg-rose-400/[0.06] px-3 py-2 text-[10px] text-rose-100/70">{error}<button disabled={loading} onClick={() => void refresh()} className="ml-3 underline">{personalCompletenessCopy(isZh ? 'zh' : 'en').retry}</button></div>}
     {notice && <div className="mb-3 rounded-xl border border-cyan-300/15 bg-cyan-300/[0.05] px-3 py-2 text-[10px] text-cyan-100/70">{notice}</div>}
     {loading ? <div className="flex flex-1 items-center justify-center text-cyan-100/35"><Loader2 size={18} className="animate-spin" /></div> : plans.length === 0 ? (
       <button type="button" onClick={() => setShowCreate(true)} className="flex flex-1 flex-col items-center justify-center rounded-2xl border border-dashed border-white/[0.08] text-center text-white/30 hover:border-cyan-300/18 hover:text-white/45">

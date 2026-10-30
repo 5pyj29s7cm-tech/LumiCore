@@ -6,6 +6,8 @@ import { useApp } from '@/contexts/AppContext';
 import { designVoice, listVoices, synthesizeSpeech, VOICE_PROVIDER_CHANGED_EVENT } from '@/services/voiceService';
 import { desktopWorkflowCopy } from '../i18n/locales/desktopWorkflows';
 import { VoicePicker } from './VoicePicker';
+import { personalCompletenessCopy } from '../i18n/locales/personalCompleteness';
+import { withRequestDeadline } from '../lib/requestDeadline';
 
 const VoiceForge = lazy(() => import('./VoiceForge').then(module => ({ default: module.VoiceForge })));
 
@@ -52,6 +54,17 @@ function VoiceCard({
 }
 
 export function DesktopPersonalizationSoundPanel({
+  ...props
+}: {
+  t?: any;
+  onOpenAppearance?: () => void;
+  onOpenVoiceSettings?: () => void;
+}) {
+  const { user, workDomain, orgConnection } = useApp();
+  return <SoundPanelView key={JSON.stringify([user?.uid, user?.role, workDomain, orgConnection?.orgId])} {...props} />;
+}
+
+function SoundPanelView({
   t,
   onOpenAppearance,
   onOpenVoiceSettings,
@@ -60,7 +73,12 @@ export function DesktopPersonalizationSoundPanel({
   onOpenAppearance?: () => void;
   onOpenVoiceSettings?: () => void;
 }) {
-  const { selectedVoiceId } = useApp();
+  const { selectedVoiceId, user, workDomain, orgConnection } = useApp();
+  const catalogScope = JSON.stringify([user?.uid, user?.role, workDomain, orgConnection?.orgId]);
+  const catalogOwner = useRef(catalogScope); catalogOwner.current = catalogScope;
+  const catalogRequest = useRef<AbortController | null>(null);
+  const [catalogState, setCatalogState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const recovery = personalCompletenessCopy(t?.langCode);
   const [designPrompt, setDesignPrompt] = useState('');
   const [designName, setDesignName] = useState('');
   const [designing, setDesigning] = useState(false);
@@ -87,13 +105,19 @@ export function DesktopPersonalizationSoundPanel({
           ? 'GPT-SoVITS'
           : ui('未选择', 'Not selected');
 
-  const refreshCatalog = React.useCallback(() => {
-    return listVoices()
-      .then(data => setVoices(data))
-      .catch(() => {});
-  }, []);
+  const refreshCatalog = React.useCallback(async () => {
+    catalogRequest.current?.abort();
+    const controller = catalogRequest.current = new AbortController();
+    setCatalogState('loading');
+    try {
+      const data = await withRequestDeadline(signal => listVoices(undefined, signal), controller.signal);
+      if (!controller.signal.aborted && catalogOwner.current === catalogScope) { setVoices(data); setCatalogState('ready'); }
+    } catch {
+      if (!controller.signal.aborted && catalogOwner.current === catalogScope) setCatalogState('error');
+    }
+  }, [catalogScope]);
 
-  useEffect(() => { void refreshCatalog(); }, [refreshCatalog, voiceRefresh]);
+  useEffect(() => { void refreshCatalog(); return () => catalogRequest.current?.abort(); }, [refreshCatalog, voiceRefresh]);
 
   useEffect(() => {
     const handleProviderChanged = () => { void refreshCatalog(); };
@@ -102,6 +126,7 @@ export function DesktopPersonalizationSoundPanel({
   }, [refreshCatalog]);
 
   const handlePlay = async (voice: any, text?: string) => {
+    if (catalogState !== 'ready') return;
     const voiceId = typeof voice === 'string' ? voice : voice.voiceId;
     const provider = typeof voice === 'string' ? undefined : voice.provider;
     const model = typeof voice === 'string' ? undefined : voice.model;
@@ -141,6 +166,7 @@ export function DesktopPersonalizationSoundPanel({
   };
 
   const handleDesign = async () => {
+    if (catalogState !== 'ready') return;
     if (!designPrompt.trim() || !designName.trim()) return;
     if (!voices.capabilities.design || !voices.provider) {
       toast.error('当前语音服务没有接入音色设计，Lumi 不会自动切换到其他服务。');
@@ -193,6 +219,10 @@ export function DesktopPersonalizationSoundPanel({
 
   return (
     <div className="flex h-full flex-col space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      {catalogState !== 'ready' && <div role={catalogState === 'error' ? 'alert' : 'status'}>
+        {catalogState === 'error' ? recovery.catalogError : recovery.loading}
+        {catalogState === 'error' && <button onClick={() => void refreshCatalog()} className="ml-3 underline">{recovery.retry}</button>}
+      </div>}
       <div className="flex shrink-0 items-center gap-3">
         <div className="rounded-2xl bg-gradient-to-br from-sky-500 to-indigo-600 p-3 shadow-lg">
           <Volume2 size={24} className="text-white" />
@@ -201,7 +231,7 @@ export function DesktopPersonalizationSoundPanel({
           <h3 className="text-xl font-bold uppercase tracking-tighter text-white/90">{t?.voiceStudio || 'Voice Studio'}</h3>
           <p className="flex items-center gap-2 text-xs uppercase tracking-widest text-white/55">
             <span className={`h-2 w-2 shrink-0 rounded-full ${voices.configured ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)]' : 'bg-amber-400'}`} />
-            <span className="truncate">{ui('当前语音服务', 'Current voice service')} · {providerName}</span>
+            <span className="truncate">{ui('当前语音服务', 'Current voice service')} · {catalogState === 'ready' ? providerName : catalogState === 'loading' ? recovery.loading : recovery.catalogError}</span>
           </p>
         </div>
         <div className="ml-auto flex min-w-0 items-center gap-2">

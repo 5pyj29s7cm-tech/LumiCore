@@ -1,4 +1,5 @@
 import React from 'react';
+import { settingsRecoveryCopy } from '@/i18n/locales/settingsRecovery';
 import { motion, AnimatePresence } from 'motion/react';
 import { Book, Code, Terminal, Shield, Globe, Zap, Search, Sparkles, Layers } from 'lucide-react';
 import { Input } from './ui/input';
@@ -6,11 +7,11 @@ import { useModuleData } from '@/hooks/useModuleData';
 import { LoadingSpinner, GlassCard, IconBox } from './SharedUI';
 
 export function Docs({ t }: { t: any }) {
-  const { data, loading } = useModuleData<any>('/api/modules/docs');
+  const { data, loading, error, retry } = useModuleData<any>('/api/modules/docs');
+  const recovery = settingsRecoveryCopy(t?.langCode);
   const [activeTab, setActiveTab] = React.useState('philosophy');
   const [query, setQuery] = React.useState('');
 
-  if (loading) return <LoadingSpinner />;
 
   const tabs = [
     { id: 'philosophy', title: t.corePhilosophy, icon: <Sparkles size={18} /> },
@@ -259,6 +260,8 @@ export function Docs({ t }: { t: any }) {
 
   return (
     <div className="max-w-6xl mx-auto space-y-12">
+      {loading && <p role="status">{recovery.loading}</p>}
+      {error && <div role="alert">{recovery.docsFallback} <button onClick={() => void retry()}>{recovery.retry}</button></div>}
       <div className="text-center space-y-6">
         <h1 className="text-6xl font-bold tracking-tighter glow-text">{data?.title || t.docs}</h1>
         <p className="text-xl text-white/60 max-w-2xl mx-auto">{t.docsTagline || 'Learn how LumiCore uses tools, memory, workflows, and local device capabilities.'}</p>

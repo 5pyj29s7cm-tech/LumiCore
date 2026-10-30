@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Wrench, AlertTriangle, CheckCircle, Loader2, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { useApp } from '@/contexts/AppContext';
 import { apiJson } from '@/services/apiClient';
+import { useRecoverableRead } from '@/hooks/useRecoverableRead';
+import { settingsRecoveryCopy } from '@/i18n/locales/settingsRecovery';
 
 interface ToolInfo {
   name: string;
@@ -19,30 +20,18 @@ const SECURITY_COLORS: Record<string, { bg: string; border: string; text: string
 };
 
 export function ToolPanel({ t }: { t?: any }) {
-  const { toolOverrides, setToolOverride } = useApp();
-  const [tools, setTools] = useState<ToolInfo[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
+  const { toolOverrides, setToolOverride, user, workDomain, orgConnection } = useApp();
+  const copy = settingsRecoveryCopy(t?.langCode);
   const failureMessage = t?.failedToLoadTools || 'Failed to load tools';
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setLoading(true);
-    setFailed(false);
-    apiJson<unknown>('/api/tools', { signal: controller.signal })
-      .then(data => {
+  const read = useRecoverableRead<ToolInfo[]>(JSON.stringify([user?.uid, user?.role, workDomain, orgConnection?.orgId]), async signal => {
+        const data = await apiJson<unknown>('/api/tools', { signal });
         if (!Array.isArray(data) || !data.every(tool => tool && typeof tool.name === 'string'
           && ['safe', 'confirm', 'forbidden'].includes(tool.securityLevel))) {
           throw new Error('Invalid tools response');
         }
-        if (!controller.signal.aborted) setTools(data);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) { setFailed(true); toast.error(failureMessage); }
-      })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
-  }, [failureMessage]);
+        return data;
+  });
+  const tools = read.data || [], loading = read.loading, failed = Boolean(read.error);
 
   const safeTools = tools.filter(t => t.securityLevel === 'safe');
   const confirmTools = tools.filter(t => t.securityLevel === 'confirm');
@@ -85,7 +74,7 @@ export function ToolPanel({ t }: { t?: any }) {
             <Loader2 size={24} className="animate-spin mr-2" /> {t?.loadingTools || 'Loading tools...'}
           </div>
         ) : failed ? (
-          <p role="alert" className="lumi-panel px-4 py-3 text-sm text-red-300">{failureMessage}</p>
+          <div role="alert" className="lumi-panel px-4 py-3 text-sm text-red-300">{failureMessage} <button onClick={() => void read.refresh()}>{copy.retry}</button></div>
         ) : (
           sections.map(section => {
             return (

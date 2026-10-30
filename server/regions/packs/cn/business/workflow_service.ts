@@ -762,6 +762,7 @@ export function startIndustryWorkflow(input: StartIndustryWorkflowInput): Indust
     const existing = listIndustryWorkflowTasks(input, 200).find(task => (
       workflowMetadata(task).idempotencyKey === idempotencyKey
       && workflowMetadata(task).entryId === contract.entryId
+      && String(parseObject(parseObject(workflowMetadata(task).context).industryWorkspace).id || '') === String(workflowWorkspace?.id || '')
     ));
     if (existing) {
       const correlation = correlationFor(existing);
@@ -894,6 +895,18 @@ export function getIndustryWorkflowTask(scope: IndustryWorkflowScope, taskId: st
   if (!task) return null;
   const metadata = workflowMetadata(task);
   return BUSINESS_LINES.includes(metadata.productLine) && metadata.entryId ? task : null;
+}
+
+export function listIndustryWorkflowTaskPage(scope: IndustryWorkflowScope, entryId: string, workspaceId?: string, before = '') {
+  const contract = businessContract(entryId);
+  if (!contract || !['finance','ecommerce'].includes(contract.productLine)) throw new Error('Unsupported business history entry');
+  if (before) {
+    const task = getIndustryWorkflowTask(scope, before);
+    if (!task || workflowMetadata(task).entryId !== entryId || (workspaceId !== undefined && (workflowMetadata(task).context?.industryWorkspace?.id || '') !== workspaceId)) throw new Error('History cursor does not match this scope');
+  }
+  const rows = listWorkTakeoverTasks({ ...scope, limit: 51, industryEntryId: entryId, industryWorkspaceId: workspaceId, beforeId: before, newestCreated: true });
+  const tasks = rows.slice(0,50);
+  return { tasks, nextCursor: rows.length > 50 ? tasks.at(-1)!.id : null };
 }
 
 export function settleIndustryWorkflowConversationTask(

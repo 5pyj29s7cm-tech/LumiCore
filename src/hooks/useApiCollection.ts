@@ -7,7 +7,7 @@ export function useApiCollection<T extends { id: string }>(endpoint: string, isI
   const [items, setItems] = useState<T[] | null>(null);
   const [state, setState] = useState({ busy: true, error: '' });
   const lifetime = useRef<AbortController | null>(null), pending = useRef<AbortSignal | null>(null);
-  const sync = useCallback(async (method = 'GET', id = '', body?: unknown, action = '') => {
+  const sync = useCallback(async (method = 'GET', id = '', body?: unknown, action = '', confirms?: (value: T) => boolean) => {
     const owner = lifetime.current;
     if (!owner || owner.signal.aborted || (pending.current && !pending.current.aborted)) return false;
     const signal = AbortSignal.any([owner.signal, AbortSignal.timeout(15_000)]);
@@ -27,7 +27,7 @@ export function useApiCollection<T extends { id: string }>(endpoint: string, isI
         if (data?.success !== true) throw new Error('Deletion was not confirmed');
         setItems(current => current?.filter(item => item[identity] !== id) ?? null);
       } else {
-        if (!isItem(data) || (id && data[identity] !== id)) throw new Error('Save was not confirmed');
+        if (!isItem(data) || (id && data[identity] !== id) || (confirms && !confirms(data))) throw new Error('Save was not confirmed');
         setItems(current => current?.some(item => item[identity] === data[identity])
           ? current.map(item => item[identity] === data[identity] ? data : item) : [...(current ?? []), data]);
       }

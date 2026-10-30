@@ -100,6 +100,12 @@ describe('partial public text cannot be upgraded by a raw-source formatter', () 
     expect(final.text.trim()).not.toBe('');
     expect(final.text).not.toContain(marker);
     expect(final.text, JSON.stringify({ text: final.text, reason: final.reason })).toMatch(/未|缺|待|尚|还没有生成|incomplete|pending/i);
+    // The source matched. A missing output must not turn its read into a
+    // wrong-target receipt belonging to the independent output component.
+    expect(final.text + final.reason).not.toMatch(/对应的不是你指定的文件|target did not match|different file/i);
+    const wrongTarget = finalizeLumiResponse({ ...input, taskText: '读取 ' + output + '，显示完整正文。' });
+    expect(wrongTarget.blocked).toBe(true);
+    expect(wrongTarget.reason).toContain('target did not match');
     expect(readDB().conversationActionTasks.find((row: any) => row.id === f.taskId)?.goal).toBe(task);
   });
 });

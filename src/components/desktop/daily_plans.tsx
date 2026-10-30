@@ -4,6 +4,9 @@ import { uiMessage, formatUiMessage } from "../../i18n/uiMessages";
 import { toast } from "sonner";
 import { GlassCard } from "../SharedUI";
 import { LazyPanelFallback } from "./window_shell";
+import { useApp } from '@/contexts/AppContext';
+import { useRecoverableRead } from '@/hooks/useRecoverableRead';
+import { settingsRecoveryCopy } from '@/i18n/locales/settingsRecovery';
 const AutonomousFeed = lazy(() => import("../AutonomousFeed").then(m => ({ default: m.AutonomousFeed })));
 
 
@@ -38,27 +41,25 @@ export function ExecutionWorkQueue({ t }: { t: any }) {
 
 
 function DailyPlans({ t, embedded = false, onOpenQueue }: { t: any; embedded?: boolean; onOpenQueue?: () => void }) {
-  const [plans, setPlans] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { user, workDomain, orgConnection } = useApp();
+  const scope = JSON.stringify([user?.uid, user?.role, workDomain, orgConnection?.orgId]);
+  const recovery = settingsRecoveryCopy(t?.langCode);
+  const [page, setPage] = useState(0);
+  const read = useRecoverableRead<any[]>(scope, async signal => {
+    const res = await fetch('/api/plans?status=active', { credentials: 'include', signal });
+    if (!res.ok) throw new Error('Failed to load plans');
+    const d = await res.json();
+    if (!Array.isArray(d?.plans) || !d.plans.every((p: any) => p && typeof p.id === 'string' && typeof p.title === 'string')) throw new Error('Invalid plans response');
+    return d.plans.filter((p: any) => (p.source === 'lumi' || p.source === 'auto') && !['done', 'completed', 'cancelled'].includes(p.status));
+  });
+  const plans = read.data || [], loading = read.loading;
+  const setPlans = (update: (previous: any[]) => any[]) => read.setData(previous => update(previous || []));
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(plans.length / 8) - 1));
+  useEffect(() => { setPage(0); setBusyPlanIds([]); }, [scope]);
   const [busyPlanIds, setBusyPlanIds] = useState<string[]>([]);
   const isZh = t?.langCode !== 'en';
   const activeCount = plans.length;
 
-  const loadPlans = useCallback(async () => {
-    try {
-      setLoading(true);
-      const res = await fetch('/api/plans?status=active', { credentials: 'include' });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(d.error || 'Failed to load plans');
-      setPlans((d.plans || [])
-        .filter((p: any) => (p.source === 'lumi' || p.source === 'auto') && p.status !== 'done' && p.status !== 'completed' && p.status !== 'cancelled')
-        .slice(0, 8));
-    } catch (err: any) {
-      toast.error(err?.message || (t.planLoadFailed || 'Failed to load plans'));
-    } finally { setLoading(false); }
-  }, [t.planLoadFailed]);
-
-  useEffect(() => { void loadPlans(); }, [loadPlans]);
 
   const deletePlan = async (id: string) => {
     setBusyPlanIds(prev => prev.includes(id) ? prev : [...prev, id]);
@@ -125,16 +126,16 @@ function DailyPlans({ t, embedded = false, onOpenQueue }: { t: any; embedded?: b
           )}
         </div>
       </div>
-
+      {read.error && <div role="alert">{recovery.failed} <button onClick={event => { event.stopPropagation(); void read.refresh(); }}>{recovery.retry}</button></div>}
       {loading ? (
         <div className="text-white/30 text-xs py-2">{uiMessage('desktop-ui.loading.586f5af819', (isZh) ? 'zh' : 'en')}</div>
-      ) : plans.length === 0 ? (
+      ) : read.error ? null : plans.length === 0 ? (
         <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-3 text-xs text-white/30">
           {uiMessage('desktop-ui.lumi-has-not-generated-learning.6c804f7045', (isZh) ? 'zh' : 'en')}
         </div>
       ) : (
         <div className="space-y-2">
-          {plans.map((plan: any) => {
+          {plans.slice(currentPage * 8, currentPage * 8 + 8).map((plan: any) => {
             const { steps, done, label } = getStepInfo(plan);
             const progress = steps.length > 0 ? `${done}/${steps.length}` : (uiMessage('desktop-ui.queued.bb6e139347', (isZh) ? 'zh' : 'en'));
             const updatedAt = formatUpdatedAt(plan.updatedAt);
@@ -168,6 +169,11 @@ function DailyPlans({ t, embedded = false, onOpenQueue }: { t: any; embedded?: b
           })}
         </div>
       )}
+      {!loading && !read.error && plans.length > 8 && <nav aria-label={t.queue || 'Queue'} className="flex gap-3">
+        <button disabled={currentPage === 0} onClick={event => { event.stopPropagation(); setPage(currentPage - 1); }}>{recovery.previous}</button>
+        <span>{currentPage + 1} / {Math.ceil(plans.length / 8)}</span>
+        <button disabled={(currentPage + 1) * 8 >= plans.length} onClick={event => { event.stopPropagation(); setPage(currentPage + 1); }}>{recovery.next}</button>
+      </nav>}
     </GlassCard>
   );
 }

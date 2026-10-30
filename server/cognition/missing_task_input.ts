@@ -5,6 +5,7 @@ import { FILE_NAME_RE } from '../conversation/targets/recognition';
 import { targetReferenceMatches } from '../conversation/targets/paths';
 import { parseReceiptObject, toolRecordSucceeded, toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { normalizeActionIntent } from './normalized_action_intent';
+import { COMPLETENESS_BOUNDARY_MESSAGES } from '../regions/messages/completeness_boundary_messages';
 
 export const MISSING_TASK_INPUT_REASON = 'required_input_file_missing';
 const FILE_READERS = new Set(['read_file', 'read_xlsx', 'read_docx', 'read_pdf', 'extract_document_text']);
@@ -29,11 +30,15 @@ export function missingTaskInputResult(taskText: string, records: ToolExecutionR
   // i18n-allow: existing source operations and standard user-folder recognition.
   if (!['read', 'inspect', 'edit'].includes(intent.operation)
     && !/读取|读入|分析|修改|根据|基于|\b(?:read|load|inspect|analy[sz]e|modify|edit|using|based on)\b/iu.test(sourceText)
+    // i18n-allow: Existing source-input and standard user-folder recognition grammar.
     && !/合并|汇总|整合|\b(?:merge|combine)\b/iu.test(taskText)) return null;
   const primary = buildTaskTargetAnchorProjection({ taskText: sourceText }).target.path;
   const absolute = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(primary || '');
+  // i18n-allow: Existing source-input and standard user-folder recognition grammar.
   const folder = /桌面|\bdesktop\b/iu.test(sourceText) ? 'Desktop'
+    // i18n-allow: Existing source-input and standard user-folder recognition grammar.
     : /下载|\bdownloads\b/iu.test(sourceText) ? 'Downloads'
+      // i18n-allow: Existing source-input and standard user-folder recognition grammar.
       : /文档(?:目录|文件夹)|\bdocuments\b/iu.test(sourceText) ? 'Documents' : '';
   const names = [...sourceText.matchAll(new RegExp(FILE_NAME_RE.source, 'giu'))].map(match => match[1]);
   const sources = absolute ? [primary] : folder ? names.map(name => canonicalPathIdentity('~/' + folder) + '/' + name) : [];
@@ -63,12 +68,9 @@ export function missingTaskInputResult(taskText: string, records: ToolExecutionR
       if (!result || result.entries.some((entry: string) => targetReferenceMatches(entry, name))
         || result.truncated !== false || result.originalCount !== result.entries.length || result.originalCount >= 200) continue;
     }
-    const location = folder === 'Desktop' ? '桌面' : folder === 'Downloads' ? '下载目录' : '文档目录';
-    // i18n-allow: specific input identified by a reader failure or scoped search.
     const text = /[\u3400-\u9fff]/u.test(taskText)
-      ? (!absolute ? '没有在' + location + '找到“' + name + '”' : '没有找到这项任务需要的源文件：' + source)
-        + '，暂时无法完成这项文件处理。请补齐文件或提供正确路径。'
-      : 'The required source file was not found: ' + source + '\nSupply the file or correct its path before continuing.';
+      ? COMPLETENESS_BOUNDARY_MESSAGES.zh.missingSource(source, name, folder, absolute)
+      : COMPLETENESS_BOUNDARY_MESSAGES.en.missingSource(source);
     return { text, blocked: true, reason: MISSING_TASK_INPUT_REASON };
   }
   return null;

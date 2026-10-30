@@ -29,12 +29,16 @@ import {
   type FinanceModuleId,
 } from '../i18n/locales/financeModules';
 import { useIndustryWorkflow } from '../hooks/useIndustryWorkflow';
+import { IndustryWorkflowRecovery } from './IndustryWorkflowRecovery';
+import { FinanceLocalWorksheet } from './FinanceLocalWorksheet';
+import { businessRecoveryCopy } from '../i18n/locales/businessRecovery';
 import { apiJson } from '../services/apiClient';
 
 export interface FinanceWorkbenchProps {
   lang: string;
   domain: 'personal' | 'work';
   initialWorkflowId?: string;
+  workspaceId?: string;
   onOpenKnowledge: () => void;
   onOpenSkills: () => void;
 }
@@ -292,13 +296,14 @@ function ModuleVisualization({ module }: { module: FinanceModuleCopy }) {
 }
 
 export function FinanceWorkbench(props: FinanceWorkbenchProps) {
-  return <FinanceWorkbenchContent key={`${props.domain}:${props.initialWorkflowId || ''}`} {...props} />;
+  return <FinanceWorkbenchContent key={`${props.domain}:${props.workspaceId || ''}:${props.initialWorkflowId || ''}`} {...props} />;
 }
 
 function FinanceWorkbenchContent({
   lang,
   domain,
   initialWorkflowId,
+  workspaceId,
   onOpenKnowledge,
   onOpenSkills,
 }: FinanceWorkbenchProps) {
@@ -311,7 +316,8 @@ function FinanceWorkbenchContent({
   const presentation = selectedModule ? FINANCE_PRESENTATION[selectedModule.id] : DEFAULT_PRESENTATION;
   const PresentationIcon = presentation.icon;
   const [runtime, setRuntime] = useState<FinanceRuntimeState>({ status: 'checking' });
-  const { busy: starting, taskId: lastTaskId, text: executionResult, status: workflowStatus, error: startError, run, stop, reset } = useIndustryWorkflow();
+  const workflow = useIndustryWorkflow(initialWorkflowId || '', workspaceId);
+  const { busy: starting, taskId: lastTaskId, text: executionResult, status: workflowStatus, error: startError, run, stop, reset } = workflow;
   const [taskBrief, setTaskBrief] = useState('');
   const [deliveryFields, setDeliveryFields] = useState<Record<string, string>>({});
   const [missingDeliveryFields, setMissingDeliveryFields] = useState<string[]>([]);
@@ -427,7 +433,11 @@ function FinanceWorkbenchContent({
               </span>
             </div>
 
-            <ModuleVisualization module={selectedModule} />
+            {['business-dashboard', 'invoice-tax', 'accounting', 'cash-risk'].includes(selectedModule.id)
+              ? <FinanceLocalWorksheet key={`${selectedModule.id}:${workspaceId || '_unbound'}`} entryId={selectedModule.id as 'business-dashboard' | 'invoice-tax' | 'accounting' | 'cash-risk'} workspaceId={workspaceId || '_unbound'} lang={lang} />
+              : <ModuleVisualization module={selectedModule} />}
+            <p className="text-xs text-white/50">{businessRecoveryCopy(lang).pending} {businessRecoveryCopy(lang).scope}</p>
+            <IndustryWorkflowRecovery workflow={workflow} lang={lang} />
 
             {selectedModule.id !== 'accounting' && selectedModule.id !== 'invoice-tax' && (
               <section className="grid gap-3 lg:grid-cols-2">

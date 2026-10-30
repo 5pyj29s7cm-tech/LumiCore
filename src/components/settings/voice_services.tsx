@@ -6,28 +6,31 @@ import { uiMessage } from "../../i18n/uiMessages";
 import { SettingsSection } from './components';
 import { LumiOfficialCapabilityBadge } from './official_models';
 import { VoicePreferenceToggle } from './vision_voice_preferences';
+import { settingsRecoveryCopy } from '@/i18n/locales/settingsRecovery';
 
 export const VoiceForge = lazy(() => import("../VoiceForge").then(m => ({ default: m.VoiceForge })));
 
 export function VoiceServicesPage({ t }: { t: any }) {
+  const recovery = settingsRecoveryCopy(t?.langCode);
   return (
     <div className="space-y-8">
       <SettingsSection title={t.audioOutput || uiMessage('settings.audio-voice-output.e1f3dc4c32')} icon={<Music size={18} className="text-celestial-saturn" />}>
         <div className="space-y-4 mb-6">
           <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-2">
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <div aria-hidden="true" className="w-2 h-2 rounded-full bg-white/30" />
               <span className="text-xs font-bold text-white/80">{t.ttsEngine || uiMessage('settings.tts-engine.a69f1a5e70')}</span>
             </div>
             <p className="text-xs text-white/40">{t.ttsEngineDesc || uiMessage('settings.local-tts-local-cosyvoice-gpt.ec3eae7527')}</p>
           </div>
           <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-2">
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <div aria-hidden="true" className="w-2 h-2 rounded-full bg-white/30" />
               <span className="text-xs font-bold text-white/80">{t.sttEngine || uiMessage('settings.stt-engine.3e8df8d9d4')}</span>
             </div>
             <p className="text-xs text-white/40">{t.sttEngineDesc || uiMessage('settings.local-whisper-openai-whisper-doubao.ff3da59708')}</p>
           </div>
+          <p className="text-xs text-white/55">{recovery.voiceInfo}</p>
           <VoiceProviderSwitch t={t} />
           <VoiceDeviceSelector />
         </div>

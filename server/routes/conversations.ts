@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
 import { sendDurableMutation } from './durable_mutation';
 import { flushDBOrThrow } from "../../db_layer";
-import { conversationAccessStatus, listConversationHeaders, listUserInteractions, listConversationPreviewMessages } from '../conversation/history_repository';
+import { conversationAccessStatus, listConversationHeaders, listUserInteractions, listConversationPreviewMessages, listConversationReceiptHistoryPage } from '../conversation/history_repository';
 import { forgetConversationChatExecutionsDurably } from '../socket/chat_execution_registry';
 import { mutationScopeKey, runSerializedMutation, readScopedDeletionReceipt, recordScopedDeletionReceipt } from '../persistence/durable_scope_mutation';
 import {
@@ -173,6 +173,12 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     if (access === 'missing') return res.status(404).json({ error: 'Conversation not found' });
     if (access !== 'allowed') return res.status(403).json({ error: 'Unauthorized' });
     const limit = parseInt(req.query.limit as string) || 50;
+    if (req.query.page === '1') {
+      const page = listConversationReceiptHistoryPage(req.params.id, limit, String(req.query.before || ''));
+      if (!page) return res.status(400).json({ error: 'History cursor no longer exists; reload the conversation.' });
+      const snapshot = capturePublicArtifactEvidenceSnapshot();
+      return res.json({ ...page, messages: page.messages.map(message => projectConversationMessageForCustomer(message, snapshot)) });
+    }
     const sourceMessages = getMessages(req.params.id, limit);
     const evidenceSnapshot = capturePublicArtifactEvidenceSnapshot();
     const messages = sourceMessages.map(message => projectConversationMessageForCustomer(message, evidenceSnapshot));

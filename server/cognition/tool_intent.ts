@@ -67,17 +67,21 @@ export interface ToolIntentDecisionTrace {
 const WHOLE_TURN_READ_ONLY = /(?:^|[，,。；;\n])\s*(?:只读(?!取)|read[- ]only)/iu;
 const LOCAL_NEGATION_CN = String.raw`(?:不要|不|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续|重新)?\s*`;
 const LOCAL_NEGATION_EN = String.raw`\b(?:do\s+not|don't|without)\s+`;
+// i18n-allow: Existing negative instruction and clause-boundary recognition.
 const WHOLE_TURN_NO_ACTION_CN = new RegExp(LOCAL_NEGATION_CN + String.raw`(?:操作|(?:执行|推进)(?:\s*(?:或|和|及)\s*(?:执行|推进))?\s*(?:任何|后续|新|当前|现有|所有|全部)?\s*(?:步骤|任务|工作|动作|操作))`, 'u');
 const WHOLE_TURN_NO_ACTION_EN = new RegExp(LOCAL_NEGATION_EN + String.raw`(?:execute|advance)(?:\s+(?:or|and)\s+(?:execute|advance))?\s+(?:(?:any|new|further|current|existing|all)\s+)?(?:steps?|tasks?|work|actions?)\b`, 'iu');
 const EXPLICIT_NO_LOCAL_MUTATION_PATTERNS: RegExp[] = [
   WHOLE_TURN_READ_ONLY, WHOLE_TURN_NO_ACTION_CN, WHOLE_TURN_NO_ACTION_EN,
+  // i18n-allow: Existing negative instruction and clause-boundary recognition.
   new RegExp(LOCAL_NEGATION_CN + String.raw`(?:修改|改动|写入|保存|覆盖|删除|(?:改写|创建|新建|生成|起草|撰写|制作|整理成|做一份|给我一份)(?:(?:这|该|当前|任何|原|新)?(?:个|份)?\s*(?:文件|文档|内容|页面|系统|数据|图片|图像|视频|草稿|它)|(?=\s*(?:$|[，,。！？!?；;、\n]|或|和|及))))`, 'u'),
+  // i18n-allow: Existing negative instruction and clause-boundary recognition.
   /(?:保持|保留)\s*(?:原|源)?(?:文件|文档|数据)(?:原样|不变)|(?:原|源)(?:文件|文档|数据)\s*(?:不动|不变|保持原样)/u,
   new RegExp(LOCAL_NEGATION_EN + String.raw`(?:(?:modify|edit|write|save|overwrite|delete|change)\b|(?:create|generate|draft)\b(?=\s*(?:(?:(?:the|this|that|any|all|new|original|current)\s+)?(?:files?|documents?|content|pages?|systems?|data|images?|pictures?|videos?|drafts?|it)\b|$|[.,;!?\n])))`, 'iu'),
 ];
 
 // The same existing prohibition verbs are scoped to external effects, not all local creation.
 const EXPLICIT_NO_EXTERNAL_COMMIT_PATTERNS: RegExp[] = [
+  // i18n-allow: Existing negative instruction and clause-boundary recognition.
   /(?:不要|不|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续)?\s*(?:发送|提交)/u,
   /\b(?:do\s+not|don't|without)\s+(?:send|submit)\b/iu,
 ];
@@ -412,6 +416,7 @@ export function isInformationOnlyQuestion(text: string, analysis?: ActionIntentA
   const clauses = actionInstructionClauses(text).map(clause => clause.probe.trim()).filter(Boolean);
   if (clauses.some(clause => methodQuestion.test(clause)) && !clauses.some(clause => {
     if (methodQuestion.test(clause)) return false;
+    // i18n-allow: Existing negative instruction and clause-boundary recognition.
     const instruction = clause.replace(/^(?:然后|接着|随后|之后|同时|并且|再)\s*/u, '');
     return hasExplicitActionRequest(instruction) || normalizeActionIntent(instruction, analysis).kind !== 'none'
       || matchesIntentGrammar(instruction, STRUCTURED_TOOL_INTENT_RULES)

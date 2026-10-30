@@ -133,6 +133,7 @@ export function shouldAllowLocalFileWriteForTurn(userText: string, attachments: 
     /\b(?:create|generate|write|save|export|turn|make|draw|draft)\b.{0,64}\b(?:file|document|docx|word|pdf|txt|markdown|transcript|notes|minutes|report|cad|dxf|dwg|drawing|floor\s*plan|blueprint)\b/i.test(clean);
 
   const mergeDeliverable = affirmativeActionClauses(clean).some(clause => hasAffirmativeArtifactMutationAction(clause)
+    // i18n-allow: Existing input grammar distinguishes merged deliverables.
     && /(?:合并(?:成|为)|\b(?:merge|combine)\b).{0,100}(?:文件|文档|DOCX|Word|PDF|TXT|MD|PPTX?|XLSX?)/iu.test(withoutLocationLiterals(clause, true)));
   return explicitDeliverable || attachedArtifactRequest || directEnglishRequest || mergeDeliverable;
 }

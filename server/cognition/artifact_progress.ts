@@ -8,6 +8,7 @@ import { artifactReadbackText, artifactPathFromRecord, isArtifactProducerRecord,
 import { toolRecordSucceeded } from '../tools/receipt_payload';
 import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
 import { CN_EXECUTION_EVIDENCE_MESSAGES as CN } from "../regions/messages/execution_evidence_messages";
+import { PERSONAL_COMPLETION_MESSAGES } from '../regions/messages/personal_completion_messages';
 
 
 
@@ -19,21 +20,27 @@ export function projectRequestedSourceArtifactHandoff(task: string, records: Too
   const name = sourcePath.split(/[\\/]/u).at(-1) || source.object;
   // i18n-allow: same-chat handoff instructions and later restrictions share clause order.
   const affirmative = new Set(affirmativeActionInstructionClauses(task).map(item => item.text));
+  // i18n-allow: Input grammar for original/source attachment references.
   const sourceReference = (probe: string, text: string) => /(?:原|源)(?:Word|PDF|文件|文档|稿)|\b(?:original|source)\s+(?:word|pdf|file|document)\b/iu.test(probe)
     || Boolean(name && text.includes(name));
   let required = false;
   for (const { probe, text } of actionInstructionClauses(task)) {
+    // i18n-allow: Input polarity grammar; preserves ordered restrictions.
     const restriction = probe.replace(/((?:不要|别|不必|无需|不用|禁止|请勿|只|仅)(?:要|需|需要)?)\s*把\s*([^，,。；;\n]{1,80}?)\s*(发送|发|附上|附|回传|交付|返回)/gu, '$1$3$2');
     if (affirmative.has(text) && sourceReference(probe, text)
+      // i18n-allow: Same-chat handoff instruction grammar.
       && /(?:发(?:送|回|到|在)?|回传|附上|交付|返回|提供).{0,24}(?:当前聊天|本次聊天|这里)|\b(?:send|return|attach|provide)\b.{0,120}\b(?:here|(?:this|current)\s+chat)\b/iu.test(probe)) required = true;
     if (sourceReference(probe, text)
+      // i18n-allow: Negated handoff instruction grammar.
       && /(?:不要|别|不必|无需|不用|禁止|请勿)\s*(?:再)?(?:发送|发|附上|附|回传|交付|返回)|\b(?:do not|don't|never)\s+(?:send|attach|return|provide)\b/iu.test(restriction)) required = false;
+    // i18n-allow: Exclusive attachment instruction grammar.
     const only = restriction.match(/(?:只|仅)(?:要|需|需要)?(?:发送|发|附上|回传|交付|返回)\s*([^。；;\n]{1,80})|\b(?:only\s+(?:send|attach|return|provide)|(?:send|attach|return|provide)\s+only)\s+([^.;\n]{1,80})/iu);
     if (only && !sourceReference(only[1] || only[2], only[1] || only[2])) {
       const value = only[1] || only[2];
       const formats = value.match(/\b(?:PDF|Word|DOCX?|XLSX?|Excel|PPTX?|PowerPoint|TXT)\b/giu) || [];
       const sourceFormat = /\.docx?$/iu.test(name) ? /^(?:word|docx?)$/iu : /\.pdf$/iu.test(name) ? /^pdf$/iu
         : /\.xlsx?$/iu.test(name) ? /^(?:excel|xlsx?)$/iu : /\.pptx?$/iu.test(name) ? /^(?:powerpoint|pptx?)$/iu : /^txt$/iu;
+      // i18n-allow: New-output-only instruction grammar.
       if (formats.length && !formats.some(format => sourceFormat.test(format)) || /(?:新文件|新文档)|\bnew\s+(?:file|document)\b/iu.test(value)) required = false;
     }
   }
@@ -198,12 +205,12 @@ export function artifactProgressFeedback(progress: NonNullable<ReturnType<typeof
     ...(progress.missingSpreadsheetRequirements.length ? [zh ? CN.spreadsheetIncomplete(progress.missingSpreadsheetRequirements)
       : `Workbook requirements missing: ${progress.missingSpreadsheetRequirements.join(', ')}`] : []),
     ...(progress.openRequestedAndPending ? [zh ? CN.artifactPendingOpen : 'Requested application open is unverified'] : []),
-    ...(progress.sourceAttachment?.missing ? [zh ? `尚未读取并附上原文件：${progress.sourceAttachment.sourcePath}` : `The requested original file has not been read and attached: ${progress.sourceAttachment.sourcePath}`] : []),
+    ...(progress.sourceAttachment?.missing ? [zh ? PERSONAL_COMPLETION_MESSAGES.sourceNotAttached(progress.sourceAttachment.sourcePath) : `The requested original file has not been read and attached: ${progress.sourceAttachment.sourcePath}`] : []),
   ];
   const nextSteps = progress.complete ? [] : [progress.next === 'readback'
     ? zh ? CN.artifactNextRead : 'Read the saved version and verify the requirements.'
     : progress.next === 'open' ? zh ? CN.artifactNextOpen : 'Open the saved file and verify the target window.'
-      : progress.next === 'source_attachment' ? zh ? '读取指定原文件，并将原文件和新文件一起附在当前聊天。' : 'Read the exact original and attach it alongside the new file in this chat.'
+      : progress.next === 'source_attachment' ? zh ? PERSONAL_COMPLETION_MESSAGES.attachSourceNext : 'Read the exact original and attach it alongside the new file in this chat.'
       : zh ? CN.artifactNextRepair : 'Repair the listed requirements, preserve existing work, then read back the new version.'];
   return { completed, incomplete, nextSteps, evidence: [progress.savedPath] };
 }

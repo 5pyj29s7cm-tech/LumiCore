@@ -19,7 +19,7 @@ import { isModelConfigurationReadRequest } from './model_configuration_intent';
 import type { LumiTurnFlow } from './turn_flow';
 import { verifiedExternalCliStatus, formatExternalCliStatus } from './external_cli_status';
 import { findDesktopCompletionReview, desktopCompletionReviewText, DESKTOP_COMPLETION_REVIEW_REASON } from './desktop_completion_review';
-import { artifactRecordMatchesTurn, artifactPathFromRecord, resolveArtifactDelivery, isArtifactProducerRecord, sameArtifactPath } from '../tools/artifact_evidence';
+import { artifactRecordMatchesTurn, artifactPathFromRecord, resolveArtifactDelivery, isArtifactProducerRecord, isArtifactReaderRecord, sameArtifactPath } from '../tools/artifact_evidence';
 import { withoutLocationLiterals } from './location_literals';
 import { buildTaskTargetAnchorProjection, isVerifiedProducedDocumentTarget } from '../conversation/task_target_anchor';
 import { missingTaskInputResult } from './missing_task_input';
@@ -612,8 +612,16 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     });
     const outcomes = composite.components.map(component => {
       const outputs = component.contract.kind === 'artifact_work' ? requestedArtifactInstructions(component.text) : [];
-      const records = outputs.length === 1 ? (input.toolRecords || []).filter(record => !isArtifactProducerRecord(record)
-        || sameArtifactPath(artifactPathFromRecord(record), outputs[0].path))
+      const records = outputs.length === 1 ? (input.toolRecords || []).filter(record => {
+        if (isArtifactProducerRecord(record)) return sameArtifactPath(artifactPathFromRecord(record), outputs[0].path);
+        // A sibling input receipt cannot be treated as an output readback.
+        // Keep unrelated reads, so genuine wrong-target evidence still blocks.
+        return !isArtifactReaderRecord(record) || sameArtifactPath(artifactPathFromRecord(record), outputs[0].path)
+          || !composite.components!.some(sibling => sibling !== component
+            && !requestedArtifactInstructions(sibling.text).length
+            && requestsExactReadOnlyArtifactInspection(sibling.text)
+            && documentReadMatchesRequestedTarget(record, sibling.text, input.flow?.acceptedTaskTarget, input.flow?.currentAttachmentPaths));
+      })
         : requestsExactReadOnlyArtifactInspection(component.text) ? (input.toolRecords || []).filter(record => !isArtifactProducerRecord(record))
         : input.toolRecords || [];
       const scoped = { ...input, toolRecords: records };

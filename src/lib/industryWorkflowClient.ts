@@ -7,6 +7,49 @@ function postWorkflow<T = Record<string, any>>(path: string, body: unknown, sign
 export interface IndustryWorkflowTaskRef {
   id: string;
   status: string;
+  title?: string;
+  result?: string;
+  updatedAt?: string;
+  metadata?: Record<string, any>;
+}
+
+export type IndustryArtifact = { path: string; basename: string; size: number; sha256: string };
+
+export async function listIndustryWorkflows(entryId: string, signal?: AbortSignal) {
+  const data = await apiJson('/api/industry/workflows?limit=200', { signal });
+  if (!Array.isArray(data?.tasks) || !data.tasks.every((task: any) => typeof task?.id === 'string' && typeof task.status === 'string' && task.metadata?.industryWorkflow)) throw new Error('Invalid workflow history response');
+  return (data.tasks as IndustryWorkflowTaskRef[]).filter(task => task.metadata?.industryWorkflow.entryId === entryId);
+}
+
+export async function readIndustryWorkflowPage(entryId: string, workspaceId: string | undefined, before = '', signal?: AbortSignal) {
+  const query = new URLSearchParams({ entryId, before });
+  if (workspaceId !== undefined) query.set('workspaceId', workspaceId);
+  const data = await apiJson('/api/industry/workflows?' + query, { signal });
+  if (!Array.isArray(data?.tasks) || !data.tasks.every((task: any) => typeof task?.id === 'string' && typeof task.status === 'string' && task.metadata?.industryWorkflow?.entryId === entryId)
+    || (data.nextCursor != null && typeof data.nextCursor !== 'string')) throw new Error('Invalid workflow history page');
+  return data as { tasks: IndustryWorkflowTaskRef[]; nextCursor: string | null };
+}
+
+export async function readIndustryWorkflow(taskId: string, signal?: AbortSignal) {
+  const data = await apiJson('/api/industry/workflows/' + encodeURIComponent(taskId), { signal });
+  if (data?.task?.id !== taskId || typeof data.task.status !== 'string' || !data.task.metadata?.industryWorkflow) throw new Error('Invalid workflow task response');
+  return data.task as IndustryWorkflowTaskRef;
+}
+
+export async function cancelFinanceWorkflow(taskId: string, signal?: AbortSignal) {
+  const data = await postWorkflow(`/${encodeURIComponent(taskId)}/finance-cancel`, {}, signal);
+  if (data?.ok !== true || data.task?.id !== taskId || typeof data.cancelled !== 'boolean' || data.status !== data.task.status) throw new Error('Cancellation was not confirmed');
+  return data as { task: IndustryWorkflowTaskRef; status: string; cancelled: boolean; cancellationRequested: boolean };
+}
+
+export async function downloadIndustryArtifact(taskId: string, artifact: IndustryArtifact, signal?: AbortSignal) {
+  if (!/^[a-f0-9]{64}$/.test(artifact.sha256)) throw new Error('Invalid artifact identity');
+  const response = await apiFetch(`/api/industry/workflows/${encodeURIComponent(taskId)}/artifacts/${artifact.sha256}`, { signal });
+  if (!response.ok) throw new Error((await response.json().catch(() => null))?.error || `HTTP ${response.status}`);
+  const blob = await response.blob(); signal?.throwIfAborted();
+  const url = URL.createObjectURL(blob), link = document.createElement('a');
+  link.href = url; link.download = artifact.basename || 'finance.xlsx'; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export interface IndustryWorkflowStartResponse {
@@ -38,7 +81,7 @@ export interface FinanceDeliveryExecutionResult {
   reused: boolean;
   task: IndustryWorkflowTaskRef & { result?: string };
   verification: Record<string, unknown>;
-  artifacts: Array<{ path: string; basename: string; size: number; sha256: string }>;
+  artifacts: IndustryArtifact[];
   toolReceipts: string[];
   externalActions: [];
 }

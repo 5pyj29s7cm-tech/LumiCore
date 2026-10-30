@@ -13,6 +13,7 @@ import * as EDB from './db';
 import * as KB from './kb';
 import * as LegalCases from './legal_cases';
 import * as Audit from './audit';
+import { AuditPageError, queryAuditPage } from './audit_pagination';
 import * as WorkRouting from './work_routing';
 import * as ResourceACL from './resource_acl';
 import { Server as SocketIOServer } from 'socket.io';
@@ -869,11 +870,26 @@ function mountOrganizationAuditRoutes(io: SocketIOServer | undefined, router: Re
   // ── Audit Log (admin only) ───────────────────────────────────────────
 
   router.get('/org/audit', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    if (req.query.pagination === 'cursor') {
+      const keys = ['userId', 'action', 'resourceType', 'resourceId', 'from', 'to', 'cursor', 'limit'] as const;
+      if (keys.some(key => req.query[key] !== undefined && typeof req.query[key] !== 'string')) {
+        res.status(400).json({ error: 'Invalid audit pagination parameters' }); return;
+      }
+      try {
+        const filters = Object.fromEntries(keys.slice(0, 6).map(key => [key, req.query[key]]));
+        res.json(queryAuditPage(req.user!.orgId!, req.user!.uid, filters,
+          req.query.limit === undefined ? 100 : Number(req.query.limit), (req.query.cursor as string) || ''));
+      } catch (error) {
+        if (!(error instanceof AuditPageError)) throw error;
+        res.status(error.statusCode).json({ error: error.message });
+      }
+      return;
+    }
     const limit = parseInt(req.query.limit as string) || 50;
     const offset = parseInt(req.query.offset as string) || 0;
 
     // If filter params are present, use queryAuditLog
-    const hasFilters = req.query.userId || req.query.action || req.query.resourceType || req.query.from || req.query.to;
+    const hasFilters = req.query.userId || req.query.action || req.query.resourceType || req.query.resourceId || req.query.from || req.query.to;
     if (hasFilters) {
       const entries = Audit.queryAuditLog(req.user!.orgId!, {
         userId: req.query.userId as string,

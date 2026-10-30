@@ -44,7 +44,7 @@ import { AvatarStudio } from '../src/components/AvatarStudio';
 beforeEach(() => {
   vi.clearAllMocks(); mocks.apiJson.mockReset(); mocks.apiFetch.mockReset();
   mocks.user = { uid: 'personal-fixture-a', role: 'user' }; localStorage.clear();
-  mocks.apiJson.mockResolvedValue({ contacts: [] });
+  mocks.apiJson.mockResolvedValue({ contacts: [], total: 0 });
   mocks.apiFetch.mockRejectedValue(Error('No real API in this fixture'));
 });
 afterEach(cleanup);
@@ -122,11 +122,14 @@ describe('all-partitions contacts', () => {
     expect(view.container.childElementCount).toBe(0); expect(mocks.apiJson).not.toHaveBeenCalled();
   });
   it('filters contact fields and retains a failed save draft until the server confirms it', async () => {
-    mocks.apiJson.mockResolvedValueOnce({ contacts: [{ id: 'one', name: 'Alice', tags: ['research'] }, { id: 'two', name: 'Bob' }] });
+    mocks.apiJson.mockResolvedValueOnce({ contacts: [{ id: 'one', name: 'Alice', tags: ['research'] }, { id: 'two', name: 'Bob' }], total: 2 });
     render(<ContactsPanel />); await screen.findByText('Alice');
+    mocks.apiJson.mockResolvedValueOnce({ contacts: [{ id: 'one', name: 'Alice', tags: ['research'] }], total: 1 });
     fireEvent.change(screen.getByPlaceholderText('contacts-panel.search-contacts.fcf6775e68'), { target: { value: 'research' } });
-    expect(screen.queryByText('Bob')).toBeNull();
+    await waitFor(() => expect(screen.queryByText('Bob')).toBeNull());
+    mocks.apiJson.mockResolvedValueOnce({ contacts: [{ id: 'one', name: 'Alice' }, { id: 'two', name: 'Bob' }], total: 2 });
     fireEvent.change(screen.getByPlaceholderText('contacts-panel.search-contacts.fcf6775e68'), { target: { value: '' } });
+    await screen.findByText('Bob');
     fireEvent.click(screen.getByRole('button', { name: 'contacts-panel.add.cd6f2f52ff' }));
     const name = screen.getByPlaceholderText('contacts-panel.name.f5479c3217');
     expect((screen.getByRole('button', { name: 'contacts-panel.save.ec8e6d5819' }) as HTMLButtonElement).disabled).toBe(true);
@@ -134,29 +137,30 @@ describe('all-partitions contacts', () => {
     mocks.apiJson.mockRejectedValueOnce(Error('Fixture save rejected'));
     fireEvent.click(screen.getByRole('button', { name: 'contacts-panel.save.ec8e6d5819' }));
     await screen.findByRole('alert'); expect((name as HTMLInputElement).value).toBe('  Carol  '); expect(screen.queryByText('Carol')).toBeNull();
-    mocks.apiJson.mockResolvedValueOnce({ id: 'three', name: 'Carol', relationship: 'friend' });
+    mocks.apiJson.mockResolvedValueOnce({ id: 'three', name: 'Carol', relationship: 'friend' }).mockResolvedValueOnce({ contacts: [{ id: 'three', name: 'Carol' }], total: 1 });
     fireEvent.click(screen.getByRole('button', { name: 'contacts-panel.save.ec8e6d5819' }));
     await screen.findByText('Carol'); expect(screen.queryByPlaceholderText('contacts-panel.name.f5479c3217')).toBeNull();
-    const [url, options] = mocks.apiJson.mock.calls.at(-1)!;
+    const [url, options] = mocks.apiJson.mock.calls.filter(([, init]) => init.method === 'POST').at(-1)!;
     expect(url).toBe('/api/contacts'); expect(options.method).toBe('POST'); expect(JSON.parse(options.body)).toMatchObject({ name: 'Carol', relationship: 'friend' });
   });
   it('does not remove an existing contact for an unconfirmed delete response', async () => {
-    mocks.apiJson.mockResolvedValueOnce({ contacts: [{ id: 'one', name: 'Alice' }] });
+    mocks.apiJson.mockResolvedValueOnce({ contacts: [{ id: 'one', name: 'Alice' }], total: 1 });
     render(<ContactsPanel />); await screen.findByText('Alice');
     mocks.apiJson.mockResolvedValueOnce({ success: false });
     fireEvent.click(screen.getByTitle('reminder-panel.delete.5b875326d1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm deletion' }));
     await screen.findByRole('alert'); expect(screen.getByText('Alice')).toBeTruthy();
     mocks.apiJson.mockResolvedValueOnce({ success: true });
-    fireEvent.click(screen.getByTitle('reminder-panel.delete.5b875326d1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm deletion' }));
     await waitFor(() => expect(screen.queryByText('Alice')).toBeNull());
   });
   it('aborts the old account load and cannot expose its late response in a new account', async () => {
     let finish!: (value: unknown) => void;
     mocks.apiJson.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     const view = render(<ContactsPanel />); const oldSignal = mocks.apiJson.mock.calls[0][1].signal;
-    mocks.user = { uid: 'personal-fixture-b', role: 'user' }; mocks.apiJson.mockResolvedValueOnce({ contacts: [{ id: 'b', name: 'Current account' }] });
+    mocks.user = { uid: 'personal-fixture-b', role: 'user' }; mocks.apiJson.mockResolvedValueOnce({ contacts: [{ id: 'b', name: 'Current account' }], total: 1 });
     view.rerender(<ContactsPanel />); await screen.findByText('Current account'); expect(oldSignal.aborted).toBe(true);
-    await act(async () => finish({ contacts: [{ id: 'a', name: 'Old account' }] }));
+    await act(async () => finish({ contacts: [{ id: 'a', name: 'Old account' }], total: 1 }));
     expect(screen.queryByText('Old account')).toBeNull();
   });
 });

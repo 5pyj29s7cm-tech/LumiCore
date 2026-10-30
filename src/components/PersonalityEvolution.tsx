@@ -7,6 +7,8 @@ import { useApp } from '@/contexts/AppContext';
 import { useT } from '../lib/useT';
 import { uiMessage } from '../i18n/uiMessages';
 import { personalityEvolutionCopy } from '../i18n/locales/personalityEvolution';
+import { personalCompletenessCopy } from '../i18n/locales/personalCompleteness';
+import { withRequestDeadline } from '../lib/requestDeadline';
 
 import { apiJson } from '../services/apiClient';
 import type { EvolutionStep as StoredEvolutionStep } from '../../server/personality/evolution';
@@ -91,7 +93,7 @@ function EvolutionView({ personalityId }: { personalityId: string }) {
     requests.read?.abort();
     const controller = requests.read = new AbortController();
     try {
-      const next = await apiJson<EvolutionData>(baseUrl + '/evolution', { signal: controller.signal });
+      const next = await withRequestDeadline(signal => apiJson<EvolutionData>(baseUrl + '/evolution', { signal }), controller.signal);
       if (controller.signal.aborted) return false;
       if (!next || next.personalityId !== personalityId || !Array.isArray(next.history)
         || typeof next.evolutionConfig?.plasticity !== 'number' || typeof next.evolutionConfig?.cooldownMs !== 'number') {
@@ -102,7 +104,7 @@ function EvolutionView({ personalityId }: { personalityId: string }) {
       setError('');
       return next;
     } catch (cause: any) {
-      if (!controller.signal.aborted) setError(cause?.message || messages.current.t.failedToLoadEvolution);
+      if (!controller.signal.aborted) setError(cause?.name === 'TimeoutError' ? personalCompletenessCopy(messages.current.t.langCode).timeout : cause?.message || messages.current.t.failedToLoadEvolution);
       return false;
     } finally {
       if (requests.read === controller) requests.read = null;
@@ -124,10 +126,10 @@ function EvolutionView({ personalityId }: { personalityId: string }) {
     setOperation(action);
     try {
       const body = action === 'freeze' ? { frozen: !data.evolutionFrozenAt } : action === 'revert' ? { auditId: selected!.auditId } : undefined;
-      const result = await apiJson(baseUrl + (action === 'evolve' ? '/evolve' : '/evolution/' + action), {
-        method: 'POST', signal: controller.signal,
+      const result = await withRequestDeadline(signal => apiJson(baseUrl + (action === 'evolve' ? '/evolve' : '/evolution/' + action), {
+        method: 'POST', signal,
         ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
-      });
+      }), controller.signal);
       if (controller.signal.aborted) return;
       if (!result || (action === 'evolve' ? typeof result.evolved !== 'boolean'
         : action === 'freeze' ? result.frozen !== !data.evolutionFrozenAt : result.reverted !== true || result.auditId !== selected!.auditId)) {
@@ -148,7 +150,12 @@ function EvolutionView({ personalityId }: { personalityId: string }) {
           : uiMessage(data.evolutionFrozenAt ? 'personality-evolution.evolution-unfrozen.c118b2912f' : 'personality-evolution.evolution-frozen.09edf7e1bf'));
       }
     } catch (cause: any) {
-      if (!controller.signal.aborted) toast.error(cause?.message || messages.current.copy.unconfirmed);
+      if (!controller.signal.aborted) {
+        // A timed-out mutation may have reached the server. Require a readback;
+        // never automatically submit it a second time.
+        if (cause?.name === 'TimeoutError') setError(messages.current.copy.unconfirmed);
+        toast.error(cause?.name === 'TimeoutError' ? personalCompletenessCopy(messages.current.t.langCode).timeout : cause?.message || messages.current.copy.unconfirmed);
+      }
     } finally {
       if (requests.write === controller) { requests.write = null; if (requests.active) setOperation(''); }
       if (requests.active && requests.pendingEvent) { requests.pendingEvent = false; void fetchEvolutionData(); }

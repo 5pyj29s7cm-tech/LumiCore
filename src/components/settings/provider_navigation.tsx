@@ -5,8 +5,10 @@ import type { ProviderRuntimeStatus, ProviderScope } from './connections';
 import { OfficialProviderSettings, ServiceProviderSettings } from './official_provider';
 import { LocalProviderSettings } from './local_provider';
 import { SettingsSection } from './components';
+import { settingsRecoveryCopy } from '@/i18n/locales/settingsRecovery';
 
 export function AIProvidersPage({ t, providerStatus }: { t: any; providerStatus: Record<string, ProviderRuntimeStatus> }) {
+  const recovery = settingsRecoveryCopy(t?.langCode);
   const [scope, setScope] = useState<ProviderScope>('official');
   const extensionProviders = Object.entries(providerStatus).filter(([, status]) => {
     if (status.extension !== true) return false;
@@ -44,28 +46,28 @@ export function AIProvidersPage({ t, providerStatus }: { t: any; providerStatus:
           ? <LocalProviderSettings t={t} />
           : <ServiceProviderSettings t={t} providerStatus={providerStatus} />}
       {extensionProviders.length > 0 && (
-        <SettingsSection title="Signed extension Providers" icon={<Shield size={18} className="text-emerald-300" />}>
+        <SettingsSection title={recovery.extensions} icon={<Shield size={18} className="text-emerald-300" />}>
           <div className="divide-y divide-white/10 border-y border-white/10">
             {extensionProviders.map(([providerId, status]) => (
               <div key={providerId} className="grid gap-2 py-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
                 <div>
                   <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-white">
                     <span>{providerId}</span>
-                    <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-0.5 text-[10px] text-emerald-200">signed</span>
+                    <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-0.5 text-[10px] text-emerald-200">{recovery.signed}</span>
                     {status.version && <span className="font-mono text-[10px] text-white/35">v{status.version}</span>}
                   </div>
                   <p className="mt-1 text-xs text-white/40">
-                    {status.model || 'No default model'} · {status.compatibility?.status || 'compatibility unknown'} · credentials {status.configured ? 'ready' : 'missing'}
+                    {status.model || recovery.noModel} · {status.compatibility?.status === 'compatible' ? recovery.compatible : status.compatibility?.status === 'incompatible' ? recovery.incompatible : recovery.compatibilityUnknown} · {status.configured ? recovery.credentialsReady : recovery.credentialsMissing}
                   </p>
                 </div>
                 <span className={`text-xs font-medium ${status.available ? 'text-emerald-300' : 'text-amber-300'}`}>
-                  {status.available ? 'available' : 'unavailable'}
+                  {status.available ? recovery.available : recovery.unavailable}
                 </span>
               </div>
             ))}
           </div>
           <p className="mt-3 text-xs leading-relaxed text-white/35">
-            Installation, permission review, rollback, and disable operations use Lumi's confirmed extension registry and persistent receipts. Credentials are referenced from the local credential store and are never embedded in manifests.
+            {recovery.extensionHelp}
           </p>
         </SettingsSection>
       )}

@@ -25,6 +25,22 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+it('personal-completeness planner bounds a hung refresh and retries only the two reads', async () => {
+  vi.useFakeTimers();
+  try {
+    mocks.api.mockImplementation(() => new Promise(() => {}));
+    render(<CommandCenterPlanner isZh={false} conversationId="synthetic" onDiscuss={vi.fn()} />);
+    const signals = mocks.api.mock.calls.map(([, init]) => init?.signal);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_001); });
+    expect(screen.getByRole('alert').textContent).toContain('Task control failed');
+    expect(signals.every(signal => signal?.aborted)).toBe(true);
+    mocks.api.mockImplementation(async (url: string) => ({ ok: true, json: async () => url.endsWith('/plans') ? { plans: [plan] } : { items: [] } }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
+    expect(screen.getByText(plan.title)).toBeTruthy();
+    expect(mocks.api.mock.calls.every(([, init]) => !init?.method)).toBe(true);
+  } finally { cleanup(); vi.useRealTimers(); }
+});
+
 it.each(['chat', 'assistant', 'autonomous'])('saves and shows scheduled plans without a %s mode prerequisite', async mode => {
   mocks.mode = mode;
   const view = render(<CommandCenterPlanner isZh={false} conversationId="synthetic-conversation" onDiscuss={vi.fn()} />);

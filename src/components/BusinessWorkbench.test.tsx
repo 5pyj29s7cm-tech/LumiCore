@@ -14,6 +14,7 @@ const props = { lang: 'en', domain: 'personal' as const, onOpenSettings: vi.fn()
 const subject = (id: string) => ({ id, productLine: 'ecommerce', scopeId: account.orgConnection ? 'work:' + account.orgConnection.orgId : 'personal:' + account.user!.uid, name: id, attributes: {} });
 function baseFetch(url: string) {
   const route = new URL(url, 'http://synthetic.invalid').pathname;
+  if (route === '/api/business/local-boards/social-calendar/_unbound') return Promise.resolve(reply({ record: null, scope: { userId: account.user!.uid, domain: 'personal', orgId: '' } }));
   if (route !== '/api/business/workspaces') throw new Error('Unexpected business request: ' + route);
   return Promise.resolve(reply({ items: [subject('Store A')], active: { ecommerce: subject('Store A'), finance: null } }));
 }
@@ -40,7 +41,7 @@ describe('shared business workbench', () => {
     else if (section === 'finance') await screen.findByText('Finance business-dashboard');
     else await act(async () => {});
     expect(screen.queryByText('Tasks & archive')).toBeNull(); expect(screen.queryByText('Retired edition history')).toBeNull();
-    expect(mocks.fetch.mock.calls.map(([url]) => new URL(url, 'http://synthetic.invalid').pathname)).toEqual(['/api/business/workspaces']);
+    expect(mocks.fetch.mock.calls.map(([url]) => new URL(url, 'http://synthetic.invalid').pathname)).toEqual([section === 'social' ? '/api/business/local-boards/social-calendar/_unbound' : '/api/business/workspaces']);
     expect(writes()).toHaveLength(0);
   });
   it('retains social creation links and finance workflow selection through their direct sections', async () => {

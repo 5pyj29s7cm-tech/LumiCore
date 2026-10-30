@@ -15,6 +15,55 @@ import { KnowledgeBase } from '../src/components/KnowledgeBase';
 import { layoutTree3D } from '../src/components/MemoryTree';
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
+it.each(['partial', 'indexed_unverified', 'verified-without-coverage'])('personal-completeness ingestion %s never reports HTTP success as absorbed', async status => {
+  const files = [{ id: 'input.txt', name: 'input.txt', agentIds: [], status: 'ready' }];
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.includes('/files/ingest')
+    ? { success: true, ingestionStatus: status === 'verified-without-coverage' ? 'verified' : status, extractionStatus: status === 'partial' ? 'partial' : 'indexed' }
+    : { files, tree: [], vaults: [] }))));
+  render(<KnowledgeBase isOpen t={{ langCode: 'en', kbIngestAll: 'Absorb all' }} onClose={vi.fn()} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Absorb all (1)' }));
+  await waitFor(() => expect(mocks.warning).toHaveBeenCalledOnce());
+  expect(mocks.warning.mock.calls[0][0]).toMatch(/0.*absorbed.*1.*review/i); expect(mocks.success).not.toHaveBeenCalled();
+});
+it('personal-completeness ingestion counts only full current verified coverage in bulk', async () => {
+  const files = ['verified.txt', 'partial.txt'].map(id => ({ id, name: id, agentIds: [], status: 'ready' }));
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => new Response(JSON.stringify(url.includes('/files/ingest')
+    ? { success: true, ingestionStatus: JSON.parse(String(init?.body)).fileId === 'verified.txt' ? 'verified' : 'partial', extractionStatus: 'indexed', coverage: { verified: true, sourceRevisionCurrent: true, extractionCoverage: 1, chunkStorageCoverage: 1, embeddingCoverage: 1, blockers: [] } }
+    : { files, tree: [], vaults: [] }))));
+  render(<KnowledgeBase isOpen t={{ langCode: 'en', kbIngestAll: 'Absorb all' }} onClose={vi.fn()} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Absorb all (2)' }));
+  await waitFor(() => expect(mocks.warning).toHaveBeenCalledOnce());
+  expect(mocks.warning.mock.calls[0][0]).toMatch(/1.*absorbed.*1.*review/i); expect(mocks.success).not.toHaveBeenCalled();
+});
+it.each([false, true])('personal-completeness single ingestion success notification requires verified coverage=%s', async verified => {
+  const files = [{ id: 'input.txt', name: 'input.txt', agentIds: [], status: 'ready' }];
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.includes('/files/ingest')
+    ? { success: true, ingestionStatus: verified ? 'verified' : 'partial', extractionStatus: 'indexed', chunkCount: 2,
+      coverage: { verified, sourceRevisionCurrent: true, extractionCoverage: 1, chunkStorageCoverage: 1, embeddingCoverage: verified ? 1 : 0, blockers: verified ? [] : ['embedding_incomplete'] } }
+    : { files, tree: [], vaults: [] }))));
+  render(<KnowledgeBase isOpen t={{ langCode: 'en', kbIngest: 'Ingest fixture' }} onClose={vi.fn()} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Ingest fixture' }));
+  await waitFor(() => expect(verified ? mocks.success : mocks.warning).toHaveBeenCalledOnce());
+  expect(verified ? mocks.warning : mocks.success).not.toHaveBeenCalled();
+});
+it('personal-completeness bulk ingestion cannot continue into a reopened scope after abort', async () => {
+  let finish!: (response: Response) => void;
+  const files = ['a.txt', 'b.txt'].map(id => ({ id, name: id, agentIds: [], status: 'ready' }));
+  const requests: any[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes('/files/ingest')) { requests.push(init); return new Promise<Response>(resolve => { finish = resolve; }); }
+    return new Response(JSON.stringify({ files, tree: [], vaults: [] }));
+  }));
+  const props = { isOpen: true, t: { langCode: 'en', kbIngestAll: 'Absorb all' }, onClose: vi.fn() };
+  const view = render(<KnowledgeBase {...props} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Absorb all (2)' }));
+  await waitFor(() => expect(requests).toHaveLength(1));
+  view.rerender(<KnowledgeBase {...props} isOpen={false} />); view.rerender(<KnowledgeBase {...props} />);
+  await act(async () => finish(new Response(JSON.stringify({ success: true }))));
+  expect(requests[0].signal.aborted).toBe(true); expect(requests).toHaveLength(1);
+  expect(mocks.success).not.toHaveBeenCalled(); expect(mocks.warning).not.toHaveBeenCalled();
+});
+
 it('opens knowledge without a transparent reveal and removes it immediately on close', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ files: [], tree: [], vaults: [] }))));
   const props={isOpen:true,t:{langCode:'en'},onClose:vi.fn()};

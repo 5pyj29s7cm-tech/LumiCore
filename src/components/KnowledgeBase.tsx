@@ -13,6 +13,9 @@ import type { ChatAttachmentRequest } from '@/lib/chatAttachmentReferences';
 import { useFileDrop } from '../hooks/useFileDrop';
 import { importKnowledgeFiles, type KnowledgeFileSource } from '../lib/knowledgeFileImport';
 import { fileImportCopy } from '../i18n/locales/fileImport';
+import { personalCompletenessCopy } from '../i18n/locales/personalCompleteness';
+import { knowledgeIngestionVerified } from '../lib/knowledgeIngestionState';
+import { withRequestDeadline } from '../lib/requestDeadline';
 
 interface MemoryTree { node: MemNode; children: MemoryTree[]; }
 
@@ -68,6 +71,11 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
   const [obsidianSyncing, setObsidianSyncing] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const uploadRequest = React.useRef<AbortController | null>(null);
+  const ingestLifetime = React.useRef<AbortController | null>(null);
+  useEffect(() => {
+    const controller = ingestLifetime.current = new AbortController();
+    return () => controller.abort();
+  }, [isOpen, domain, scopeKey]);
   useEffect(() => {
     setUploading(false);
     return () => { uploadRequest.current?.abort(); uploadRequest.current = null; };
@@ -176,8 +184,7 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
 
   const targetAgentId = domain === 'work' ? 'org-kb' : 'lumi';
   const fileIsAbsorbed = useCallback((file: FileEntry) => {
-    if (file.agentIds?.includes(targetAgentId)) return true;
-    return domain === 'work' && file.status === 'indexed';
+    return knowledgeIngestionVerified(file) && (Boolean(file.agentIds?.includes(targetAgentId)) || domain === 'work');
   }, [domain, targetAgentId]);
 
   const visibleFiles = useMemo(() => {
@@ -199,7 +206,7 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
   }, [fileIsAbsorbed, files, search]);
 
   const absorbedFileCount = useMemo(() => files.filter(fileIsAbsorbed).length, [fileIsAbsorbed, files]);
-  const partialFileCount = useMemo(() => files.filter(file => (file.extractionStatus || file.status) === 'partial').length, [files]);
+  const partialFileCount = useMemo(() => files.filter(file => file.ingestionStatus === 'partial' || (file.extractionStatus || file.status) === 'partial').length, [files]);
   const needsAttentionFileCount = useMemo(() => files.filter(file => ['failed', 'unsupported'].includes(String(file.extractionStatus || file.status || ''))).length, [files]);
   const pendingFileCount = useMemo(() => files.filter(file => {
     const status = String(file.extractionStatus || file.status || '');
@@ -233,32 +240,38 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
   };
 
   const handleIngest = async (id: string, quiet = false): Promise<boolean> => {
+    const owner = ingestLifetime.current;
+    if (!owner || owner.signal.aborted) return false;
     setIngestingFiles(prev => new Set(prev).add(id));
     try {
-      const res = await fetch(scopedFileUrl('/api/files/ingest'), {
+      const { res, data } = await withRequestDeadline(async signal => {
+        const res = await fetch(scopedFileUrl('/api/files/ingest'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        credentials: 'include', signal,
         body: JSON.stringify({ fileId: id, agentId: targetAgentId, domain }),
-      });
-      if (quiet) return res.ok;
+        });
+        return { res, data: await res.json().catch(() => ({})) };
+      }, owner.signal, 60_000);
+      owner.signal.throwIfAborted();
+      const verified = res.ok && data.success === true && knowledgeIngestionVerified(data);
+      if (quiet) return verified;
       if (res.ok) {
-        const data = await res.json().catch(() => ({}));
         const count = data.chunkCount || data.memoryIds?.length || 0;
-        toast.success(domain === 'work'
+        if (!verified) toast.warning(personalCompletenessCopy(t?.langCode).ingestPartial);
+        else toast.success(domain === 'work'
           ? (t.kbIngested || 'Synced to organization knowledge')
           : `${t.kbIngested || 'Absorbed into Lumi'}${count ? ` | ${count} chunks` : ''}`);
         notifyKnowledgeUpdated([{ id }]);
         fetchAll();
       } else {
-        const data = await res.json().catch(() => ({}));
         toast.error(data.error || t.kbIngestFailed || 'Ingest failed');
       }
-      return res.ok;
+      return verified;
     } catch {
-      if (!quiet) toast.error(t.kbIngestFailed || 'Ingest failed');
+      if (!quiet && !owner.signal.aborted) toast.error(t.kbIngestFailed || 'Ingest failed');
       return false;
     } finally {
-      setIngestingFiles(prev => {
+      if (!owner.signal.aborted) setIngestingFiles(prev => {
         const next = new Set(prev);
         next.delete(id);
         return next;
@@ -267,6 +280,8 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
   };
 
   const handleIngestAll = async () => {
+    const owner = ingestLifetime.current;
+    if (!owner || owner.signal.aborted) return;
     const targets = ingestableFiles;
     if (targets.length === 0) {
       toast.info(t.kbNothingToIngest || (uiMessage('knowledge-base.no-files-need-absorption.959ba34929', (isZh) ? 'zh' : 'en')));
@@ -278,9 +293,11 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
     let failed = 0;
     try {
       for (const file of targets) {
+        if (owner.signal.aborted || owner !== ingestLifetime.current) return;
         if (await handleIngest(file.id, true)) absorbed++;
         else failed++;
       }
+      if (owner.signal.aborted || owner !== ingestLifetime.current) return;
       await fetchAll();
       notifyKnowledgeUpdated(targets.map(file => ({ id: file.id, name: file.name, displayName: file.displayName })));
       if (failed > 0) {
@@ -289,7 +306,7 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
         toast.success(`${t.kbIngested || (uiMessage('knowledge-base.absorbed.524e3e7736', (isZh) ? 'zh' : 'en'))}: ${absorbed}`);
       }
     } finally {
-      setBulkIngesting(false);
+      if (!owner.signal.aborted && owner === ingestLifetime.current) setBulkIngesting(false);
     }
   };
 
@@ -353,9 +370,9 @@ function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', s
     try {
         const d = await importKnowledgeFiles(files as KnowledgeFileSource, scopedFileUrl, controller.signal);
         const uploaded = d.files.length;
-        const absorbed = (d.files || []).filter((file: any) => file.ingested).length;
-        const partial = (d.files || []).filter((file: any) => file.partial || file.extractionStatus === 'partial').length;
-        const needsAttention = (d.files || []).filter((file: any) => file.syncError || ['failed', 'unsupported'].includes(String(file.extractionStatus || ''))).length;
+        const absorbed = (d.files || []).filter(knowledgeIngestionVerified).length;
+        const partial = (d.files || []).filter((file: any) => file.partial || file.ingestionStatus === 'partial' || file.extractionStatus === 'partial').length;
+        const needsAttention = (d.files || []).filter((file: any) => !knowledgeIngestionVerified(file) || file.syncError || ['failed', 'unsupported'].includes(String(file.extractionStatus || ''))).length;
         const failed = d.failed;
         const message = `${t.kbUploadedFiles || 'Uploaded'}: ${uploaded}${absorbed ? ` | ${t.kbIngested || 'Absorbed'}: ${absorbed}` : ''}${partial ? ` | Partial: ${partial}` : ''}${needsAttention ? ` | Needs review: ${needsAttention}` : ''}`;
         if (failed.length || partial || needsAttention) toast.warning(message + (failed.length ? ` | ${fileImportCopy[isZh ? 'zh' : 'en'].failed} ${failed.map(file => file.fileName || file.path).join(', ')}` : ''));
@@ -569,8 +586,8 @@ function renderKnowledgeBaseScope(input: ReturnType<typeof useKnowledgeBaseScope
                     const absorbed = fileIsAbsorbed(f);
                     const ingesting = ingestingFiles.has(f.id);
                     const knowledgeStatus = f.extractionStatus || f.status;
-                    const partial = knowledgeStatus === 'partial';
-                    const failed = knowledgeStatus === 'failed';
+                    const partial = f.ingestionStatus === 'partial' || knowledgeStatus === 'partial';
+                    const failed = f.ingestionStatus === 'failed' || knowledgeStatus === 'failed';
                     const unsupported = knowledgeStatus === 'unsupported';
                     const audioTranscript = f.extractionMethod === 'audio-transcript';
                     const needsReview = failed || unsupported;

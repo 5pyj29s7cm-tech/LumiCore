@@ -41,6 +41,7 @@ const ChatSongWorkbench = React.forwardRef<ChatSongWorkbenchHandle, ChatSongWork
   const [tab, setTab] = useState(0);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
+  const [listRevision, setListRevision] = useState(0);
   const [notice, setNotice] = useState('');
   const [draft, setDraft] = useState<SongDraft | null>(null);
   const [reactionSearch, setReactionSearch] = useState<(ReactionSearchResult & { projectId: string }) | null>(null);
@@ -73,13 +74,14 @@ const ChatSongWorkbench = React.forwardRef<ChatSongWorkbenchHandle, ChatSongWork
   useEffect(() => {
     live.current = true;
     const abort = new AbortController();
+    setError('');
     apiJson<{ projects: ChatSongProject[] }>(base, { signal: abort.signal }).then(result => {
       if (abort.signal.aborted) return;
       setProjects(result.projects);
       if (result.projects[0]) { setProject(result.projects[0]); setSaved(JSON.stringify(result.projects[0])); }
     }).catch(e => { if (!abort.signal.aborted) setError(String(e.message)); });
     return () => { live.current = false; abort.abort(); controller.current?.abort(); };
-  }, []);
+  }, [listRevision]);
   useEffect(() => {
     if (!savedProject) return;
     const abort = new AbortController();
@@ -234,7 +236,7 @@ const ChatSongWorkbench = React.forwardRef<ChatSongWorkbenchHandle, ChatSongWork
       <div className="flex items-center gap-2">{project && <><span className="text-xs text-white/45">{dirty ? c.dirty : c.saved}</span><button className={primary} disabled={disabled || !dirty} onClick={() => void run(async () => { await saveAll(); })}><Save size={14} />{c.save}</button></>}
         {!embedded && <button className={button} disabled={working} onClick={() => void run(async () => { if (dirty) await saveAll(); onClose(); })}><ArrowLeft size={14} />{c.close}</button>}</div>
     </header>
-    {(error || notice || working) && <div className={`flex shrink-0 items-center gap-2 border-b border-white/10 px-5 py-2 text-xs ${error ? 'bg-red-400/10 text-red-200' : 'text-amber-100'}`} role={error ? 'alert' : 'status'}>{working && <Loader2 size={14} className="animate-spin" />}{error || notice || (rendering ? c.rendering : c.loading)}{rendering && <button className={button} onClick={() => controller.current?.abort()}>{c.cancelRender}</button>}{error && project && <button className={button} disabled={working} onClick={() => void run(async () => { accept(await apiJson<ChatSongProject>(`${base}/${project.id}`)); setDraft(null); })}>{c.reload}</button>}</div>}
+    {(error || notice || working) && <div className={`flex shrink-0 items-center gap-2 border-b border-white/10 px-5 py-2 text-xs ${error ? 'bg-red-400/10 text-red-200' : 'text-amber-100'}`} role={error ? 'alert' : 'status'}>{working && <Loader2 size={14} className="animate-spin" />}{error || notice || (rendering ? c.rendering : c.loading)}{rendering && <button className={button} onClick={() => controller.current?.abort()}>{c.cancelRender}</button>}{error && <button className={button} disabled={working} onClick={() => project ? void run(async () => { accept(await apiJson<ChatSongProject>(`${base}/${project.id}`)); setDraft(null); }) : setListRevision(value => value + 1)}>{c.reload}</button>}</div>}
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
       <aside className="flex shrink-0 gap-2 overflow-auto border-b border-white/10 p-3 md:w-52 md:flex-col md:border-b-0 md:border-r">
         <button className={primary} disabled={disabled} onClick={() => void run(() => create())}><Plus size={14} />{c.newProject}</button>

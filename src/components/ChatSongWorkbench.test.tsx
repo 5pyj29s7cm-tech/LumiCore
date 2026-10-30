@@ -33,6 +33,16 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+it('personal-completeness initial project failure retries the collection without creating or generating', async () => {
+  mock.api.mockRejectedValueOnce(Error('initial list unavailable'));
+  const p = props(); render(<ChatSongWorkbench {...p} />);
+  expect((await screen.findByRole('alert')).textContent).toContain('initial list unavailable');
+  fireEvent.click(screen.getByRole('button', { name: /reload/i }));
+  await screen.findByDisplayValue('Episode');
+  expect(mock.api.mock.calls.filter(([url]) => url === '/api/creative/chat-songs')).toHaveLength(2);
+  expect(mock.api.mock.calls.every(([, init]) => !init?.method)).toBe(true);
+  expect(p.onGenerate).not.toHaveBeenCalled(); expect(p.onTask).not.toHaveBeenCalled();
+});
 it('preserves unsaved text and keeps the workbench open after a failed save', async () => {
   const p = props(); render(<ChatSongWorkbench {...p} />);
   await screen.findByDisplayValue('Episode');

@@ -449,8 +449,11 @@ export function guardTaskTargetToolCall(input: {
     const named = sourceNames.find(match => targetReferenceMatches(target, match[1]));
     const absoluteSources = explicitAbsolutePaths(sourceText).filter(reference => displayableFileName(reference));
     const sameNamedAbsolute = absoluteSources.filter(reference => targetReferenceMatches(reference, fileName(target)));
+    // i18n-allow: Existing standard user-directory input recognition.
     const folder = /桌面|\bdesktop\b/iu.test(sourceText) ? 'Desktop'
+      // i18n-allow: Existing standard user-directory input recognition.
       : /下载|\bdownloads\b/iu.test(sourceText) ? 'Downloads'
+        // i18n-allow: Existing standard user-directory input recognition.
         : /文档(?:目录|文件夹)|\bdocuments\b/iu.test(sourceText) ? 'Documents' : '';
     const pathId = canonicalPathIdentity(target);
     const locationMatches = sameNamedAbsolute.length

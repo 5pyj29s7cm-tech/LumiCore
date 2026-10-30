@@ -81,6 +81,20 @@ it.each(['active', 'messages'])('history recovery shows the failed %s read and r
   failing = false; fireEvent.click(screen.getByRole('button', { name: 'Retry history' })); await ready();
   expect(screen.queryByRole('alert')).toBeNull(); expect(fixture.emit).not.toHaveBeenCalled();
 });
+
+it('loads older history and selects another authorized conversation without sending a model turn', async () => {
+  fixture.net.mockImplementation(async (url: string) => {
+    if(url.includes('/conversations?')) return reply({conversations:[{id:'other-conversation',displayTitle:'Earlier discussion'}],hasMore:false});
+    if(url.endsWith('/other-conversation/activate')) return reply({conversation:{id:'other-conversation'}});
+    if(url.includes('other-conversation/messages')) return reply({messages:[{id:'other-message',role:'user',content:'Other conversation source'}],hasMore:false});
+    if(url.includes('/messages?')) return url.includes('&before=') ? reply({messages:[{id:'older-row',role:'user',content:'Older source'}],hasMore:false}) : reply({messages:[{id:'latest-row',role:'user',content:historyText()}],hasMore:true,nextCursor:'latest-row'});
+    return defaultFetch(url);
+  });
+  render(<CentralLumiChat/>); await ready();
+  fireEvent.click(screen.getByRole('button',{name:'Load older messages'})); await screen.findByText('Older source'); expect(screen.getByText(historyText())).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Organization conversations'})); fireEvent.click(await screen.findByRole('button',{name:'Earlier discussion'}));
+  await screen.findByText('Other conversation source'); expect(screen.queryByText('Older source')).toBeNull(); expect(fixture.emit).not.toHaveBeenCalled();
+});
 it('stop control sends only the exact scoped abort request and waits for terminal evidence', async () => {
   render(<CentralLumiChat />); await ready(); const requestId = send('Long review');
   act(() => event('agent:chunk', { requestId, text: 'Partial review' })); draft('Keep next draft');

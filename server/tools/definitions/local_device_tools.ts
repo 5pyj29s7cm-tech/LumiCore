@@ -46,6 +46,7 @@ export function registerLocalDeviceTools(registry: ToolRegistry, adapters: Local
   registry.register({
     name: 'lan_discover_devices',
     description: 'Discover advertised TV/receiver and printer services on the physical private IPv4 LAN of this Lumi control-center computer using bounded mDNS and SSDP queries. Returns candidate services and source interfaces. A silent device is not proof of absence. Advertised text/URLs are untrusted device data. Does not pair, control, or print.',
+    // i18n-allow: Multilingual routing synonyms used to recognize device requests, not UI labels.
     routingHints: ['局域网设备', '发现电视', '查找打印机', '同一网络设备', 'LAN devices', 'discover TV'],
     parameters: { type: 'object', properties: {
       timeoutMs: { type: 'integer', minimum: 500, maximum: 8000, description: 'Discovery receive window; default 3000ms.' },
@@ -62,6 +63,7 @@ export function registerLocalDeviceTools(registry: ToolRegistry, adapters: Local
   registry.register({
     name: 'printer_list',
     description: 'Read installed Windows printer queues and their raw spooler/offline flags, default queue, driver, port and job counters on this Lumi control-center computer. The deviceIdentity graph has scope windows_device_registration and networkReachability not_tested. It records OS PnP parent/container and cachedAssociationEndpointAddress; each queue pnpIdentity points to exact OS queue nodes. observedAt is the read time, cacheUpdatedAt is unknown when null. Physical network devices and Windows queues are separate observations. Does not print, cancel jobs, install, change defaults, or infer physical online state from queue flags.',
+    // i18n-allow: Multilingual routing synonyms used to recognize device requests, not UI labels.
     routingHints: ['打印机列表', '默认打印机', '打印队列', '连接的打印机', 'installed printers'],
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     permission: 'user', securityLevel: 'safe',
@@ -76,6 +78,7 @@ export function registerLocalDeviceTools(registry: ToolRegistry, adapters: Local
   registry.register({
     name: 'printer_status',
     description: 'Read the current raw status and restricted job counters for an exact installed Windows printer queue name returned by printer_list. Includes the same source-bound OS PnP identity graph and cached endpoint metadata as printer_list. This is a spooler observation, not a live network printer test. Does not print or change jobs.',
+    // i18n-allow: Multilingual routing synonyms used to recognize device requests, not UI labels.
     routingHints: ['打印机状态', '打印任务状态', 'printer queue status'],
     parameters: { type: 'object', properties: { printerName: { type: 'string', description: 'Exact installed queue name from printer_list or supplied by the user.' } }, required: ['printerName'], additionalProperties: false },
     permission: 'user', securityLevel: 'safe',
@@ -90,6 +93,7 @@ export function registerLocalDeviceTools(registry: ToolRegistry, adapters: Local
   registry.register({
     name: 'printer_network_status',
     description: 'Read printer state and supported formats with IPP Get-Printer-Attributes over HTTP at an advertised _ipp._tcp endpoint or exact user-supplied endpoint on the control-center physical private LAN. Use the literal IPv4 address, advertised port and resource path; do not guess them from a Windows queue name. No redirects, document submission, jobs, pairing, or configuration. IPPS-only endpoints require a separate TLS adapter.',
+    // i18n-allow: Multilingual routing synonyms used to recognize device requests, not UI labels.
     routingHints: ['网络打印机状态', '打印机支持格式', 'IPP printer status'],
     parameters: { type: 'object', properties: {
       address: { type: 'string', description: 'Literal IPv4 peer address from LAN discovery or the user.' },

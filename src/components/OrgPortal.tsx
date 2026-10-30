@@ -9,6 +9,7 @@ import { useApp } from '../contexts/AppContext';
 import { useT } from '../lib/useT';
 import { apiFetch } from '../services/apiClient';
 import { uiMessage } from '../i18n/uiMessages';
+import { organizationRemediationCopy } from '../i18n/locales/organizationRemediation';
 
 interface OrgStatus {
   connected: boolean;
@@ -31,6 +32,8 @@ export function OrgPortal({
   const { user, refreshUser, orgConnection, workDomain, switchDomain } = useApp();
   const [status, setStatus] = useState<OrgStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [loadRevision, setLoadRevision] = useState(0);
   const [switchingWork, setSwitchingWork] = useState(false);
   const [switchMsg, setSwitchMsg] = useState('');
   const [mode, setMode] = useState<OrgPortalMode>(initialMode);
@@ -46,6 +49,8 @@ export function OrgPortal({
     if (!user) { setLoading(false); return; }
     let cancelled = false;
     const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]);
+    setLoading(true); setLoadError('');
     const activateExistingOrg = async (connection: OrgStatus) => {
       if (cancelled) return;
       if (connection.sessionConnected && workDomain === 'work' && orgConnection?.orgId === connection.orgId) {
@@ -61,10 +66,11 @@ export function OrgPortal({
     };
     const discoverExistingOrg = async (): Promise<boolean> => {
       try {
-        const orgsRes = await apiFetch('/api/auth/orgs', { signal: controller.signal });
-        if (!orgsRes.ok) return false;
-        const data = await orgsRes.json().catch(() => ({}));
-        const orgs = Array.isArray(data?.orgs) ? data.orgs : (Array.isArray(data) ? data : []);
+        const orgsRes = await apiFetch('/api/auth/orgs', { signal });
+        if (!orgsRes.ok) throw new Error(`HTTP ${orgsRes.status}`);
+        const data = await orgsRes.json();
+        const orgs = Array.isArray(data?.orgs) ? data.orgs : (Array.isArray(data) ? data : null);
+        if (!orgs || !orgs.every(org => typeof (org?.id || org?.orgId) === 'string')) throw new Error('Invalid organization list');
         const org = orgs[0];
         const orgId = org?.id || org?.orgId;
         if (cancelled || !orgId) return false;
@@ -73,14 +79,17 @@ export function OrgPortal({
         const orgName = org?.name || org?.orgName || '';
         await activateExistingOrg({ connected: true, orgId, orgRole, orgName, sessionConnected: false });
         return true;
-      } catch {
-        return false;
+      } catch (error) {
+        throw error;
       }
     };
     const checkStatus = async (retries = 2) => {
       for (let i = 0; i <= retries; i++) {
         try {
-          const s = await apiFetch('/api/org/status', { signal: controller.signal }).then(r => r.json());
+          const response = await apiFetch('/api/org/status', { signal });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const s = await response.json();
+          if (!s || typeof s !== 'object' || Array.isArray(s)) throw new Error('Invalid organization status');
           if (!cancelled) {
             if (s.orgId) {
               await activateExistingOrg({
@@ -106,14 +115,17 @@ export function OrgPortal({
             setLoading(false);
             return;
           }
-        } catch {}
+        } catch (error) {
+          if (cancelled) return;
+          if (i === retries || signal.aborted) { setLoadError(organizationRemediationCopy(t.langCode).discovery); break; }
+        }
         if (i < retries) await new Promise(r => setTimeout(r, 800));
       }
       if (!cancelled) setLoading(false);
     };
     checkStatus();
     return () => { cancelled = true; controller.abort(); };
-  }, [user]);
+  }, [user, loadRevision]);
 
   const handleCreateOrg = async () => {
     if (!orgForm.name.trim() || !orgForm.slug.trim()) return;
@@ -181,6 +193,7 @@ export function OrgPortal({
   }
 
   // Already connected to an org — show full org workbench inline
+  if (loadError) return <div className="space-y-4 p-6"><p role="alert">{loadError}</p><button type="button" onClick={() => setLoadRevision(value => value + 1)}>{organizationRemediationCopy(t.langCode).retry}</button></div>;
   if (isConnected && (workDomain !== 'work' || !hasActiveOrgSession)) {
     return (
       <div data-organization-wallpaper-gateway className="lumi-org-gateway lumi-work-surface flex items-center justify-center p-8 h-full">

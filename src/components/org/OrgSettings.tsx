@@ -18,6 +18,7 @@ import { useAppConfirm } from '../../lib/appConfirm';
 import { apiJson } from '../../services/apiClient';
 import { useAsyncOperation } from '../../hooks/useAsyncOperation';
 import { uiMessage } from '../../i18n/uiMessages';
+import { orgAdminCompletenessCopy } from '../../i18n/locales/orgAdminCompleteness';
 
 function readOrg(value: any, id: string) {
   if (value?.id !== id || typeof value.name !== 'string' || typeof value.slug !== 'string') throw new Error('Organization receipt was not confirmed');
@@ -30,11 +31,15 @@ export function OrgSettings() {
 }
 
 function OrganizationForm({ initialOrgId }: { initialOrgId: string }) {
-  const t = useT(), { switchDomain } = useApp(), appConfirm = useAppConfirm();
+  const t = useT(), { user, switchDomain } = useApp(), appConfirm = useAppConfirm();
+  const copy = orgAdminCompletenessCopy(t.langCode);
   const [org, setOrg] = useState<any>();
   const [name, setName] = useState(''), [invitationCode, setInvitationCode] = useState('');
   const [invitationRole, setInvitationRole] = useState('member'), [copied, setCopied] = useState(false);
   const [message, setMessage] = useState('');
+  const [eligibleMembers, setEligibleMembers] = useState<string[] | null>(null), [newOwner, setNewOwner] = useState('');
+  const [accessPending, setAccessPending] = useState(false), [refreshAttempt, setRefreshAttempt] = useState(0);
+  const confirmingTransfer = useRef(false);
   const resolvedOrgId = useRef(initialOrgId);
   const { busy, error, run } = useAsyncOperation();
   const loading = busy === 'load' || (org === undefined && !error), saving = busy === 'save', generating = busy === 'invite';
@@ -47,9 +52,40 @@ function OrganizationForm({ initialOrgId }: { initialOrgId: string }) {
       orgId = organizations[0].id;
     }
     const data = readOrg(await apiJson('/api/org/org/' + encodeURIComponent(orgId), { signal }), orgId);
-    return () => { resolvedOrgId.current = orgId; setOrg(data); setName(data.name); setMessage(''); };
+    return () => { resolvedOrgId.current = orgId; setOrg(data); setName(data.name); setMessage(''); setEligibleMembers(null); setNewOwner(''); };
   }), [run]);
   useEffect(() => { void loadOrg(); }, [loadOrg]);
+  const loadMembers = () => run('members', async signal => {
+    const data = await apiJson('/api/org/org/' + encodeURIComponent(org.id) + '/members', { signal });
+    if (!Array.isArray(data) || !data.every(item => item?.orgId === org.id && typeof item.userId === 'string'
+      && ['owner', 'admin', 'member', 'viewer'].includes(item.role) && typeof item.status === 'string')) throw new Error('Invalid organization member response');
+    return () => { setEligibleMembers(data.filter(item => item.status === 'active' && item.userId !== user?.uid).map(item => item.userId)); setNewOwner(''); };
+  });
+  const transferOwnership = async () => {
+    if (!org || org.ownerUid !== user?.uid || !newOwner || !eligibleMembers?.includes(newOwner) || busy || confirmingTransfer.current) return;
+    const target = newOwner;
+    confirmingTransfer.current = true;
+    try {
+      if (!await appConfirm({ title: copy.ownership, message: copy.transferConfirm(target), confirmText: copy.confirm, cancelText: copy.cancel, tone: 'danger' })) return;
+      setMessage('');
+      await run('ownership', async signal => {
+        const data = readOrg(await apiJson('/api/org/org/' + encodeURIComponent(org.id) + '/ownership', {
+          method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ newOwnerUserId: target }),
+        }), org.id);
+        if (data.ownerUid !== target) throw new Error(copy.transferUnconfirmed);
+        return () => { setOrg(data); setEligibleMembers(null); setNewOwner(''); setMessage(copy.transferred); setAccessPending(true); };
+      });
+    } finally { confirmingTransfer.current = false; }
+  };
+  // Refresh the server-issued role only after an ownership receipt; never manufacture a local owner/admin session.
+  useEffect(() => {
+    if (!accessPending) return;
+    void run('refresh-access', async signal => {
+      const result = await switchDomain('work', { orgId: resolvedOrgId.current, signal });
+      if (!result.success) throw new Error(copy.refreshFailed);
+      return () => setAccessPending(false);
+    });
+  }, [accessPending, refreshAttempt, run, switchDomain, copy.refreshFailed]);
   const handleSave = () => {
     if (!org || !name.trim()) return;
     setMessage('');
@@ -100,6 +136,7 @@ function OrganizationForm({ initialOrgId }: { initialOrgId: string }) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center text-white/55">
         {feedback && <FeedbackBanner feedback={feedback} />}
+
         <Building2 size={34} className="text-white/25" />
         <div>{uiMessage('org-settings.no-organization-found-create-one.f354c5cd6b')}</div>
         <button onClick={loadOrg} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70 hover:bg-white/10">
@@ -127,6 +164,22 @@ function OrganizationForm({ initialOrgId }: { initialOrgId: string }) {
         </section>
 
         {feedback && <FeedbackBanner feedback={feedback} />}
+
+        {accessPending && <button type="button" onClick={() => setRefreshAttempt(value => value + 1)} className="rounded-lg border border-white/10 px-3 py-2 text-sm">{copy.refreshAccess}</button>}
+        <button type="button" onClick={loadOrg} className="self-start rounded-lg border border-white/10 px-3 py-2 text-sm">{uiMessage('org-settings.reload.27d9a83a34')}</button>
+
+        {org.ownerUid === user?.uid && <section className="rounded-lg border border-amber-400/20 bg-amber-500/5 p-5 space-y-3">
+          <h3 className="text-sm font-medium">{copy.ownership}</h3>
+          <p className="text-sm text-white/60">{copy.ownershipExplanation}</p>
+          <button type="button" onClick={loadMembers} className="rounded-lg border border-white/10 px-3 py-2 text-sm">{copy.loadMembers}</button>
+          {eligibleMembers !== null && <div className="flex gap-3">
+            <select aria-label={copy.newOwner} value={newOwner} onChange={event => setNewOwner(event.target.value)} className="rounded-lg border border-white/10 bg-black/20 p-2 text-sm">
+              <option value="">{copy.chooseMember}</option>
+              {eligibleMembers.map(id => <option key={id} value={id}>{id}</option>)}
+            </select>
+            <button type="button" disabled={!newOwner} onClick={transferOwnership} className="rounded-lg border border-amber-400/20 px-3 py-2 text-sm disabled:opacity-40">{copy.ownership}</button>
+          </div>}
+        </section>}
 
         <section className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
           <div className="mb-4 flex items-center gap-2">
@@ -209,7 +262,7 @@ function OrganizationForm({ initialOrgId }: { initialOrgId: string }) {
           )}
         </section>
 
-        <section className="rounded-lg border border-red-400/15 bg-red-500/5 p-5">
+        {org.ownerUid === user?.uid && <section className="rounded-lg border border-red-400/15 bg-red-500/5 p-5">
           <div className="mb-3 flex items-center gap-2 text-red-300">
             <Trash2 size={17} />
             <h3 className="text-sm font-medium">{uiMessage('org-settings.danger-zone.c15803c9ea')}</h3>
@@ -223,7 +276,7 @@ function OrganizationForm({ initialOrgId }: { initialOrgId: string }) {
           >
             {uiMessage('org-settings.delete-organization.4de5283414')}
           </button>
-        </section>
+        </section>}
       </fieldset>
     </div>
   );

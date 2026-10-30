@@ -17,8 +17,11 @@ export function resolveExplicitUserArtifactPath(text: string, folderContext = ''
   const folderPattern = /桌面(?:上|中|里|内|下|的|(?=[，,\s“”"']|$))|\bdesktop\b|文档(?:目录|文件夹)|\bdocuments\b|下载(?:目录|文件夹)|\bdownloads\b/iu;
   const folderText = withoutLocationLiterals(text).match(folderPattern)?.[0]
     || withoutLocationLiterals(folderContext).match(folderPattern)?.[0] || '';
+  // i18n-allow: Existing input grammar identifies explicit output paths and prohibitions; not display text.
   const folder = /桌面|desktop/iu.test(folderText) ? 'Desktop'
+    // i18n-allow: Existing input grammar identifies explicit output paths and prohibitions; not display text.
     : /文档|documents/iu.test(folderText) ? 'Documents'
+      // i18n-allow: Existing input grammar identifies explicit output paths and prohibitions; not display text.
       : /下载|downloads/iu.test(folderText) ? 'Downloads' : '';
   return folder && target.object && !/[\\/]/u.test(target.object)
     ? path.join(os.homedir(), folder, target.object) : '';
@@ -26,6 +29,7 @@ export function resolveExplicitUserArtifactPath(text: string, folderContext = ''
 
 function mixedTaskOutputPath(text: string): string {
   const sourceText = sourceDocumentInstruction(text);
+  // i18n-allow: Existing input grammar identifies explicit output paths and prohibitions; not display text.
   const hasReadSource = /(?:读取|读入|分析|\b(?:read|load|inspect)\b)[^。！？!?；;\n]{0,700}\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/iu.test(text);
   // The existing destination grammar separates merge inputs from their result.
   if (!hasReadSource && (!outputDocumentInstruction(text) || !hasAffirmativeArtifactMutationAction(text))) return '';
@@ -36,13 +40,16 @@ function mixedTaskOutputPath(text: string): string {
     const clause = probe.replace(/[，,。！？!?；;\n]+$/u, '');
     const destination = outputDocumentInstruction(clause);
     if (destination ? !hasAffirmativeArtifactMutationAction(clause)
+      // i18n-allow: Existing input grammar identifies explicit output paths and prohibitions; not display text.
       : !/(?:生成|创建|写入|导出|另存|保存(?:到|为|成))|\b(?:create|write|export|save)\b/iu.test(clause)) continue;
+    // i18n-allow: Existing input grammar identifies explicit output paths and prohibitions; not display text.
     if (/(?:不要|别|禁止|不必|无需)|\b(?:do not|don't|never)\b/iu.test(clause)) continue;
     const outputText = destination || clause;
     if ((outputText.match(/\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/giu) || []).length !== 1) continue;
     const folderContext = destination && /\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/iu.test(sourceText) ? sourceText : '';
     const outputPath = resolveExplicitUserArtifactPath(outputText, folderContext);
     if (outputPath) { outputs.push(outputPath); continue; }
+    // i18n-allow: Existing input grammar identifies explicit output paths and prohibitions; not display text.
     if (!/(?:同目录|同一目录|同一文件夹)|\bsame\s+(?:directory|folder)\b/iu.test(clause)) continue;
     const filename = clause.match(/(?:^|\s|["'“])([^\s/\\:"'“”<>，,。；;]+\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json))(?=$|[\s"'”])/iu)?.[1];
     const source = buildTaskTargetAnchorProjection({ taskText: text.slice(0, start) }).target.path;

@@ -318,18 +318,29 @@ export function listWorkTakeoverTasks(filter: {
   status?: WorkTakeoverStatus | 'active';
   category?: WechatWorkCategory;
   limit?: number;
+  industryEntryId?: string;
+  industryWorkspaceId?: string;
+  beforeId?: string;
+  newestCreated?: boolean;
 } = {}): WorkTakeoverTask[] {
   let tasks = readStoredTasks();
   if (filter.userId) tasks = tasks.filter(task => task.userId === filter.userId);
   if (filter.domain) tasks = tasks.filter(task => task.domain === filter.domain);
   if (filter.orgId !== undefined) tasks = tasks.filter(task => task.orgId === filter.orgId);
   if (filter.category) tasks = tasks.filter(task => task.category === filter.category);
+  if (filter.industryEntryId) tasks = tasks.filter(task => task.metadata?.industryWorkflow?.entryId === filter.industryEntryId);
+  if (filter.industryWorkspaceId !== undefined) tasks = tasks.filter(task => (task.metadata?.industryWorkflow?.context?.industryWorkspace?.id || '') === filter.industryWorkspaceId);
   if (filter.status === 'active') {
     tasks = tasks.filter(task => ['queued', 'in_progress', 'waiting_confirmation', 'blocked'].includes(task.status));
   } else if (filter.status) {
     tasks = tasks.filter(task => task.status === filter.status);
   }
-  tasks.sort((a, b) => b.priority - a.priority || b.updatedAt.localeCompare(a.updatedAt));
+  if (filter.newestCreated) tasks.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+  else tasks.sort((a, b) => b.priority - a.priority || b.updatedAt.localeCompare(a.updatedAt));
+  if (filter.beforeId) {
+    const cursor = tasks.findIndex(task => task.id === filter.beforeId);
+    tasks = cursor < 0 ? [] : tasks.slice(cursor + 1);
+  }
   return tasks.slice(0, Math.max(1, Math.min(Number(filter.limit) || 50, 200)));
 }
 

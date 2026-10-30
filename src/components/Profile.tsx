@@ -7,34 +7,27 @@ import { useApp } from '../contexts/AppContext';
 import { GlassCard } from './SharedUI';
 import { apiFetch } from '../services/apiClient';
 import { profileAvailabilityCopy } from '../i18n/locales/profileAvailability';
+import { settingsRecoveryCopy } from '../i18n/locales/settingsRecovery';
+import { useRecoverableRead } from '../hooks/useRecoverableRead';
 
 export function Profile({ t }: { t: any }) {
   const { user } = useApp();
   const availability = profileAvailabilityCopy(t?.langCode === 'zh' ? 'zh' : 'en');
   const paymentStatusId = useId();
-  const [health, setHealth] = useState<any>(null);
+  const recovery = settingsRecoveryCopy(t?.langCode);
+  const healthRead = useRecoverableRead<any>(JSON.stringify([user?.uid, user?.role]), async signal => {
+    let response = await apiFetch('/api/health?details=1', { signal });
+    if (response.status === 401 || response.status === 403) response = await apiFetch('/api/health', { signal });
+    if (!response.ok) throw new Error('Health read failed');
+    const data = await response.json();
+    if (!data || !['ok', 'degraded', 'error'].includes(data.status)) throw new Error('Invalid health response');
+    return data;
+  });
+  const health = healthRead.error ? null : healthRead.data;
   const [passwords, setPasswords] = useState({ current: '', next: '' });
   const [status, setStatus] = useState<{ type: 'success' | 'error' | null, message: string }>({ type: null, message: '' });
   const [isUpdating, setIsUpdating] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadHealth = async () => {
-      try {
-        let response = await apiFetch('/api/health?details=1');
-        if (response.status === 401 || response.status === 403) {
-          response = await apiFetch('/api/health');
-        }
-        if (!response.ok) throw new Error(`Health fetch failed (${response.status})`);
-        const data = await response.json();
-        if (!cancelled) setHealth(data);
-      } catch (err) {
-        console.error('Health fetch failed:', err);
-      }
-    };
-    void loadHealth();
-    return () => { cancelled = true; };
-  }, []);
 
   const uptimeSec = Number(health?.process?.uptimeSec);
   const uptimeLabel = Number.isFinite(uptimeSec)
@@ -80,6 +73,8 @@ export function Profile({ t }: { t: any }) {
 
   return (
     <div className="max-w-4xl mx-auto space-y-12">
+      {healthRead.loading && <p role="status">{recovery.loading}</p>}
+      {healthRead.error && <div role="alert">{recovery.failed} <button onClick={() => void healthRead.refresh()}>{recovery.retry}</button></div>}
       <div className="flex flex-col md:flex-row items-center gap-8">
         <div className="relative w-32 h-32 md:w-48 md:h-48 rounded-full overflow-hidden border-4 border-celestial-saturn/20 shadow-[0_0_50px_rgba(255,204,0,0.1)]">
           {user.photoURL ? (

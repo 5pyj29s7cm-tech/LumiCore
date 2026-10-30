@@ -3,8 +3,10 @@
 import type { NotificationListResponse } from '@/types/api';
 import { apiJson } from './apiClient';
 
-export async function fetchNotifications(): Promise<NotificationListResponse> {
-  const data = await apiJson<NotificationListResponse>('/api/notifications', { signal: AbortSignal.timeout(15_000) });
+export async function fetchNotifications(owner?: AbortSignal): Promise<NotificationListResponse> {
+  const signal = owner ? AbortSignal.any([owner, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000);
+  const data = await apiJson<NotificationListResponse>('/api/notifications', { signal });
+  signal.throwIfAborted();
   if (!Array.isArray(data?.notifications) || !data.notifications.every(item => item && typeof item.id === 'string' && Number.isFinite(item.timestamp)
     && typeof item.read === 'boolean' && ['type', 'title', 'message'].every(key => typeof item[key as keyof typeof item] === 'string'))) throw new Error('Invalid notification list');
   return data;

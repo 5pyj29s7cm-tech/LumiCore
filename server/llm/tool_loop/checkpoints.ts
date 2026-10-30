@@ -1,6 +1,7 @@
 import type { ToolExecutionRecord, ToolContext } from "../../tools/types";
 import type { CompletionGuardResult } from "../../work_product/completion_guard";
 import { CN_TASK_EXECUTION_MESSAGES } from "../../regions/messages/task_execution_messages";
+import { COMPLETENESS_BOUNDARY_MESSAGES } from '../../regions/messages/completeness_boundary_messages';
 import { buildIterationLimitSummary } from './summaries';
 import { isModelDeadlineError, isModelContextCapacityError } from '../model_routing_receipts';
 import { parseReceiptObject } from '../../tools/receipt_payload';
@@ -27,16 +28,16 @@ export function buildVerifiedToolCheckpoint(executionLog: ToolExecutionRecord[],
   };
   if (isModelContextCapacityError(failure)) {
     const explanation = /[\u3400-\u9fff]/u.test(task)
-      ? '这轮需要保留的内容超出了可处理容量，暂时没能生成完整回答。已有聊天内容保留。可以减少同时处理的材料，或在新聊天中继续。'
-      : 'The content that must be retained exceeds the available processing capacity, so a complete answer was not produced. Existing conversation content is retained. Reduce the material handled together or continue in a new chat.';
+      ? COMPLETENESS_BOUNDARY_MESSAGES.zh.contextCapacity
+      : COMPLETENESS_BOUNDARY_MESSAGES.en.contextCapacity;
     const text = sanitizeUserFacingExecutionOutput([explanation, ...evidence].join('\n\n'), { task, toolRecords: executionLog });
     return { text, blocked: true, reason: 'model_context_capacity' };
   }
   const deadline = isModelDeadlineError(failure);
   const checkpointText = deadline
     ? [/[\u3400-\u9fff]/u.test(task)
-      ? '等待模型结果超时，本次回答尚未完成；已经取得的结果保留。'
-      : 'The model response timed out. This request remains incomplete; verified results are retained.', checkpoint].join('\n')
+      ? COMPLETENESS_BOUNDARY_MESSAGES.zh.modelDeadline
+      : COMPLETENESS_BOUNDARY_MESSAGES.en.modelDeadline, checkpoint].join('\n')
     : checkpoint;
   const text = sanitizeUserFacingExecutionOutput(checkpointText, { task, toolRecords: executionLog });
   if (deadline) return { text, blocked: true, reason: 'model_wait_deadline' };

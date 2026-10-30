@@ -28,6 +28,7 @@ import { systemExplorerCopy } from '../i18n/locales/systemExplorer';
 import { useRuntimeStatus } from '@/hooks/useRuntimeStatus';
 import { RuntimeEvidencePanel } from './RuntimeEvidencePanel';
 import { useApp } from '@/contexts/AppContext';
+import { settingsRecoveryCopy } from '@/i18n/locales/settingsRecovery';
 import { useLumiScene } from '@/hooks/useLumiScene';
 import { LumiScenePanel } from './LumiScenePanel';
 
@@ -398,6 +399,7 @@ function useSystemExplorerContentState({ t, onSectionChange, onAsk }: SystemExpl
     inspectionPolicy: null,
   });
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [operation, setOperation] = useState<'scan' | 'decline' | null>(null);
   const scanning = operation === 'scan', updatingConsent = operation === 'decline';
   const active = useRef(false);
@@ -433,16 +435,19 @@ function useSystemExplorerContentState({ t, onSectionChange, onAsk }: SystemExpl
 
   const loadAll = useCallback(async () => {
     if (requests.current.has('action')) return;
-    const signal = beginRequest('report');
-    if (!signal) return;
+    const ownerSignal = beginRequest('report');
+    if (!ownerSignal) return;
+    const signal = AbortSignal.any([ownerSignal, AbortSignal.timeout(15_000)]);
     setLoading(true);
+    setLoadError(false);
     try {
       const [status, historyData, professionData, ecosystemData, providerData, knowledgeData] = await Promise.all([
         ...['/api/explore/status', '/api/explore/history', '/api/explore/profession', '/api/ecosystem/stats', '/api/llm/providers']
           .map(url => apiJson(url, { signal })),
         apiJson('/api/files/list?domain=personal', { signal }).catch(() => null),
       ]);
-      if (signal.aborted) return;
+      signal.throwIfAborted();
+      if (!status || typeof status !== 'object' || !Array.isArray(historyData?.snapshots) || (professionData?.profiles !== undefined && !Array.isArray(professionData.profiles)) || (providerData?.providers !== undefined && (typeof providerData.providers !== 'object' || !providerData.providers))) throw new Error('Invalid adaptation report');
       const knowledgeFiles = Array.isArray(knowledgeData?.files) ? knowledgeData.files : [];
       setLatest(status?.latest || null);
       setExplorationAccess({
@@ -460,9 +465,9 @@ function useSystemExplorerContentState({ t, onSectionChange, onAsk }: SystemExpl
         indexedFiles: knowledgeFiles.filter((file: any) => String(file?.status || '').toLowerCase() === 'indexed').length,
       });
     } catch (err: any) {
-      if (!signal.aborted) toast.error(err?.message || uiMessage('system-explorer.failed-to-load-adaptation-report.15e33730d2', isZh ? 'zh' : 'en'));
+      if (!ownerSignal.aborted) { setLoadError(true); toast.error(err?.message || uiMessage('system-explorer.failed-to-load-adaptation-report.15e33730d2', isZh ? 'zh' : 'en')); }
     } finally {
-      if (!signal.aborted) setLoading(false);
+      if (!ownerSignal.aborted) setLoading(false);
     }
   }, [beginRequest, isZh]);
 
@@ -561,7 +566,7 @@ function useSystemExplorerContentState({ t, onSectionChange, onAsk }: SystemExpl
       toast.error(err?.message || uiMessage('system-explorer.failed-to-copy-report.a19a8f9f8c', (isZh) ? 'zh' : 'en'));
     }
   };
-  return { loading, isZh, t, copyReport, updateExploration, scanning, updatingConsent, explorationAccess, consentCopy, report, structuredRuntimeStatus, structuredRuntimeLoading, structuredRuntimeError, runtimeScene, runtimeSceneLoading, runtimeSceneError, latest, ecosystem, evidenceCopy, inspectionPolicy, readyMachineOpportunities, onAsk, onSectionChange, detectedAppGroups, apps, discovery, permissions, desktopCapabilities, profiles, history };
+  return { loading, loadError, loadAll, isZh, t, copyReport, updateExploration, scanning, updatingConsent, explorationAccess, consentCopy, report, structuredRuntimeStatus, structuredRuntimeLoading, structuredRuntimeError, runtimeScene, runtimeSceneLoading, runtimeSceneError, latest, ecosystem, evidenceCopy, inspectionPolicy, readyMachineOpportunities, onAsk, onSectionChange, detectedAppGroups, apps, discovery, permissions, desktopCapabilities, profiles, history };
 }
 
 function SystemExplorerContent(props: Parameters<typeof useSystemExplorerContentState>[0]) {
@@ -569,6 +574,8 @@ function SystemExplorerContent(props: Parameters<typeof useSystemExplorerContent
 }
 
 function renderSystemExplorerContent(input: ReturnType<typeof useSystemExplorerContentState>) {
+  const recovery = settingsRecoveryCopy(input.isZh ? 'zh' : 'en');
+  if (input.loadError && !input.loading) return <div role="alert">{recovery.failed} <button onClick={() => void input.loadAll()}>{recovery.retry}</button></div>;
   const { loading, isZh, t, copyReport, updateExploration, scanning, updatingConsent, explorationAccess, consentCopy, report, structuredRuntimeStatus, structuredRuntimeLoading, structuredRuntimeError, runtimeScene, runtimeSceneLoading, runtimeSceneError, latest, ecosystem, evidenceCopy, inspectionPolicy, readyMachineOpportunities, onAsk, onSectionChange, detectedAppGroups, apps, discovery, permissions, desktopCapabilities, profiles, history } = input;
 
 

@@ -975,6 +975,18 @@
       ],
       "reason": "Active root file routes use detached six-table state with atomic deltas, scoped file ownership and indexing revisions; unrelated tables cannot be accessed."
     },
+    "server/socket/chat/phases/completed_terminal_replay.ts": {
+      "tables": [
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Reviewed exact already-delivered observation replay: read-only snapshots of task, turn, conversation and assistant rows; user/domain/org/request/body equality and terminal retention checks stay in this owner. Persistence remains delegated to foreground_finalization. No SQL, root access or direct writes."
+    },
     "server/socket/chat/phases/prepare_chat_events.ts": {
       "tables": [
         "conversationActionReceipts",

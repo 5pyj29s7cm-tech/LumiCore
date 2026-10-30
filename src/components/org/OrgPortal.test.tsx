@@ -33,6 +33,16 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+it('preserves saved organization preference when discovery fails and retries the read', async () => {
+  localStorage.setItem('lumi_org_connection', 'saved-connection'); localStorage.setItem('lumi_work_domain','work');
+  let denied=true;
+  fixture.fetch.mockImplementation(async (url: string) => url==='/api/org/status' ? response({connected:false,orgId:null}) : denied ? {ok:false,status:503,json:async()=>({error:'Unavailable'})} : response({orgs:[organization]}));
+  fixture.switchDomain.mockImplementation(async()=>confirmWorkDomain());
+  render(<OrgPortal/>); await screen.findByRole('alert', {}, {timeout:4000});
+  expect(localStorage.getItem('lumi_org_connection')).toBe('saved-connection'); expect(localStorage.getItem('lumi_work_domain')).toBe('work');
+  denied=false; fireEvent.click(screen.getByRole('button',{name:'重新读取'})); await screen.findByRole('heading',{name:'Verified organization workspace'});
+});
+
 it('enters an existing organization once after the user opens its portal, without another entry confirmation', async () => {
   discoverOrganization(); const pending = deferred();
   fixture.switchDomain.mockImplementation(() => pending.promise.then(() => confirmWorkDomain()));

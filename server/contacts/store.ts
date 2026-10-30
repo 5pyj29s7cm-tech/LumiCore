@@ -8,12 +8,8 @@ export function getContacts(userId: string): Contact[] {
 export function searchContacts(userId: string, query: string): Contact[] {
   const q = query.toLowerCase();
   return (readDatabaseTables(["contacts"]).contacts || []).filter((c: Contact) =>
-    c.userId === userId && (
-      c.name.toLowerCase().includes(q) ||
-      c.tags.some(t => t.toLowerCase().includes(q)) ||
-      c.notes.toLowerCase().includes(q) ||
-      c.traits.toLowerCase().includes(q)
-    )
+    c.userId === userId && [c.name, c.phone, c.email, c.company, c.notes, c.traits, ...(c.tags || [])]
+      .some(value => typeof value === 'string' && value.toLowerCase().includes(q))
   );
 }
 

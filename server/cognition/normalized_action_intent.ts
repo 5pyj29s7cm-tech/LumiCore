@@ -368,6 +368,7 @@ function explicitLocalArtifactReadIntent(text: string): NormalizedActionIntent |
     // i18n-allow: Direct referential read and explicit filename-correction grammar.
     instruction = clauses.find(probe => /^(?:(?:请|麻烦你?|现在|直接|先|再|然后|接着)\s*)*(?:(?:只|完整)\s*)*(?:补读|读取|读)(?:一下)?\s*(?:这份(?:文件|文档|材料)?|该份(?:文件|文档)?|该文件|该文档|这个(?:文件|文档))(?=$|[，,。；;！!\s])/u.test(probe));
     if (!instruction) return null;
+    // i18n-allow: Existing correction, recipient and messaging input grammar; no new authority.
     const corrected = clauses.filter(probe => /^(?:实际(?:上)?(?:是|为|应为)|正确(?:的)?文件名(?:是|为)|文件名(?:应为|应该是|是|为)|应(?:该)?(?:是|为))/u.test(probe))
       .map(probe => explicitFile(probe)).filter(Boolean);
     const unique = [...new Set(corrected)];
@@ -1004,6 +1005,7 @@ export function hasNegatedMessagingSendIntent(text: string): boolean {
   if (actionInstructionClauses(text).some(({ probe }) => {
     const denial = /^(?:我)?(?:没有|没|并未|从未|不是|并不是)\s*/u.exec(probe.trim());
     if (!denial) return false;
+    // i18n-allow: Existing correction, recipient and messaging input grammar; no new authority.
     return sends(probe.trim().slice(denial[0].length).replace(/^(?:让|叫|要求|授权|同意)你\s*/u, ''));
   })) return true;
   if (negative.some(({ instruction }) => instruction.split(/\b(?:and|or|nor)\b/iu).some(part => sends(part.trim())))) return true;
@@ -1035,18 +1037,25 @@ function outgoingMessageSend(text: string): NormalizedActionIntent | null {
     // i18n-allow: Disposal/object-before-send and send-object-to-recipient roles.
     { pattern: new RegExp(prefix + String.raw`(?:把|将)\s*([\s\S]{1,1000}?)\s*(?:发送|回复|发)给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})[。！？!?\s]*$`, 'u'), payloadFirst: true, allowPronoun: true },
     { pattern: new RegExp(prefix + String.raw`(?:发送|回复)\s*(?!给)([\s\S]{1,1000}?)\s*给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})[。！？!?\s]*$`, 'u'), payloadFirst: true, allowPronoun: true },
+    // i18n-allow: Existing correction, recipient and messaging input grammar; no new authority.
     { pattern: new RegExp(prefix + String.raw`给(?:测试联系人)?\s*[「『“"']([^」』”"']{1,32})[」』”"']\s*(?:发送消息|发消息|发)\s*[「『“"']([\s\S]{1,1000}?)[」』”"']`, 'u') },
+    // i18n-allow: Existing correction, recipient and messaging input grammar; no new authority.
     { pattern: new RegExp(prefix + String.raw`(?:发送|回复|发)给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})\s*[「『“"']([\s\S]{1,1000}?)[」』”"']`, 'u'), allowPronoun: true },
+    // i18n-allow: Existing correction, recipient and messaging input grammar; no new authority.
     { pattern: new RegExp(prefix + foreground + String.raw`给\s*([^\s，。！？!?：:；;、]{1,32})\s*(?:发送|回复|告诉|发|说(?!明))\s*([\s\S]{1,1000})`, 'u') },
+    // i18n-allow: Existing correction, recipient and messaging input grammar; no new authority.
     { pattern: new RegExp(prefix + String.raw`(?:发送|回复|发)给\s*([^\s，。！？!?：:；;、]{1,32})(?:\s+|[：:])([\s\S]{1,1000})`, 'u'), allowPronoun: true },
+    // i18n-allow: Existing correction, recipient and messaging input grammar; no new authority.
     { pattern: new RegExp(prefix + String.raw`(?:微信\s*)?(?:问一下|问问|询问)\s*([^\s，。！？!?：:；;、]{1,32})\s*([\s\S]{1,1000})`, 'u') },
     { pattern: /^(?:(?:please|now|then|next|also)\s+|(?:can|could|would|will)\s+you\s+)*(?:send\s+(?:a\s+message\s+)?(?:to\s+)?|message\s+|reply\s+to\s+)(?!(?:has|have|had|is|was|were|contains?|includes?|with|body|content|attachment|file|text)\b)([\p{L}\p{N}_.'-]{1,40})\s*:?\s*([\s\S]{1,1000})/iu },
+    // i18n-allow: Existing correction, recipient and messaging input grammar; no new authority.
     { pattern: new RegExp(prefix + String.raw`(?:发送|回复|发)给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})[。！？!?\s]*$`, 'u'), recipientOnly: true, allowPronoun: true },
   ];
   for (const { text: clauseText, probe: rawProbe } of affirmativeActionInstructionClauses(text)) {
     const probe = withoutLocationLiterals(rawProbe);
     // Quoted recipients and location operands are masked; only an outer delivery predicate may restore them.
     if (!patterns.some(({ pattern }) => pattern.test(probe))
+      // i18n-allow: Existing correction, recipient and messaging input grammar; no new authority.
       && !new RegExp(prefix + foreground + String.raw`(?:给\s*(?:[^\s，。！？!?：:；;、「」『』“”"']{1,32}\s*)?(?:发送消息|发消息|发送|回复|告诉|发|说)|(?:发送|回复|发)给)`, 'u').test(probe)) continue;
     for (const { pattern, payloadFirst, recipientOnly, allowPronoun } of patterns) {
       const match = clauseText.match(pattern);

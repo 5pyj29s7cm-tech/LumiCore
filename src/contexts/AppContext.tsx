@@ -138,6 +138,9 @@ interface AppContextType {
   // Notifications
   notifications: NotificationItem[];
   notificationsBusy: boolean;
+  notificationsLoading: boolean;
+  notificationsError: string;
+  refreshNotifications: () => Promise<void>;
   unreadCount: number;
   addNotification: (item: Omit<NotificationItem, 'id' | 'timestamp' | 'read'>) => void;
   markAllNotificationsRead: () => Promise<boolean>;
@@ -509,6 +512,34 @@ function useAppAccountActionsAndProvider(previousBindings: ReturnType<typeof use
   const { aiConfigRef, visionConfigRef, modelAccountRef, user, modelPreferenceRequestRef, visionPreferenceRequestRef, authGenerationRef, modelWriteTailsRef, applyModelPreference, toolRequestRef, setSessionUser, setOrgConnection, notificationRevisionRef, notificationWriteRef, setNotifications, toolOverridesRef, setToolOverrides, setLoading, orgConnection, switchDomain, setWorkDomain, workDomain, setUser, setSelectedVoiceIdState, voiceStorageKeys, setFavoriteVoices, notifications, setNotificationsBusy, toolWriteTailRef, loading, aiConfig, visionConfig, reloadModelPreferences, selectedVoiceId, favoriteVoices, notificationsBusy, unreadCount, toolOverrides, operationMode, setOperationMode, desktopExecutionPreference, setDesktopExecutionPreference, appearanceMode, resolvedAppearanceMode, setAppearanceMode, children } = previousBindings;
 
 
+  const [notificationLoad, setNotificationLoad] = useState({ uid: '', loading: false, error: '' });
+  const notificationRead = React.useRef<AbortController | null>(null);
+  useEffect(() => () => { notificationRead.current?.abort(); }, []);
+  const loadNotifications = async (uid = user?.uid || '', owner = authGenerationRef.current) => {
+    notificationRead.current?.abort();
+    if (!uid) { setNotificationLoad({ uid, loading: false, error: '' }); return; }
+    const controller = new AbortController(); notificationRead.current = controller;
+    const revision = ++notificationRevisionRef.current;
+    const current = () => owner === authGenerationRef.current && notificationRead.current === controller && !controller.signal.aborted;
+    setNotificationLoad({ uid, loading: true, error: '' });
+    try {
+      const notifData = await notificationService.fetchNotifications(controller.signal);
+      if (!current()) return;
+      if (revision === notificationRevisionRef.current && !notificationWriteRef.current) {
+        const clearedAt = Number(localStorage.getItem(notificationClearStorageKey(uid)) || 0);
+        setNotifications(previous => mergeNotificationState(previous, notifData.notifications as NotificationItem[], {
+          clearedAt, allowGreeting: localStorage.getItem('lumi_allow_proactive_voice') === 'true', limit: 50,
+        }));
+      }
+      setNotificationLoad({ uid, loading: false, error: '' });
+    } catch (error) {
+      if (current()) setNotificationLoad({ uid, loading: false, error: error instanceof Error ? error.message : 'Notification read failed' });
+    }
+  };
+  const refreshNotifications = () => loadNotifications();
+  const notificationsLoading = notificationLoad.uid === (user?.uid || '') ? notificationLoad.loading : Boolean(user);
+  const notificationsError = notificationLoad.uid === (user?.uid || '') ? notificationLoad.error : '';
+
   const updateModelConfig = (role: 'llm' | 'vision', newConfig: Partial<AIConfig>, models: Record<string, string> = {}): Promise<boolean> => {
     const current = (role === 'llm' ? aiConfigRef : visionConfigRef).current;
     if (!modelAccountRef.current || modelAccountRef.current !== user?.uid || !current.ready) {
@@ -575,21 +606,8 @@ function useAppAccountActionsAndProvider(previousBindings: ReturnType<typeof use
           localStorage.setItem('lumi_org_connection', JSON.stringify(conn));
         }
         // Load persisted notifications from server
-        try {
-          const revision = ++notificationRevisionRef.current;
-          const notifData = await notificationService.fetchNotifications();
-          if (owner !== authGenerationRef.current) return;
-          if (revision === notificationRevisionRef.current && !notificationWriteRef.current) {
-            const clearKey = notificationClearStorageKey(String(customAuth.user.uid || ''));
-            const clearedAt = Number(localStorage.getItem(clearKey) || 0);
-            const proactiveGreetingEnabled = localStorage.getItem('lumi_allow_proactive_voice') === 'true';
-            setNotifications(prev => mergeNotificationState(
-              prev,
-              notifData.notifications as NotificationItem[],
-              { clearedAt, allowGreeting: proactiveGreetingEnabled, limit: 50 },
-            ));
-          }
-        } catch {}
+        await loadNotifications(String(customAuth.user.uid || ''), owner);
+        if (owner !== authGenerationRef.current) return;
         // Load tool overrides from server
         try {
           const toRes = await apiFetch('/api/settings/tool_overrides');
@@ -795,6 +813,9 @@ function useAppAccountActionsAndProvider(previousBindings: ReturnType<typeof use
       toggleFavoriteVoice,
       notifications,
       notificationsBusy,
+      notificationsLoading,
+      notificationsError,
+      refreshNotifications,
       unreadCount,
       addNotification,
       markAllNotificationsRead,

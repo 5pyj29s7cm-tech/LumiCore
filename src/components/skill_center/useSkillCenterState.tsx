@@ -11,6 +11,7 @@ import { fetchExternalCapabilities, type ExternalCapabilityProjection } from "@/
 import type { SkillCenterTab, SortKey, GeneratedSkillDraft, MarketplaceSkill, InstalledSkill, ProfessionProfile, ExternalResult, SkillRecommendation } from './contracts';
 import { findInstalledSkillForMarket } from './availability';
 import { PROFESSION_RECOMMENDATION_MAP } from './recommendations';
+import { settingsRecoveryCopy } from '@/i18n/locales/settingsRecovery';
 
 // Each query owns its data and latest request; unrelated lists never invalidate one another.
 function useSkillQuery<T>(key: string | null, initial: T, load: (signal: AbortSignal) => Promise<T>, delay = 0) {
@@ -62,6 +63,9 @@ export function useSkillCenterState({
 
   const [activeTab, setActiveTab] = useState<SkillCenterTab>(initialTab);
   const [installing, setInstalling] = useState<string | null>(null);
+  const [publishState, setPublishState] = useState({ name: '', busy: false, error: '' });
+  const publishRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => { publishRequest.current?.abort(); }, []);
   const [repairing, setRepairing] = useState<string | null>(null);
   const [cleaningBroken, setCleaningBroken] = useState(false);
   const [search, setSearch] = useState('');
@@ -295,11 +299,16 @@ export function useSkillCenterState({
   };
 
   const handlePublish = async (skillName: string) => {
+    if (publishRequest.current) return;
+    const controller = new AbortController(); publishRequest.current = controller;
+    const recovery = settingsRecoveryCopy(lang);
+    setPublishState({ name: skillName, busy: true, error: '' });
     try {
       const installed = installedSkills.find(s => s.name === skillName);
-      if (!installed) return;
-      await apiJson('/api/marketplace/publish', {
+      if (!installed) throw new Error(recovery.publishMissing);
+      const data = await apiJson('/api/marketplace/publish', {
         method: 'POST',
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: skillName,
@@ -309,8 +318,13 @@ export function useSkillCenterState({
           toolCount: installed.toolCount,
         }),
       });
-      toast.success(`Published "${skillName}" to community!`);
-    } catch {}
+      if (data?.success !== true || data?.skill?.name !== skillName) throw new Error(recovery.publishFailed);
+      if (!controller.signal.aborted) toast.success(recovery.publishSuccess);
+    } catch (error) {
+      if (!controller.signal.aborted) { setPublishState({ name: skillName, busy: false, error: recovery.publishFailed }); toast.error(recovery.publishFailed); }
+    } finally {
+      if (publishRequest.current === controller) { publishRequest.current = null; if (!controller.signal.aborted) setPublishState(previous => ({ ...previous, busy: false })); }
+    }
   };
 
   // Filter and sort installable LumiCore skills.
@@ -425,5 +439,5 @@ export function useSkillCenterState({
     managementHint: uiMessage('skill-center.enable-disable-repair-publish-and.fa74468d2b', (lang === 'zh') ? 'zh' : 'en'),
   };
   const hasRecommendationSignals = professionProfiles.length > 0 || matchedWorkSignals.length > 0 || workSignalText.trim().length > 0;
-  return { t, canUseExternalCapabilities, canReviewExternalCapabilities, setExternalCapabilityIntakeOpen, externalCopy, sortedMarket, refreshAll, loadError, lang, tabs, setActiveTab, activeTab, installedSkills, recommendationCopy, fetchRecommendationSignals, professionProfiles, matchedWorkSignals, hasRecommendationSignals, recommendationError, recommendedSkills, savedKeys, setDetailSkill, installing, handleInstall, installedSkillRows, installProgress, search, setSearch, setActiveCategory, activeCategory, skillHallCategories, setSortKey, sortKey, searchingExternal, externalError, npm, github, externalCapabilities, externalCapabilitiesError, externalCapabilitiesLoading, fetchReviewedExternalCapabilities, brokenSkillCount, handleCleanupBroken, cleaningBroken, loading, handleRepair, repairing, handleToggle, handlePublish, handleUninstall, generatedDraft, setGeneratedDraft, genDescription, setGenDescription, handleGenerate, generating, SAMPLE_PROMPTS, installingGeneratedDraft, handleInstallGeneratedDraft, detailSkill, marketSkills, externalCapabilityIntakeOpen };
+  return { t, canUseExternalCapabilities, canReviewExternalCapabilities, setExternalCapabilityIntakeOpen, externalCopy, sortedMarket, refreshAll, loadError, lang, tabs, setActiveTab, activeTab, installedSkills, recommendationCopy, fetchRecommendationSignals, professionProfiles, matchedWorkSignals, hasRecommendationSignals, recommendationError, recommendedSkills, savedKeys, setDetailSkill, installing, handleInstall, installedSkillRows, installProgress, search, setSearch, setActiveCategory, activeCategory, skillHallCategories, setSortKey, sortKey, searchingExternal, externalError, npm, github, externalCapabilities, externalCapabilitiesError, externalCapabilitiesLoading, fetchReviewedExternalCapabilities, brokenSkillCount, handleCleanupBroken, cleaningBroken, loading, handleRepair, repairing, handleToggle, handlePublish, publishState, handleUninstall, generatedDraft, setGeneratedDraft, genDescription, setGenDescription, handleGenerate, generating, SAMPLE_PROMPTS, installingGeneratedDraft, handleInstallGeneratedDraft, detailSkill, marketSkills, externalCapabilityIntakeOpen };
 }

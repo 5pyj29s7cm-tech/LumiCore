@@ -78,9 +78,9 @@ export async function designVoice(prompt: string, name: string, provider?: strin
   return res.json();
 }
 
-export async function listVoices(provider?: string): Promise<VoiceCatalog> {
+export async function listVoices(provider?: string, signal?: AbortSignal): Promise<VoiceCatalog> {
   const query = provider ? `?provider=${encodeURIComponent(provider)}` : '';
-  const res = await voiceFetch(`/voices${query}`);
+  const res = await voiceFetch(`/voices${query}`, { signal });
   const data = await res.json();
   return {
     provider: data.provider || null,

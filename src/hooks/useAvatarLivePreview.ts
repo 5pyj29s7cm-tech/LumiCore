@@ -3,6 +3,7 @@ import { AvatarLiveInbox, type AvatarLiveComment, type AvatarLiveStageConfig, ty
 import { avatarLiveService } from '../services/avatarLiveService';
 import { captureLiveScreen, cropLiveScreen, type LiveScreenRegion } from '../lib/avatarLiveScreen';
 import { AvatarLivePlayback } from '../lib/avatarLivePlayback';
+import { withRequestDeadline } from '../lib/requestDeadline';
 
 type Row = AvatarLiveComment & { status?: 'pending' | 'done' | 'failed' };
 export function useAvatarLivePreview(config: AvatarLiveStageConfig) {
@@ -14,6 +15,10 @@ export function useAvatarLivePreview(config: AvatarLiveStageConfig) {
   const [scanRetry, setScanRetry] = useState(0);
   const [lastScan, setLastScan] = useState<{ at: number; visible: number; fresh: number } | null>(null);
   const [archivedHistory, setArchivedHistory] = useState<AvatarLiveHistoryTurn[]>([]), [historyError, setHistoryError] = useState(false);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const historyRequest = useRef<AbortController | null>(null), pendingArchive = useRef(new Set<string>());
+  const historyScope = JSON.stringify([config.avatarId, config.ownerId]);
+  const historyOwner = useRef(historyScope); historyOwner.current = historyScope;
   const player = useRef<AvatarLivePlayback | null>(null), outputLevel = useRef(0), caption = useRef('');
   const closing = useRef<Promise<void> | null>(null), enabling = useRef(false), cleanupFailed = useRef(false);
   const currentConfig = useRef(config); currentConfig.current = config;
@@ -67,18 +72,34 @@ export function useAvatarLivePreview(config: AvatarLiveStageConfig) {
     mounted.current = true;
     return () => { mounted.current = false; void close(); };
   }, [close]);
+  const retryHistory = useCallback(async () => {
+    historyRequest.current?.abort();
+    const controller = historyRequest.current = new AbortController();
+    setHistoryBusy(true);
+    try {
+      const rows = await withRequestDeadline(async signal => {
+        for (const requestId of [...pendingArchive.current]) {
+          await avatarLiveService.acknowledge(config.avatarId, requestId, signal);
+          signal.throwIfAborted();
+          if (historyOwner.current === historyScope) pendingArchive.current.delete(requestId);
+        }
+        return avatarLiveService.history(config.avatarId, signal);
+      }, controller.signal);
+      if (!controller.signal.aborted && historyOwner.current === historyScope) { setArchivedHistory(rows); setHistoryError(false); }
+    } catch { if (!controller.signal.aborted && historyOwner.current === historyScope) setHistoryError(true); }
+    finally { if (!controller.signal.aborted && historyOwner.current === historyScope) setHistoryBusy(false); }
+  }, [config.avatarId, historyScope]);
   useEffect(() => {
-    const controller = new AbortController(); setArchivedHistory([]); setHistoryError(false);
-    void avatarLiveService.history(config.avatarId, controller.signal).then(rows => {
-      if (!controller.signal.aborted) setArchivedHistory(rows);
-    }).catch(() => { if (!controller.signal.aborted) setHistoryError(true); });
-    return () => controller.abort();
-  }, [config.avatarId, config.ownerId]);
+    pendingArchive.current.clear(); setArchivedHistory([]); setHistoryError(false);
+    void retryHistory();
+    return () => { historyRequest.current?.abort(); replying.current?.abort(); };
+  }, [retryHistory]);
 
   const respond = useCallback(async (comment: AvatarLiveComment, brief: string) => {
     if (replying.current) return;
     if (!ready.current) { setError('live_audio_blocked'); return; }
     const controller = new AbortController(); replying.current = controller; setBusy(true); setError('');
+    const responseScope = historyOwner.current, avatarId = currentConfig.current.avatarId;
     setComments(rows => rows.map(row => row.id === comment.id ? { ...row, status: 'pending' } : row));
     const timeout = setTimeout(() => controller.abort(), 140_000);
     const stopPlayback = () => player.current?.stop();
@@ -96,14 +117,16 @@ export function useAvatarLivePreview(config: AvatarLiveStageConfig) {
       setHistory(rows => [...rows, turn].slice(-30));
       setComments(rows => rows.map(row => row.id === comment.id ? { ...row, status: 'done' } : row));
       if (reply.requestId) {
+        pendingArchive.current.add(reply.requestId);
         try {
-          await avatarLiveService.acknowledge(currentConfig.current.avatarId, reply.requestId, controller.signal);
-          const rows = await avatarLiveService.history(currentConfig.current.avatarId, controller.signal);
-          if (mounted.current && !controller.signal.aborted) { setArchivedHistory(rows); setHistoryError(false); }
+          await avatarLiveService.acknowledge(avatarId, reply.requestId, controller.signal);
+          if (historyOwner.current === responseScope) pendingArchive.current.delete(reply.requestId);
+          const rows = await avatarLiveService.history(avatarId, controller.signal);
+          if (mounted.current && !controller.signal.aborted && historyOwner.current === responseScope) { setArchivedHistory(rows); setHistoryError(false); }
         } catch {
           // Sound already played. A missing archival acknowledgement must not
           // change it to failed speech or cause automatic audio replay.
-          if (mounted.current) setHistoryError(true);
+          if (mounted.current && historyOwner.current === responseScope) setHistoryError(true);
         }
       }
     } catch (cause) {
@@ -184,5 +207,5 @@ export function useAvatarLivePreview(config: AvatarLiveStageConfig) {
     const comment: AvatarLiveComment = { id: crypto.randomUUID(), text, nickname, source: 'test', receivedAt: Date.now() };
     setComments(rows => [...rows, comment].slice(-60)); void respond(comment, brief);
   }, [respond]);
-  return { running, busy, audioReady, audioPending, speaking, subtitle, stream, surface, outputLevel, comments, history, archivedHistory, historyError, error, queue, scanRetry, lastScan, retryReading, enable, close, pause, start, respond, test };
+  return { running, busy, audioReady, audioPending, speaking, subtitle, stream, surface, outputLevel, comments, history, archivedHistory, historyError, historyBusy, retryHistory, error, queue, scanRetry, lastScan, retryReading, enable, close, pause, start, respond, test };
 }

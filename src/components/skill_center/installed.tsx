@@ -6,9 +6,10 @@ import type { useSkillCenterState } from './useSkillCenterState';
 import { getInstalledSkillAvailability, hasSkillRuntimeIssue } from './availability';
 import { SkillStatusCallout } from './presentation';
 
-export function renderInstalledSkills({ canUseExternalCapabilities, externalCapabilities, canReviewExternalCapabilities, externalCapabilitiesError, externalCapabilitiesLoading, lang, fetchReviewedExternalCapabilities, recommendationCopy, brokenSkillCount, handleCleanupBroken, cleaningBroken, loading, installedSkills, t, setDetailSkill, handleRepair, repairing, handleToggle, handlePublish, handleUninstall }: Pick<ReturnType<typeof useSkillCenterState>, "canUseExternalCapabilities" | "externalCapabilities" | "canReviewExternalCapabilities" | "externalCapabilitiesError" | "externalCapabilitiesLoading" | "lang" | "fetchReviewedExternalCapabilities" | "recommendationCopy" | "brokenSkillCount" | "handleCleanupBroken" | "cleaningBroken" | "loading" | "installedSkills" | "t" | "setDetailSkill" | "handleRepair" | "repairing" | "handleToggle" | "handlePublish" | "handleUninstall">) {
+export function renderInstalledSkills({ canUseExternalCapabilities, externalCapabilities, canReviewExternalCapabilities, externalCapabilitiesError, externalCapabilitiesLoading, lang, fetchReviewedExternalCapabilities, recommendationCopy, brokenSkillCount, handleCleanupBroken, cleaningBroken, loading, installedSkills, t, setDetailSkill, handleRepair, repairing, handleToggle, handlePublish, publishState, handleUninstall }: Pick<ReturnType<typeof useSkillCenterState>, "canUseExternalCapabilities" | "externalCapabilities" | "canReviewExternalCapabilities" | "externalCapabilitiesError" | "externalCapabilitiesLoading" | "lang" | "fetchReviewedExternalCapabilities" | "recommendationCopy" | "brokenSkillCount" | "handleCleanupBroken" | "cleaningBroken" | "loading" | "installedSkills" | "t" | "setDetailSkill" | "handleRepair" | "repairing" | "handleToggle" | "handlePublish" | "publishState" | "handleUninstall">) {
   return (
 <motion.div key="installed" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="space-y-6">
+            {publishState.error && <div role="alert">{publishState.error}</div>}
             {canUseExternalCapabilities && (externalCapabilities.length > 0 || canReviewExternalCapabilities || externalCapabilitiesError) && (
               <ExternalCapabilityManagerSection
                 capabilities={externalCapabilities}
@@ -90,7 +91,7 @@ export function renderInstalledSkills({ canUseExternalCapabilities, externalCapa
                           >
                             {skill.enabled ? <Power size={13} /> : <PowerOff size={13} />}
                           </button>
-                          <button onClick={(e) => { e.stopPropagation(); handlePublish(skill.name); }}
+                          <button disabled={publishState.busy} onClick={(e) => { e.stopPropagation(); handlePublish(skill.name); }}
                             className="p-2 hover:bg-violet-500/10 rounded-lg text-white/45 hover:text-violet-400 transition-colors"
                             title={t.publishBtn || 'Publish'}
                           >

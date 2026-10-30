@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { EcommerceAutomationWorkspace } from './EcommerceAutomationWorkspace';
 import { FinanceWorkbench } from './FinanceWorkbench';
 import { financeDeliveryFormCopy } from '../i18n/locales/financeDeliveryForm';
+vi.mock('../contexts/AppContext', () => ({ useApp: () => ({ user: { uid: 'industry-fixture-owner', role: 'user' }, workDomain: 'personal', orgConnection: null }) }));
 
 const reply = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body });
 const started = (id: string, entryId: string) => reply({ task: { id }, handoffPrompt: 'Confirmed handoff', contract: { entryId } });
@@ -25,6 +26,8 @@ beforeEach(() => {
   fetcher.mockReset().mockImplementation((url, init) => {
     if (url.endsWith('/api/version')) return Promise.resolve(reply({ version: '3.1.0' }));
     if (url.endsWith('/contracts')) return Promise.resolve(reply({ contracts: [{ productLine: 'finance' }] }));
+    if (url.includes('/business/finance-worksheets/')) return Promise.resolve(reply({ record: null, scope: { userId: 'industry-fixture-owner', domain: 'personal', orgId: '' } }));
+    if (url.includes('/business/local-boards/')) return Promise.resolve(reply({ record: null, scope: { userId: 'industry-fixture-owner', domain: 'personal', orgId: '' } }));
     const body = JSON.parse(init.body); return url.endsWith('/finance-delivery') ? deliver(body, init) : url.includes('/api/chat?') ? execute(body, init) : create(body, init);
   }); vi.stubGlobal('fetch', fetcher);
 });

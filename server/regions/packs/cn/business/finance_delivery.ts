@@ -24,6 +24,7 @@ import {
   canonicalJson,
   getIndustryWorkflowTask,
   settleIndustryWorkflowConversationTask,
+  interruptIndustryWorkflow,
   type IndustryWorkflowScope,
 } from '../../../../industry/workflow_service';
 import type { WorkTakeoverResultVerification } from '../../../../work_takeover/result_verifier';
@@ -83,6 +84,7 @@ interface FinanceDeliveryExecutionInput extends IndustryWorkflowScope {
   registry: ToolRegistry;
   authRole?: string;
   orgRole?: string;
+  signal?: AbortSignal;
 }
 
 interface NormalizedDelivery {
@@ -100,6 +102,7 @@ interface NormalizedDelivery {
 interface InFlightDelivery {
   digest: string;
   promise: Promise<FinanceDeliveryResult>;
+  controller: AbortController;
 }
 
 type ArtifactProof = { path: string; basename: string; size: number; sha256: string };
@@ -959,6 +962,7 @@ async function executeDelivery(
   };
   const records: ToolExecutionRecord[] = [];
   const baseContext: ToolContext = {
+    executionSignal: input.signal,
     userId: input.userId,
     authenticated: true,
     authRole: input.authRole,
@@ -982,10 +986,11 @@ async function executeDelivery(
     industryWorkflowRequiredToolReceipts: [...REQUIRED_TOOLS[normalized.entryId]],
   };
   const execute = async (name: string, args: Record<string, unknown>, suffix: string) => {
+    if (input.signal?.aborted) throw new FinanceDeliveryError(409, 'FINANCE_DELIVERY_CANCELLED', 'Finance delivery was cancelled before the next tool.', { status: 'cancelled' });
     if (!allowedSet.has(name)) {
       throw new FinanceDeliveryError(500, 'FINANCE_DELIVERY_TOOL_BOUNDARY', `Tool ${name} is outside the finance delivery allowlist.`);
     }
-    const record = requireVerified(await executeToolCall({
+    const record = await executeToolCall({
       registry: input.registry,
       name,
       arguments: args,
@@ -1002,9 +1007,12 @@ async function executeDelivery(
       preflight: (toolName, arguments_) => allowedSet.has(toolName)
         ? { allowed: true, arguments: arguments_ }
         : { allowed: false, reason: 'Finance delivery may only execute its fixed local tool chain.' },
-    }));
+    });
     records.push(record);
-    return record;
+    // Completion may have crossed its durable boundary before cancellation arrived.
+    // Preserve that result; cancellation never rewrites a delivered task as cancelled.
+    if (input.signal?.aborted && name !== 'industry_workflow_complete') throw new FinanceDeliveryError(409, 'FINANCE_DELIVERY_CANCELLED', 'Finance delivery was cancelled.', { status: 'cancelled' });
+    return requireVerified(record);
   };
 
   let stage = 'task_binding';
@@ -1166,7 +1174,7 @@ async function executeDelivery(
       externalActions: [],
     };
   } catch (reason) {
-    const error = normalizeDeliveryFailure(reason, stage);
+    let error = normalizeDeliveryFailure(reason, stage);
     const current = getIndustryWorkflowTask(input, task.id) || task;
     const evidenceRecords = records.filter(record => record.name !== 'industry_workflow_complete');
     const deliveredByThisExecution = Boolean(createdProof)
@@ -1191,7 +1199,21 @@ async function executeDelivery(
       removeWorkTakeoverTaskArtifacts(input.userId, task.id, uniqueRemovedPaths);
       await flushFinanceState('failed_artifact_cleanup');
     }
+    if (!deliveredByThisExecution && error.code === 'FINANCE_DELIVERY_CANCELLED') {
+      const prefix = `finance-${normalized.entryId}-${sha256(task.id).slice(0, 16)}-`;
+      try {
+        if (fs.readdirSync(getGeneratedOutputDir()).some(name => name.startsWith(prefix) && name.toLowerCase().endsWith('.xlsx'))) {
+          error = new FinanceDeliveryError(500, 'FINANCE_DELIVERY_CLEANUP_FAILED', 'Execution stopped, but an incomplete Finance artifact could not be removed.', { status: 'blocked' });
+        }
+      } catch {
+        error = new FinanceDeliveryError(500, 'FINANCE_DELIVERY_CLEANUP_FAILED', 'Execution stopped, but artifact cleanup could not be verified.', { status: 'blocked' });
+      }
+    }
     await recordDeliveryFailure(input, task, normalized, digest, stage, error, uniqueRemovedPaths.length);
+    if (error.code === 'FINANCE_DELIVERY_CANCELLED' && !deliveredByThisExecution) {
+      interruptIndustryWorkflow(input, task.id, true, error.message);
+      await flushFinanceState('cancelled');
+    }
     throw error;
   }
 }
@@ -1231,6 +1253,8 @@ export async function executeFinanceDeliveryWorkflow(
     }
     return pending.promise;
   }
+  const controller = new AbortController();
+  const signal = input.signal ? AbortSignal.any([input.signal, controller.signal]) : controller.signal;
   const promise = (async () => {
     const staleArtifactPaths = removeStaleTaskArtifacts(task, normalized);
     if (staleArtifactPaths.length > 0) {
@@ -1248,13 +1272,43 @@ export async function executeFinanceDeliveryWorkflow(
       });
       await flushFinanceState('stale_artifact_recovery');
     }
-    return executeDelivery(input, task, normalized, digest);
+    return executeDelivery({ ...input, signal }, task, normalized, digest);
   })();
-  inFlightByTask.set(task.id, { digest, promise });
+  inFlightByTask.set(task.id, { digest, promise, controller });
   try {
     return await promise;
   } finally {
     const current = inFlightByTask.get(task.id);
     if (current?.promise === promise) inFlightByTask.delete(task.id);
   }
+}
+
+/** Scoped cancellation waits for the running chain and cleanup, never just a browser abort. */
+export async function cancelFinanceDeliveryWorkflow(scope: IndustryWorkflowScope, taskId: string) {
+  const task = getIndustryWorkflowTask(scope, taskId);
+  if (!task || task.metadata?.industryWorkflow?.productLine !== 'finance') throw new FinanceDeliveryError(404, 'FINANCE_DELIVERY_TASK_NOT_FOUND', 'Industry workflow task not found.');
+  const pending = inFlightByTask.get(taskId);
+  if (pending) {
+    pending.controller.abort();
+    try { await pending.promise; }
+    catch (error) {
+      if (!(error instanceof FinanceDeliveryError) || error.code !== 'FINANCE_DELIVERY_CANCELLED') throw error;
+    }
+  }
+  const current = getIndustryWorkflowTask(scope, taskId)!;
+  return { ok: true, task: current, status: current.status, cancelled: current.status === 'cancelled', cancellationRequested: Boolean(pending) };
+}
+
+/** Only the authenticated task's persisted, hash-verified workbook may be downloaded. */
+export function readFinanceDeliveryArtifact(scope: IndustryWorkflowScope, taskId: string, hash: string) {
+  const task = getIndustryWorkflowTask(scope, taskId);
+  if (!task || !/^[a-f0-9]{64}$/.test(hash) || task.status !== 'delivered' || task.metadata?.workTakeoverVerification?.passed !== true) return null;
+  const metadata = deliveryMetadata(task);
+  if (metadata.status !== 'verified' || metadata.verificationId !== task.metadata.workTakeoverVerification.verificationId) return null;
+  const stored = Array.isArray(metadata.artifacts) ? metadata.artifacts.map(objectValue).find(item => item.sha256 === hash) : undefined;
+  if (!stored || !task.artifacts?.some(item => sameLocalPath(item.path, stored.path))) return null;
+  const proof = assertStoredArtifactProof(stored, artifactProof(String(stored.path)));
+  const bytes = fs.readFileSync(resolveGeneratedArtifactPath(proof.path));
+  if (sha256(bytes) !== hash || bytes.length !== proof.size) throw new FinanceDeliveryError(409, 'FINANCE_DELIVERY_ARTIFACT_CHANGED', 'The Finance workbook changed during retrieval.');
+  return { proof, bytes };
 }

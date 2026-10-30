@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { type ExternalCapabilityProjection, type ExternalCapabilityAction } from "@/services/externalCapabilities";
 import { Play, FileText, Sparkles, Wrench, Box, Search, ChevronRight, BrainCircuit } from "lucide-react";
 import { motion } from "motion/react";
@@ -28,11 +28,16 @@ export function externalCapabilityDesktopIcon(icon: string | undefined): React.R
 
 export function Spotlight({ isOpen, onClose, onSelect, apps, t }: { isOpen: boolean; onClose: () => void; onSelect: (id: string) => void; apps: any[]; t: any }) {
   const [query, setQuery] = useState('');
+  const [activeIndex, setActiveIndex] = useState(0);
 
   const filteredApps = apps.filter(app =>
     app.label.toLowerCase().includes(query.toLowerCase()) ||
     app.id.toLowerCase().includes(query.toLowerCase())
   );
+  useEffect(() => { setActiveIndex(0); }, [query, isOpen, filteredApps.length]);
+  useEffect(() => {
+    if (isOpen) document.getElementById(`spotlight-result-${activeIndex}`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [isOpen, activeIndex]);
 
   if (!isOpen) return null;
 
@@ -58,16 +63,31 @@ export function Spotlight({ isOpen, onClose, onSelect, apps, t }: { isOpen: bool
             className="flex-1 bg-transparent border-none outline-none text-xl font-bold text-white placeholder:text-white/45"
             value={query}
             onChange={e => setQuery(e.target.value)}
+            aria-controls="spotlight-results"
+            aria-activedescendant={filteredApps.length ? `spotlight-result-${Math.min(activeIndex, filteredApps.length - 1)}` : undefined}
+            onKeyDown={e => {
+              if (e.nativeEvent.isComposing) return;
+              if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+              else if (filteredApps.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                e.preventDefault();
+                setActiveIndex(index => (index + (e.key === 'ArrowDown' ? 1 : -1) + filteredApps.length) % filteredApps.length);
+              } else if (e.key === 'Enter' && filteredApps.length) {
+                e.preventDefault(); onSelect(filteredApps[Math.min(activeIndex, filteredApps.length - 1)].id); onClose();
+              }
+            }}
           />
           <div className="px-2 py-1 bg-white/5 rounded text-xs font-black text-white/40 tracking-widest border border-white/5">ESC</div>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
+        <div id="spotlight-results" className="flex-1 overflow-y-auto p-2 custom-scrollbar">
           {filteredApps.length > 0 ? (
-            filteredApps.map(app => (
+            filteredApps.map((app, index) => (
               <button
                 key={app.id}
+                id={`spotlight-result-${index}`}
+                onMouseEnter={() => setActiveIndex(index)}
+                aria-current={index === Math.min(activeIndex, filteredApps.length - 1)}
                 onClick={() => { onSelect(app.id); onClose(); }}
-                className="w-full p-4 flex items-center gap-4 hover:bg-white/5 rounded-2xl transition-colors text-left group"
+                className={`w-full p-4 flex items-center gap-4 hover:bg-white/5 rounded-2xl transition-colors text-left group ${index === activeIndex ? 'bg-white/10' : ''}`}
               >
                 <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${app.color} flex items-center justify-center p-2 shadow-lg`}>
                   {React.isValidElement(app.icon) ? React.cloneElement(app.icon, { size: 24 }) : app.icon}

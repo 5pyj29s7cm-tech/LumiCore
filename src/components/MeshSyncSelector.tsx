@@ -1,6 +1,7 @@
 import { motion } from 'motion/react';
 import { Zap } from 'lucide-react';
 import { GlassCard } from './SharedUI';
+import { personalCompletenessCopy } from '../i18n/locales/personalCompleteness';
 
 export function MeshSyncSelector({ t, syncRate, onSyncRateChange }: {
   t?: any;
@@ -18,12 +19,13 @@ className=""
       <GlassCard className="p-3 rounded-[1.5rem] border-white/5 bg-black/30 backdrop-blur-3xl">
         <div className="flex items-center gap-2">
           <span className="text-xs font-black text-white/45 uppercase tracking-wider">
-            {t?.meshSyncRate || 'Mesh Sync'}
+            {personalCompletenessCopy(t?.langCode).animationSpeed}
           </span>
           <div className="flex gap-1">
             {[0.5, 1, 1.5, 2].map((rate) => (
               <button
                 key={rate}
+                aria-pressed={syncRate === rate}
                 onClick={() => onSyncRateChange(rate)}
                 className={`w-9 h-9 rounded-full border flex flex-col items-center justify-center transition-all ${
                   syncRate === rate

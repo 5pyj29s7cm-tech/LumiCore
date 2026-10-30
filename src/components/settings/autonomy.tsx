@@ -5,6 +5,14 @@ import { toast } from "sonner";
 import { apiFetch } from "@/services/apiClient";
 import { formatUiMessage, uiMessage } from "../../i18n/uiMessages";
 import { useApp } from "@/contexts/AppContext";
+import { settingsRecoveryCopy } from '@/i18n/locales/settingsRecovery';
+
+async function boundedNativeResult<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Native runtime did not respond')), 10_000); })]);
+  } finally { clearTimeout(timer); }
+}
 
 export type AutonomyGateConfig = {
   autonomyLevel: 'reactive' | 'semi' | 'full';
@@ -50,6 +58,10 @@ export const DEFAULT_AUTONOMY_GATE: AutonomyGateConfig = {
 
 export function AutonomousSettingsPanel({ t }: { t: any }) {
   const coreCopy = unifiedCoreCopy(t?.langCode === 'en' ? 'en' : 'zh');
+  const recovery = settingsRecoveryCopy(t?.langCode);
+  const nativeWrite = useRef(false);
+  const [nativeSaving, setNativeSaving] = useState(false);
+  const [nativeSaveError, setNativeSaveError] = useState(false);
   const { user, workDomain, orgConnection } = useApp();
   const scope = JSON.stringify([user?.uid, user?.role, workDomain, orgConnection?.orgId, orgConnection?.orgRole]);
   const currentScope = useRef(scope);
@@ -121,9 +133,10 @@ export function AutonomousSettingsPanel({ t }: { t: any }) {
     let cancelled = false;
     let timer: number | undefined;
     const loadNativeRuntime = async () => {
+      if (nativeWrite.current) return;
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        const status = await invoke<NativeRuntimeStatus>('get_runtime_resilience_status');
+        const status = await boundedNativeResult(invoke<NativeRuntimeStatus>('get_runtime_resilience_status'));
         if (!cancelled) {
           setNativeRuntime(status);
           setNativeRuntimeError('');
@@ -169,25 +182,30 @@ export function AutonomousSettingsPanel({ t }: { t: any }) {
 
   const refreshNativeRuntime = async () => {
     const { invoke } = await import('@tauri-apps/api/core');
-    const status = await invoke<NativeRuntimeStatus>('get_runtime_resilience_status');
+    const status = await boundedNativeResult(invoke<NativeRuntimeStatus>('get_runtime_resilience_status'));
     setNativeRuntime(status);
     setNativeRuntimeError('');
     return status;
   };
 
   const updateNativeRuntime = async (kind: 'autostart' | 'closeToBackground', enabled: boolean) => {
+    if (nativeWrite.current) return;
+    nativeWrite.current = true; setNativeSaving(true); setNativeSaveError(false);
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      if (kind === 'autostart') {
-        await invoke('set_autostart_enabled', { enabled });
-      } else {
+      const confirmed = await boundedNativeResult(invoke(kind === 'autostart' ? 'set_autostart_enabled' : 'set_close_to_background', { enabled }));
+      if (confirmed !== enabled) throw new Error(recovery.nativeFailed);
+      if (kind === 'closeToBackground') {
         localStorage.setItem('lumi_close_to_background', String(enabled));
-        await invoke('set_close_to_background', { enabled });
       }
+      setNativeRuntime(previous => previous ? { ...previous, [kind === 'autostart' ? 'autostart_enabled' : 'close_to_background']: enabled } : previous);
       await refreshNativeRuntime();
       toast.success(enabled ? uiMessage('settings.enabled.4508d98328') : uiMessage('settings.disabled.68b069bc6a'));
     } catch (err: any) {
+      setNativeSaveError(true);
       toast.error(err?.message || uiMessage('settings.failed-to-update-native-runtime.6cdad0027d'));
+    } finally {
+      nativeWrite.current = false; setNativeSaving(false);
     }
   };
 
@@ -288,8 +306,9 @@ export function AutonomousSettingsPanel({ t }: { t: any }) {
               {uiMessage('settings.refresh.cba212b169')}
             </button>
           </div>
+          {nativeSaveError && <p role="alert">{recovery.nativeFailed}</p>}
           {nativeRuntime ? (
-            <div className="space-y-2">
+            <fieldset disabled={nativeSaving} className="space-y-2">
               <ToggleRow
                 label={uiMessage('settings.launch-at-login.2485b7c036')}
                 desc={nativeRuntime.autostart_supported ? uiMessage('settings.starts-lumi-with-background-for.a33dc15a9d') : uiMessage('settings.launch-at-login-is-not.1796e70780')}
@@ -322,7 +341,7 @@ export function AutonomousSettingsPanel({ t }: { t: any }) {
                   {uiMessage('settings.quit-lumi.df32c5974e')}
                 </button>
               </div>
-            </div>
+            </fieldset>
           ) : (
             <div className="rounded-lg bg-white/[0.03] px-3 py-2 text-xs text-white/38">
               {nativeRuntimeError || uiMessage('settings.native-runtime-status-is-loading.4a6aed02cd')}

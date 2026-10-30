@@ -19,6 +19,8 @@ import { WorldModelsPage } from './world_models';
 import { GenerativeModelsPage } from './generation';
 import { RetrievalModelSettings } from './retrieval';
 import { HardwareSettings } from './hardware';
+import { useRecoverableRead } from '@/hooks/useRecoverableRead';
+import { settingsRecoveryCopy } from '@/i18n/locales/settingsRecovery';
 
 export function buildSidebarGroups(t: any) {
   return [
@@ -71,8 +73,15 @@ export function SettingsView({
   onSectionChange?: (section: string) => void;
 }) {
   const { platform, isElectron } = usePlatform();
-  const { user, logout, appearanceMode, resolvedAppearanceMode, setAppearanceMode, workDomain, switchDomain } = useApp();
-  const [providerStatus, setProviderStatus] = useState<Record<string, ProviderRuntimeStatus>>({});
+  const { user, logout, appearanceMode, resolvedAppearanceMode, setAppearanceMode, workDomain, orgConnection, switchDomain } = useApp();
+  const recovery = settingsRecoveryCopy(lang);
+  const providerRead = useRecoverableRead<Record<string, ProviderRuntimeStatus>>(user?.uid ? JSON.stringify([user.uid, user.role, workDomain, orgConnection?.orgId, orgConnection?.orgRole]) : null, async signal => {
+    const data = await apiJson('/api/llm/providers', { signal });
+    if (!data?.providers || typeof data.providers !== 'object' || Array.isArray(data.providers)) throw new Error('Invalid provider status');
+    return data.providers;
+  });
+  const providerStatus = providerRead.error ? {} : providerRead.data || {};
+  useEffect(() => { if (providerRead.error) toast.error(providerRead.error); }, [providerRead.error]);
   const [modelConfigurationRevision, setModelConfigurationRevision] = useState(0);
   const visibleSection = activeSection === 'computer' || activeSection === 'messaging'
     ? 'general'
@@ -84,31 +93,12 @@ export function SettingsView({
   const externalConnectionsTab = activeSection === 'applications' ? 'applications' : 'data-sources';
 
   useEffect(() => {
-    if (!user?.uid) return;
-    let request: AbortController | undefined;
-    const loadProviderStatus = async () => {
-      request?.abort();
-      const owner = new AbortController(); request = owner;
-      const signal = AbortSignal.any([owner.signal, AbortSignal.timeout(15_000)]);
-      try {
-        const data = await apiJson('/api/llm/providers', { signal });
-        signal.throwIfAborted();
-        if (!data?.providers || typeof data.providers !== 'object' || Array.isArray(data.providers)) throw new Error('Invalid provider status');
-        setProviderStatus(data.providers);
-      } catch (err: any) {
-        if (!owner.signal.aborted) {
-          setProviderStatus({});
-          toast.error(err?.message || t.failedToLoadProviderStatus || uiMessage('settings.failed-to-load-provider-status.6411dc3232'));
-        }
-      }
-    };
-    void loadProviderStatus();
+    const loadProviderStatus = () => { void providerRead.refresh(); };
     window.addEventListener('lumi:keys-changed', loadProviderStatus);
     return () => {
-      request?.abort();
       window.removeEventListener('lumi:keys-changed', loadProviderStatus);
     };
-  }, [user?.uid, t.failedToLoadProviderStatus]);
+  }, [providerRead.refresh]);
 
   useEffect(() => {
     const handleModelConfigurationChanged = (event: Event) => {
@@ -328,6 +318,8 @@ export function SettingsView({
       {/* Content — absolute positioned to prevent layout shift during transitions */}
       <div className="flex-1 min-w-0 relative overflow-hidden">
         <div className="absolute inset-0 overflow-y-auto custom-scrollbar p-3 md:p-6">
+          {providerRead.loading && <p role="status">{recovery.loading}</p>}
+          {providerRead.error && <div role="alert">{recovery.failed} <button onClick={() => void providerRead.refresh()}>{recovery.retry}</button></div>}
           <AnimatePresence mode="popLayout">
             <motion.div
               key={`${visibleSection}:${modelConfigurationRevision}`}

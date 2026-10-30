@@ -3,6 +3,8 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { useSocket } from '@/hooks/useSocket';
+import { useLocale } from '@/lib/useT';
+import { settingsRecoveryCopy } from '@/i18n/locales/settingsRecovery';
 import '@xterm/xterm/css/xterm.css';
 
 interface TerminalWindowProps {
@@ -36,6 +38,8 @@ const xtermTheme = {
 };
 
 export function TerminalWindow({ t: _t, onClose, isActive }: TerminalWindowProps) {
+  const locale = useLocale();
+  const copy = useRef(settingsRecoveryCopy(locale)); copy.current = settingsRecoveryCopy(locale);
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -82,10 +86,21 @@ export function TerminalWindow({ t: _t, onClose, isActive }: TerminalWindowProps
     xtermRef.current = term;
     socketRef.current = socket;
 
-    // Create terminal session
-    socket.emit('terminal:create');
+    let phase: 'starting' | 'ready' | 'ended' = 'starting';
+    let readyTimer: ReturnType<typeof setTimeout> | undefined;
+    const startSession = () => {
+      phase = 'starting';
+      clearTimeout(readyTimer);
+      readyTimer = setTimeout(() => {
+        phase = 'ended';
+        term.writeln(`\r\n[${copy.current.terminalTimeout}]`);
+      }, 15_000);
+      socket.emit('terminal:create');
+    };
 
     const onReady = () => {
+      clearTimeout(readyTimer);
+      phase = 'ready';
       term.clear();
       term.focus();
       term.writeln('\x1b[1;32m┌─────────────────────────────────────────┐\x1b[0m');
@@ -100,6 +115,8 @@ export function TerminalWindow({ t: _t, onClose, isActive }: TerminalWindowProps
     };
 
     const onExit = (payload: { code: number }) => {
+      clearTimeout(readyTimer);
+      phase = 'ended';
       term.writeln(`\r\n\x1b[33m[Process exited with code ${payload.code}]\x1b[0m`);
       term.writeln('\x1b[33m[Press Enter or close this window]\x1b[0m');
     };
@@ -107,10 +124,14 @@ export function TerminalWindow({ t: _t, onClose, isActive }: TerminalWindowProps
     socket.on('terminal:ready', onReady);
     socket.on('terminal:output', onOutput);
     socket.on('terminal:exit', onExit);
+    const onDisconnect = () => { clearTimeout(readyTimer); phase = 'ended'; term.writeln(`\r\n[${copy.current.terminalDisconnected}]`); };
+    socket.on('disconnect', onDisconnect);
+    startSession();
 
     // Send keystrokes to the shell
     const keyHandler = term.onData((data: string) => {
-      socket.emit('terminal:input', { data });
+      if (phase === 'ended' && (data === '\r' || data === '\n')) { if (socket.connected !== false) startSession(); }
+      else if (phase === 'ready') socket.emit('terminal:input', { data });
     });
 
     // Resize observer
@@ -127,18 +148,21 @@ export function TerminalWindow({ t: _t, onClose, isActive }: TerminalWindowProps
     }
 
     // Slight delay to ensure render is complete
-    setTimeout(() => {
+    const resizeTimer = setTimeout(() => {
       fitAddon.fit();
       socket.emit('terminal:resize', { cols: term.cols, rows: term.rows });
     }, 100);
 
     return () => {
+      clearTimeout(readyTimer);
+      clearTimeout(resizeTimer);
       resizeObserver.disconnect();
       keyHandler.dispose();
       socket.emit('terminal:destroy');
       socket.off('terminal:ready', onReady);
       socket.off('terminal:output', onOutput);
       socket.off('terminal:exit', onExit);
+      socket.off('disconnect', onDisconnect);
       term.dispose();
       xtermRef.current = null;
     };

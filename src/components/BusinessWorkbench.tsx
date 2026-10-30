@@ -6,6 +6,7 @@ import { apiJson } from '../services/apiClient';
 import { useApp } from '../contexts/AppContext';
 import type { EcommerceOutcomeId } from '../i18n/locales/ecommerceModules';
 import type { EcommerceReportKind, EcommerceWorkbenchSnapshot } from '../../shared/ecommerce_workbench';
+import { BusinessLocalBoard } from './BusinessLocalBoard';
 const Commerce = lazy(() => import('./EcommerceAutomationWorkspace').then(m => ({ default: m.EcommerceAutomationWorkspace })));
 const Finance = lazy(() => import('./FinanceWorkbench').then(m => ({ default: m.FinanceWorkbench })));
 type Line = 'ecommerce' | 'finance';
@@ -53,7 +54,12 @@ function Workbench({ section = 'social', lang, domain, onOpenSettings, onOpenKno
     if (!Array.isArray(workspaces?.items) || !workspaces.items.every(isSubject) || !workspaces.active || typeof workspaces.active !== 'object' || Array.isArray(workspaces.active) || !['ecommerce', 'finance'].every(line => workspaces.active[line] == null || (isSubject(workspaces.active[line]) && workspaces.active[line].productLine === line))) throw new Error('Invalid business workspace response');
     return () => { setData({ subjects: workspaces.items, active: workspaces.active }); setSnapshot(current => current?.id === (workspaces.active.ecommerce?.id || '') ? current : null); };
   }), [run, isSubject]);
-  useEffect(() => { const owner = new AbortController(); lifetime.current = owner; void load(); return () => owner.abort(); }, [load, tab]);
+  useEffect(() => {
+    const owner = new AbortController(); lifetime.current = owner;
+    if (tab === 'social') setOperation({ saving: false, error: '' });
+    else void load();
+    return () => owner.abort();
+  }, [load, tab]);
   const storeId = active.ecommerce?.id || '';
   const acceptSnapshot = useCallback((value: EcommerceWorkbenchSnapshot | null) => {
     if (!lifetime.current?.signal.aborted && viewRevision === revision.current) setSnapshot({ id: storeId, value });
@@ -85,13 +91,14 @@ function Workbench({ section = 'social', lang, domain, onOpenSettings, onOpenKno
       </div>}
       {error && <p role="alert" className="mt-2 text-sm text-rose-300">{error}<button type="button" disabled={saving} onClick={() => void load()} className="ml-3 underline">{c.refresh}</button></p>}
     </header>
-    <main className="min-h-0 flex-1 overflow-auto"><fieldset disabled={saving} className="contents"><Suspense fallback={<p className="p-5">{c.loading}</p>}>
+    <main className="min-h-0 flex-1 overflow-auto"><fieldset disabled={tab !== 'social' && saving} className="contents"><Suspense fallback={<p className="p-5">{c.loading}</p>}>
       {tab === 'social' ? <section className="space-y-6 p-5 sm:p-7">
         <div className="rounded-2xl border border-emerald-200/10 bg-gradient-to-br from-emerald-300/10 to-transparent p-6">
           <p className="text-xs font-medium tracking-widest text-emerald-200">{c.social}</p>
           <h3 className="mt-3 text-2xl font-semibold">{c.socialOverview.title}</h3>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-white/60">{c.socialOverview.description}</p>
         </div>
+        <BusinessLocalBoard boardId="social-calendar" workspaceId="_unbound" lang={lang} />
         <div className="grid gap-4 md:grid-cols-3">
           {[
             { id: 'creation', copy: c.socialOverview.creation, Icon: WandSparkles, onClick: onOpenCreation },
@@ -105,12 +112,12 @@ function Workbench({ section = 'social', lang, domain, onOpenSettings, onOpenKno
           </button>)}
         </div>
       </section> :
-      saving && !data ? <p className="p-5">{c.loading}</p> : !data ? null : tab === 'ecommerce' ? <Commerce key={`commerce:${storeId}:${commerceEntry}`} appId={commerceEntry} draft={workbenchDrafts?.get('commerce:' + storeId) as EcommerceWorkbenchDraft | undefined} onDraftChange={saveDraft} lang={locale} initialReportKind={commerceReportKind} onOpenSettings={onOpenSettings} snapshot={snapshot?.id === storeId ? snapshot.value : null} onSnapshotChange={acceptSnapshot} onOpenWorkspace={target => {
+      saving && !data ? <p className="p-5">{c.loading}</p> : !data ? null : tab === 'ecommerce' ? <Commerce key={`commerce:${storeId}:${commerceEntry}`} appId={commerceEntry} workspaceId={storeId} draft={workbenchDrafts?.get('commerce:' + storeId) as EcommerceWorkbenchDraft | undefined} onDraftChange={saveDraft} lang={locale} initialReportKind={commerceReportKind} onOpenSettings={onOpenSettings} snapshot={snapshot?.id === storeId ? snapshot.value : null} onSnapshotChange={acceptSnapshot} onOpenWorkspace={target => {
         if (target === 'reviews' || target === 'inventory') {
           setCommerceReportKind(target === 'inventory' ? 'inventory' : 'reviews');
           setCommerceEntry('store-data');
         } else setCommerceEntry(target);
-      }} /> : <Finance key={`finance:${active.finance?.id || ''}:${financeEntry}`} lang={locale} domain={domain} initialWorkflowId={financeEntry} onOpenKnowledge={onOpenKnowledge} onOpenSkills={onOpenSkills} />}
+      }} /> : <Finance key={`finance:${active.finance?.id || ''}:${financeEntry}`} workspaceId={active.finance?.id || ''} lang={locale} domain={domain} initialWorkflowId={financeEntry} onOpenKnowledge={onOpenKnowledge} onOpenSkills={onOpenSkills} />}
     </Suspense></fieldset></main>
   </div>;
 }

@@ -16,7 +16,15 @@ const fixture = vi.hoisted(() => ({
   json: vi.fn(), fetch: vi.fn(),
 }));
 vi.mock('../src/contexts/AppContext', () => ({ useApp: () => fixture.account }));
-vi.mock('../src/services/apiClient', () => ({ apiJson: (...args: any[]) => fixture.json(...args), apiFetch: (...args: any[]) => fixture.fetch(...args) }));
+vi.mock('../src/services/apiClient', () => ({ apiJson: async (...args: any[]) => {
+  const value = await fixture.json(...args);
+  // Existing row fixtures now use the opt-in cursor envelope. Real route tests below retain legacy-array checks.
+  if (!String(args[0]).startsWith('/api/org/audit?') || !Array.isArray(value)) return value;
+  const query = new URL(String(args[0]), 'http://fixture').searchParams;
+  const cursor = query.get('cursor') || 'fixture.0', offset = Number(cursor.split('.').at(-1));
+  return { entries: value, total: offset + value.length + (value.length === 100 ? 1 : 0), offset, cursor,
+    nextCursor: value.length === 100 ? `fixture.${offset + 100}` : null, previousCursor: offset > 0 ? `fixture.${offset - 100}` : null };
+}, apiFetch: (...args: any[]) => fixture.fetch(...args) }));
 vi.mock('../src/lib/useT', () => ({ useT: () => ({ langCode: 'en', retry: 'Retry', orgAudit: 'Audit log', orgMembers: 'Members', orgKB: 'Knowledge base' }) }));
 vi.mock('../src/i18n/uiMessages', () => ({ uiMessage: (key: string) => key, formatUiMessage: (key: string, values: any) => key + ' ' + String(values.value0?.en ?? values.value0) }));
 
@@ -100,18 +108,35 @@ describe('organization dashboard dynamic component', () => {
 });
 
 describe('organization audit recovery and pagination', () => {
+  it('uses the confirmed total and does not offer another page for exactly 100 entries', async () => {
+    fixture.json.mockResolvedValue({ entries: Array.from({ length: 100 }, (_, i) => row('exact-' + i)), total: 100, offset: 0, cursor: 'fixture.0', nextCursor: null, previousCursor: null });
+    render(<AuditLogViewer />); await screen.findByText('document.read.exact-0');
+    expect(screen.getByText('100 displayed · 100 entries in this snapshot')).toBeTruthy(); expect(screen.queryByRole('button', { name: 'Next page' })).toBeNull();
+  });
+  it('recovers an expired cursor with a new snapshot without overwriting the confirmed page on failure', async () => {
+    fixture.json.mockResolvedValueOnce(Array.from({ length: 100 }, (_, i) => row('expired-' + i)))
+      .mockRejectedValueOnce(new Error('Audit snapshot expired or unavailable. Refresh the audit snapshot.')).mockResolvedValueOnce([row('fresh')]);
+    render(<AuditLogViewer />); await screen.findByText('document.read.expired-0'); fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('Audit snapshot expired or unavailable. Refresh the audit snapshot.'); expect(screen.getByText('document.read.expired-0')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh audit snapshot' })); await screen.findByText('document.read.fresh');
+    expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?limit=100&pagination=cursor');
+  });
+  it('rejects an inconsistent cursor envelope instead of inventing a complete first page', async () => {
+    fixture.json.mockResolvedValue({ entries: [row('misleading')], total: 120, offset: 0, cursor: 'fixture.0', nextCursor: null, previousCursor: null });
+    render(<AuditLogViewer />); await screen.findByText('Invalid audit log response'); expect(screen.queryByText('document.read.misleading')).toBeNull();
+  });
   it('moves beyond 100 rows and retries a failed page without losing the confirmed page', async () => {
     fixture.json.mockResolvedValueOnce(Array.from({ length: 100 }, (_, i) => row('page-one-' + i)))
       .mockRejectedValueOnce(new Error('Page two unavailable')).mockResolvedValueOnce([row('page-two')]);
     render(<AuditLogViewer />); await screen.findByText('document.read.page-one-0');
     fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
     await screen.findByText('Page two unavailable'); expect(screen.getByText('document.read.page-one-0')).toBeTruthy();
-    expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?limit=100&offset=100');
+    expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?limit=100&pagination=cursor&cursor=fixture.100');
     fireEvent.click(screen.getByRole('button', { name: 'Retry' })); await screen.findByText('document.read.page-two');
     expect(screen.queryByText('document.read.page-one-0')).toBeNull();
     expect(screen.getByRole('button', { name: 'Next page' })).toHaveProperty('disabled', true);
     fixture.json.mockResolvedValueOnce([row('returned')]); fireEvent.click(screen.getByRole('button', { name: 'Previous page' }));
-    await screen.findByText('document.read.returned'); expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?limit=100');
+    await screen.findByText('document.read.returned'); expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?limit=100&pagination=cursor&cursor=fixture.0');
   });
   it('keeps pagination and CSV bound to the applied filter while an unsent draft differs', async () => {
     fixture.json.mockResolvedValueOnce([]).mockResolvedValueOnce(Array.from({ length: 100 }, (_, i) => row('filtered-' + i))).mockResolvedValueOnce([row('filtered-next')]);
@@ -120,11 +145,11 @@ describe('organization audit recovery and pagination', () => {
     fireEvent.change(fields[1], { target: { value: ' document.read ' } }); fireEvent.click(screen.getByRole('button', { name: labels.search }));
     await screen.findByText('document.read.filtered-0'); fireEvent.change(fields[1], { target: { value: 'document.delete' } });
     fireEvent.click(screen.getByRole('button', { name: 'Next page' })); await screen.findByText('document.read.filtered-next');
-    expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?action=document.read&limit=100&offset=100');
+    expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?action=document.read&limit=100&pagination=cursor&cursor=fixture.100');
     fireEvent.click(screen.getByRole('button', { name: labels.export })); await screen.findByText('Audit export failed: HTTP 403');
     expect(fixture.fetch.mock.calls[0][0]).toBe('/api/org/audit/export?action=document.read');
     fixture.json.mockResolvedValueOnce([row('new-filter')]); fireEvent.click(screen.getByRole('button', { name: labels.search }));
-    await screen.findByText('document.read.new-filter'); expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?action=document.delete&limit=100');
+    await screen.findByText('document.read.new-filter'); expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?action=document.delete&limit=100&pagination=cursor');
   });
   it('offers immediate retry for the initial read failure without calling it an empty log', async () => {
     fixture.json.mockRejectedValueOnce(new Error('Initial unavailable')).mockResolvedValueOnce([row('recovered')]);
@@ -152,7 +177,7 @@ describe('organization audit dynamic component', () => {
   it('renders confirmed rows, structured details and the existing 100-row request cap', async () => {
     fixture.json.mockResolvedValue([row('confirmed', '{"reason":"fixture evidence"}')]); render(<AuditLogViewer />);
     await screen.findByText('document.read.confirmed'); expect(screen.getByTitle('{"reason":"fixture evidence"}')).toBeTruthy();
-    expect(fixture.json.mock.calls[0][0]).toBe('/api/org/audit?limit=100');
+    expect(fixture.json.mock.calls[0][0]).toBe('/api/org/audit?limit=100&pagination=cursor');
     expect(screen.queryByRole('button', { name: /next|previous/i })).toBeNull();
   });
   it('shows an empty list only after a completed empty response', async () => {
@@ -169,9 +194,9 @@ describe('organization audit dynamic component', () => {
     fireEvent.click(screen.getByRole('button', { name: labels.filters })); const fields = screen.getAllByRole('textbox');
     for (const [index, value] of [' person/a ', ' document.create ', ' document '].entries()) fireEvent.change(fields[index], { target: { value } });
     fireEvent.click(screen.getByRole('button', { name: labels.search }));
-    await waitFor(() => expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?userId=person%2Fa&action=document.create&resourceType=document&limit=100'));
+    await waitFor(() => expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?userId=person%2Fa&action=document.create&resourceType=document&limit=100&pagination=cursor'));
     fireEvent.click(screen.getByRole('button', { name: labels.clear }));
-    await waitFor(() => expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?limit=100')); expect(fields.every(field => (field as HTMLInputElement).value === '')).toBe(true);
+    await waitFor(() => expect(fixture.json.mock.calls.at(-1)?.[0]).toBe('/api/org/audit?limit=100&pagination=cursor')); expect(fields.every(field => (field as HTMLInputElement).value === '')).toBe(true);
   });
   it('keeps the newest filter result when an older request resolves later', async () => {
     const pending = deferred<any>(); fixture.json.mockResolvedValueOnce([]).mockReturnValueOnce(pending.promise).mockResolvedValueOnce([row('new')]);

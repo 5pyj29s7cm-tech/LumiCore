@@ -377,13 +377,16 @@ function projectChatAttachmentNarration(text: string, artifacts: ChatArtifact[],
     // i18n-allow -- first-person capability denial scoped to this chat and a file attachment.
     const denial = /(?:我|我的工具|当前可用.{0,12}工具).{0,100}(?:没有|无法|不能|不支持|不具备)|\bi\s+(?:cannot|can't|am\s+unable|have\s+no)\b/iu.test(unit.probe)
       && /(?:当前|本次|这个|本|此).{0,8}(?:聊天|对话|窗口)|这里|\b(?:this|current)\s+chat\b/iu.test(unit.text)
+      // i18n-allow: Existing attachment request, fallback and metadata input recognition.
       && (/附件|文件|文档|\b(?:attachment|file|document)\b/iu.test(unit.probe) || names.some(name => unit.text.includes(name)))
+      // i18n-allow: Existing attachment request, fallback and metadata input recognition.
       && /发|回传|推送|上传|附|\b(?:attach|send|return|upload)\b/iu.test(unit.probe);
     if (denial) { removedDenial = true; return false; }
     // Remove only the unrequested alternative offered after that false denial.
     // i18n-allow -- local fallback-offer grammar, not general tool-name filtering.
     const alternative = removedDenial && !requestedOpen
       && /告诉我改用其他方式|如果你希望我用|如果你需要我用|\b(?:if\s+you(?:'d|\s+would)\s+like|let\s+me\s+know)\b/iu.test(unit.probe)
+      // i18n-allow: Existing attachment request, fallback and metadata input recognition.
       && /desktop_open|改用其他方式/iu.test(unit.text);
     return !alternative;
   }).map(unit => unit.text).join('');
@@ -415,6 +418,7 @@ export function publicChatArtifactDelivery(value: unknown, conversationId?: stri
   let deliveryText = context.text || '';
   // Project the same verified PDF body in live replies and saved history.
   // Raw adapter metadata remains in the private receipt, not ordinary readback prose.
+  // i18n-allow: Existing attachment request, fallback and metadata input recognition.
   if (!/(?:元数据|PDF版本)|\b(?:metadata|PDFFormatVersion|producer)\b/iu.test(requests.join(' '))) {
     for (const record of evidence.records.filter(record => record.name === 'read_pdf')) {
       const raw = String(record.result || '').trim();

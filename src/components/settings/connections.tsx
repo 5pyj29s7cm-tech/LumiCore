@@ -6,10 +6,23 @@ import { uiMessage } from "../../i18n/uiMessages";
 import { LegalDataSourcesSettings } from "../org/LegalDataSourcesSettings";
 import { SettingsSection } from './components';
 import { ApiKeyField } from './provider_access';
+import { useApp } from '@/contexts/AppContext';
+import { useRecoverableRead } from '@/hooks/useRecoverableRead';
+import { getSavedKeyStatus } from '@/services/settingsKeys';
+import { settingsRecoveryCopy } from '@/i18n/locales/settingsRecovery';
 
 export function ApplicationConnections({ t }: { t: any }) {
+  const { user } = useApp();
+  const copy = settingsRecoveryCopy(t?.langCode);
+  const read = useRecoverableRead(user?.uid ? JSON.stringify([user.uid, user.role]) : null, getSavedKeyStatus);
+  useEffect(() => { const refresh = () => { void read.refresh(); }; window.addEventListener('lumi:keys-changed', refresh); return () => window.removeEventListener('lumi:keys-changed', refresh); }, [read.refresh]);
   return (
     <SettingsSection title={uiMessage('settings.application-service-connections.4c05e32d49')} icon={<FileText size={18} className="text-sky-300" />}>
+      <p>{copy.connectionHelp}</p>
+      <button disabled={read.loading || !user} onClick={() => void read.refresh()}>{copy.connectionCheck}</button>
+      {read.loading && <p role="status">{copy.loading}</p>}
+      {read.error && <div role="alert">{copy.failed} <button onClick={() => void read.refresh()}>{copy.retry}</button></div>}
+      {!read.loading && !read.error && read.data && <ul>{[['GitHub', 'GITHUB_TOKEN'], ['Notion', 'NOTION_API_KEY'], ['Figma', 'FIGMA_ACCESS_TOKEN']].map(([name, key]) => <li key={key}>{name}: {read.data![key] ? copy.configured : copy.missing}</li>)}</ul>}
       <div className="border-y border-white/10">
         <ApiKeyField icon={<Wrench size={18} className="text-white/70" />} label="GitHub" placeholder="Personal access token" storageKey="lumi_github_token" serverKey="GITHUB_TOKEN" t={t} />
         <ApiKeyField icon={<FileText size={18} className="text-white/70" />} label="Notion" placeholder="Integration token" storageKey="lumi_notion_api_key" serverKey="NOTION_API_KEY" t={t} />

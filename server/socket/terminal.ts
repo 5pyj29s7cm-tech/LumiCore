@@ -89,6 +89,8 @@ export function registerTerminalHandlers(socket: any, _getUserId: (s: any) => st
       if (sessions.get(sessionId) !== session) return;
       sessions.delete(sessionId);
       socket.emit('terminal:output', { data: `\r\n\x1b[31mTerminal error: ${err.message}\x1b[0m\r\n` });
+      // An output listener may create a replacement synchronously; do not end it.
+      if (!sessions.has(sessionId)) socket.emit('terminal:exit', { code: -1 });
     });
 
     socket.emit('terminal:ready', { sessionId });

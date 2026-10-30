@@ -87,6 +87,17 @@ export function listConversationReceiptHistory(conversationId: string, limit = 1
   return cloneDatabaseValue(projectConversationReceiptHistory(db, visible));
 }
 
+/** Cursor is an existing visible row identity, so newly appended rows cannot shift older pages. */
+export function listConversationReceiptHistoryPage(conversationId: string, limit = 80, beforeId = '') {
+  const db = readDatabaseTables(["interactions","conversations","conversationActionTasks","conversationActionTurns","conversationActionReceipts"]);
+  const rows = selectVisibleConversationHistory((db.interactions || []).filter((row: any) => row.conversationId === conversationId), Infinity);
+  const end = beforeId ? rows.findIndex(row => row.id === beforeId) : rows.length;
+  if (end < 0) return null;
+  const start = Math.max(0, end - Math.max(1, Math.min(limit, 200)));
+  const visible = rows.slice(start, end);
+  return { messages: cloneDatabaseValue(projectConversationReceiptHistory(db, visible)), hasMore: start > 0, nextCursor: start > 0 ? String(visible[0]?.id || '') : null };
+}
+
 /** History rail previews use transcript text, without loading or projecting execution receipts. */
 export function listConversationPreviewMessages(conversationIds: readonly string[], limit = 12): Map<string, any[]> {
   const selected = new Set(conversationIds.filter(Boolean));

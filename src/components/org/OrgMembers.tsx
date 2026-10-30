@@ -17,6 +17,7 @@ import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
 
 import { useApiCollection } from '../../hooks/useApiCollection';
 import type { OrgMembership } from '../../../server/org/db';
+import { orgAdminCompletenessCopy } from '../../i18n/locales/orgAdminCompleteness';
 
 type Member = Pick<OrgMembership, 'id' | 'orgId' | 'userId' | 'role' | 'status' | 'joinedAt'>;
 const isOrganization = (value: any): value is { id: string } => Boolean(value && typeof value.id === 'string' && value.id);
@@ -44,22 +45,43 @@ function DiscoverMembers() {
 function MemberList({ orgId }: { orgId: string }) {
   const appConfirm = useAppConfirm(orgId);
   const t = useT();
+  const { user } = useApp(), copy = orgAdminCompletenessCopy(t.langCode);
   const isMember = useCallback((value: any): value is Member => Boolean(value && value.orgId === orgId
     && ['id', 'userId', 'role', 'status'].every(field => typeof value[field] === 'string' && value[field])
     && (value.joinedAt == null || typeof value.joinedAt === 'string')), [orgId]);
   const { items, busy, error, sync } = useApiCollection('/api/org/org/' + encodeURIComponent(orgId) + '/members', isMember, undefined, 'userId');
   const members = items ?? [];
+  const actor = members.find(member => member.userId === user?.uid && member.status === 'active');
+  const actorRole = actor?.role;
+  const canManage = actorRole === 'owner' || actorRole === 'admin';
+  const canManageMember = (member: Member) => canManage && member.role !== 'owner' && (actorRole === 'owner' || member.role !== 'admin');
+  const editableRoles = actorRole === 'owner' ? ['member', 'admin', 'viewer'] as const : ['member', 'viewer'] as const;
+  const [roleDrafts, setRoleDrafts] = useState<Record<string, string>>({});
   const [inviteUserId, setInviteUserId] = useState('');
   const [inviteRole, setInviteRole] = useState('member');
   const [success, setSuccess] = useState('');
   const confirming = useRef(false);
   const handleInvite = async () => {
-    if (!inviteUserId.trim() || !items || busy) return;
+    if (!inviteUserId.trim() || !items || busy || !canManage) return;
     setSuccess('');
     if (await sync('POST', '', { userId: inviteUserId.trim(), role: inviteRole })) {
       setInviteUserId('');
       setSuccess(uiMessage('org-members.member-added-to-the-organization.ccd3f9eeaa'));
     }
+  };
+  const handleRole = async (member: Member) => {
+    const role = roleDrafts[member.userId];
+    if (!role || role === member.role || busy || confirming.current || !canManageMember(member)) return;
+    confirming.current = true;
+    try {
+      if (!await appConfirm({ title: copy.roleTitle, message: copy.roleConfirm(member.userId, roles[role as keyof typeof roles]?.label || role),
+        confirmText: copy.confirm, cancelText: copy.cancel, tone: 'danger' })) return;
+      setSuccess('');
+      if (await sync('PUT', member.userId, { role }, '/role', receipt => receipt.role === role && receipt.status === member.status)) {
+        setRoleDrafts(current => { const next = { ...current }; delete next[member.userId]; return next; });
+        setSuccess(copy.roleSaved);
+      }
+    } finally { confirming.current = false; }
   };
   const handleRemove = async (userId: string) => {
     if (busy || confirming.current) return;
@@ -114,7 +136,7 @@ function MemberList({ orgId }: { orgId: string }) {
         {(error || success) && <FeedbackBanner feedback={{ type: error ? 'error' : 'success', text: error || success }} />}
 
         <section className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
-          <fieldset disabled={busy || !items} className="grid min-w-0 gap-3 md:grid-cols-[1fr_160px_auto]">
+          <fieldset disabled={busy || !items || !canManage} className="grid min-w-0 gap-3 md:grid-cols-[1fr_160px_auto]">
             <label className="block">
               <span className="mb-1 block text-xs text-white/50">{uiMessage('org-members.add-member-by-user-id.4aa55086eb')}</span>
               <input
@@ -131,7 +153,7 @@ function MemberList({ orgId }: { orgId: string }) {
                 onChange={event => setInviteRole(event.target.value)}
                 className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/75 outline-none"
               >
-                {(['member', 'admin', 'viewer'] as const).map(role => <option key={role} value={role}>{roles[role].label}</option>)}
+                {editableRoles.map(role => <option key={role} value={role}>{roles[role].label}</option>)}
               </select>
             </label>
             <button
@@ -185,7 +207,16 @@ function MemberList({ orgId }: { orgId: string }) {
                         <meta.Icon size={11} />
                         {meta.label}
                       </span>
-                      {member.role !== 'owner' && (
+                      {canManageMember(member) && <>
+                        <select aria-label={copy.roleLabel(member.userId)} disabled={busy} value={roleDrafts[member.userId] ?? member.role}
+                          onChange={event => setRoleDrafts(current => ({ ...current, [member.userId]: event.target.value }))}
+                          className="rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs">
+                          {editableRoles.map(role => <option key={role} value={role}>{roles[role].label}</option>)}
+                        </select>
+                        <button type="button" disabled={busy || !roleDrafts[member.userId] || roleDrafts[member.userId] === member.role}
+                          onClick={() => handleRole(member)} className="rounded-lg border border-white/10 px-2 py-1 text-xs disabled:opacity-40">{copy.applyRole}</button>
+                      </>}
+                      {canManageMember(member) && (
                         <button
                           onClick={() => handleRemove(member.userId)}
                           disabled={busy}

@@ -36,6 +36,27 @@ beforeEach(() => {
   fixture.reply.mockResolvedValue(reply); fixture.play.mockResolvedValue(undefined);
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+it('personal-completeness retries failed archive acknowledgement without replaying speech or generating again', async () => {
+  fixture.reply.mockResolvedValue({ ...reply, requestId: 'reply-one' });
+  fixture.acknowledge.mockRejectedValueOnce(Error('archive offline'));
+  const { result } = renderHook(() => useAvatarLivePreview(config)); await ready(result);
+  await act(async () => result.current.respond({ id: 'c', nickname: 'Viewer', text: 'Question', source: 'test', receivedAt: 1 }, 'Public brief'));
+  expect(result.current.historyError).toBe(true); expect(fixture.play).toHaveBeenCalledOnce();
+  fixture.history.mockResolvedValue([{ requestId: 'reply-one', nickname: 'Viewer', comment: 'Question', reply: reply.text, createdAt: 'now', spokenAt: 'now' }]);
+  await act(async () => result.current.retryHistory());
+  expect(result.current.historyError).toBe(false); expect(result.current.archivedHistory).toHaveLength(1);
+  expect(fixture.acknowledge).toHaveBeenCalledTimes(2); expect(fixture.reply).toHaveBeenCalledOnce(); expect(fixture.play).toHaveBeenCalledOnce();
+});
+it('personal-completeness history retry recovers initial failure and ignores old account data', async () => {
+  fixture.history.mockRejectedValueOnce(Error('offline'));
+  const { result, rerender } = renderHook(({ ownerId }) => useAvatarLivePreview({ ...config, ownerId }), { initialProps: { ownerId: 'owner' } });
+  await waitFor(() => expect(result.current.historyError).toBe(true));
+  const old = deferred<any[]>(); fixture.history.mockReturnValueOnce(old.promise);
+  act(() => { void result.current.retryHistory(); });
+  rerender({ ownerId: 'other' });
+  await act(async () => old.resolve([{ reply: 'private old owner' }]));
+  expect(result.current.archivedHistory).toEqual([]); expect(fixture.play).not.toHaveBeenCalled(); expect(fixture.reply).not.toHaveBeenCalled();
+});
 describe('live preview in the current Lumi window', () => {
   it('recovers a transient scan failure without resetting the baseline or audio', async () => {
     vi.useFakeTimers();

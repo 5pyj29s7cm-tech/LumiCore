@@ -3,6 +3,9 @@ import { BUSINESS_LINES, type BusinessLine } from '../industry/business_catalog'
 import path from 'node:path';
 import { businessLegacySummary, importBusinessLegacyArchive, readBusinessLegacyArchive, resolveBusinessLegacyArtifact } from '../industry/legacy_archive';
 import { readDocumentPreview } from '../files/document_preview';
+import { readWorkbenchDraft, saveWorkbenchDraft } from '../industry/workbench_draft';
+import { mountFinanceLocalWorksheetRoutes } from './finance_local_worksheet_routes';
+import { mountLocalOperationsBoardRoutes } from './local_operations_board_routes';
 import { flushDBOrThrow } from '../../db_layer';
 import { recordEcommerceWorkbenchArchive } from '../industry/ecommerce_workbench_archive';
 import { bindIndustryWorkspaceContext, listIndustryWorkspaceContexts, getActiveIndustryWorkspaceContext, selectIndustryWorkspaceContext } from '../industry/workspace_context';
@@ -14,12 +17,15 @@ import {
   getIndustryWorkflowTask,
   listCurrentIndustryWorkflowContracts,
   listIndustryWorkflowTasks,
+  listIndustryWorkflowTaskPage,
   recordIndustryWorkflowExecution,
   startIndustryWorkflow,
 } from '../industry/workflow_service';
 import {
   executeFinanceDeliveryWorkflow,
   FinanceDeliveryError,
+  cancelFinanceDeliveryWorkflow,
+  readFinanceDeliveryArtifact,
 } from '../industry/finance_delivery';
 
 function scope(req: any) {
@@ -29,6 +35,8 @@ function scope(req: any) {
 }
 
 export function mountIndustryWorkflowRoutes(router: Router, registry: ToolRegistry = toolRegistry) {
+  mountFinanceLocalWorksheetRoutes(router);
+  mountLocalOperationsBoardRoutes(router);
   const asyncHandler = (handler: (req: any, res: any) => Promise<any> | any) => (
     req: any,
     res: any,
@@ -66,6 +74,15 @@ export function mountIndustryWorkflowRoutes(router: Router, registry: ToolRegist
     const current = scope(req);
     res.json({ items: listIndustryWorkspaceContexts(current), active: { ecommerce: getActiveIndustryWorkspaceContext({ ...current, productLine: 'ecommerce' }), finance: getActiveIndustryWorkspaceContext({ ...current, productLine: 'finance' }) } });
   });
+  router.get('/business/drafts/ecommerce/:workspaceId', requireAuth, (req, res) => {
+    try { return res.json({ record: readWorkbenchDraft(scope(req), req.params.workspaceId) }); }
+    catch { return res.status(404).json({ error: 'Draft workspace not found' }); }
+  });
+  router.put('/business/drafts/ecommerce/:workspaceId', requireAuth, asyncHandler(async (req, res) => {
+    if (req.user?.orgRole === 'viewer') return res.status(403).json({ error: 'Read-only organization role' });
+    try { return res.json({ persisted: true, record: await saveWorkbenchDraft(scope(req), req.params.workspaceId, req.body?.draft) }); }
+    catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+  }));
   router.post('/business/workspaces', requireAuth, asyncHandler(async (req, res) => {
     if (req.user?.orgRole === 'viewer') return res.status(403).json({ error: 'Read-only organization role' });
     const current = scope(req);
@@ -78,6 +95,10 @@ export function mountIndustryWorkflowRoutes(router: Router, registry: ToolRegist
   });
 
   router.get('/industry/workflows', requireAuth, (req, res) => {
+    if (typeof req.query.entryId === 'string') {
+      try { return res.json(listIndustryWorkflowTaskPage(scope(req), req.query.entryId, typeof req.query.workspaceId === 'string' ? req.query.workspaceId : undefined, String(req.query.before || ''))); }
+      catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+    }
     res.json({ tasks: listIndustryWorkflowTasks(scope(req), Number(req.query?.limit) || 50) });
   });
 
@@ -86,6 +107,30 @@ export function mountIndustryWorkflowRoutes(router: Router, registry: ToolRegist
     if (!task) return res.status(404).json({ error: 'Industry workflow task not found' });
     return res.json({ task });
   });
+
+  router.get('/industry/workflows/:taskId/artifacts/:hash', requireAuth, asyncHandler(async (req, res) => {
+    try {
+      const artifact = readFinanceDeliveryArtifact(scope(req), req.params.taskId, req.params.hash);
+      if (!artifact) return res.status(404).json({ error: 'Artifact not found' });
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'");
+      res.attachment(artifact.proof.basename);
+      return res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(artifact.bytes);
+    } catch (error) {
+      if (!(error instanceof FinanceDeliveryError)) throw error;
+      return res.status(error.statusCode).json({ error: error.message, code: error.code });
+    }
+  }));
+
+  router.post('/industry/workflows/:taskId/finance-cancel', requireAuth, asyncHandler(async (req, res) => {
+    if (req.user?.orgRole === 'viewer') return res.status(403).json({ error: 'Read-only organization role' });
+    try { return res.json(await cancelFinanceDeliveryWorkflow(scope(req), String(req.params.taskId))); }
+    catch (error) {
+      if (!(error instanceof FinanceDeliveryError)) throw error;
+      return res.status(error.statusCode).json({ error: error.message, code: error.code });
+    }
+  }));
 
   router.post('/industry/workflows', requireAuth, asyncHandler(async (req, res) => {
     if (req.user?.orgRole === 'viewer') return res.status(403).json({ error: 'Read-only organization role' });
@@ -125,6 +170,7 @@ export function mountIndustryWorkflowRoutes(router: Router, registry: ToolRegist
   }));
 
   router.post('/industry/workflows/:taskId/finance-delivery', requireAuth, asyncHandler(async (req, res) => {
+    if (req.user?.orgRole === 'viewer') return res.status(403).json({ error: 'Read-only organization role' });
     const userId = String(req.user?.uid || '').trim();
     const desktopProof = req.headers[DESKTOP_SESSION_HEADER];
     if (!isLoopbackAddress(req.socket?.remoteAddress) || !verifyDesktopSessionProof(desktopProof, userId)) {

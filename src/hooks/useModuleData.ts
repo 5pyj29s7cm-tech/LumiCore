@@ -1,37 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useRecoverableRead } from './useRecoverableRead';
 
 export function useModuleData<T>(endpoint: string, initialData: T | null = null) {
-  const [data, setData] = useState<T | null>(initialData);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-
-  useEffect(() => {
-    let isMounted = true;
-    
-    setLoading(true);
-    fetch(endpoint)
-      .then(res => {
-        if (!res.ok) throw new Error(`Failed to fetch from ${endpoint}`);
-        return res.json();
-      })
-      .then(json => {
-        if (isMounted) {
-          setData(json);
-          setLoading(false);
-        }
-      })
-      .catch(err => {
-        if (isMounted) {
-          console.error(`Error fetching ${endpoint}:`, err);
-          setError(err);
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [endpoint]);
-
-  return { data, loading, error, setData };
+  const state = useRecoverableRead<T>(endpoint, async signal => {
+    const res = await fetch(endpoint, { signal });
+    if (!res.ok) throw new Error(`Failed to fetch from ${endpoint}`);
+    const data = await res.json();
+    if (!data || typeof data !== 'object' || (endpoint === '/api/modules/docs' && data.sections !== undefined && !Array.isArray(data.sections))) throw new Error('Invalid module response');
+    return data;
+  });
+  return { ...state, data: state.data ?? initialData, error: state.error ? new Error(state.error) : null, retry: state.refresh };
 }

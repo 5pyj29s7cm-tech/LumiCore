@@ -175,6 +175,7 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
         memoryIds: existingMemories.map((m: any) => m.id).filter(Boolean),
         extractionStatus: content?.trim() ? extraction.status : (meta.extractionStatus || 'indexed'),
         ingestionStatus: currentManifest?.status || 'indexed_unverified',
+        coverage: currentManifest?.coverage,
         ingestionManifestId: meta.ingestionManifestId,
       });
     }

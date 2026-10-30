@@ -3,7 +3,8 @@ import { Users, Plus, Phone, Mail, MapPin, MessageSquare, Edit3, Trash2, Search 
 import { useT } from '../lib/useT';
 import { uiMessage } from '../i18n/uiMessages';
 import { useApp } from '../contexts/AppContext';
-import { useApiCollection } from '../hooks/useApiCollection';
+import { useContactPage, CONTACT_PAGE_SIZE } from '../hooks/useContactPage';
+import { personalCompletenessCopy } from '../i18n/locales/personalCompleteness';
 import type { Contact } from '../../server/contacts/types';
 
 const isContact = (value: any): value is Contact => Boolean(value && typeof value.id === 'string' && value.id && typeof value.name === 'string'
@@ -16,21 +17,20 @@ const contactFields = [
 ] as const;
 
 export function ContactsPanel() {
-  const { user } = useApp();
-  return user ? <ContactsEditor key={`${user.uid}:${user.role}`} /> : null;
+  const { user, workDomain, orgConnection } = useApp();
+  return user ? <ContactsEditor key={JSON.stringify([user.uid, user.role, workDomain, orgConnection?.orgId])} /> : null;
 }
 
 function ContactsEditor() {
   const t = useT();
-  const { items: contacts, busy, error, sync } = useApiCollection('/api/contacts', isContact, 'contacts');
-  const [search, setSearch] = useState('');
+  const { items: contacts, busy, error, sync, search, setSearch, page, setPage, total } = useContactPage(isContact);
+  const copy = personalCompletenessCopy(t.langCode);
   const [draft, setDraft] = useState<ContactDraft | null>(null);
   const save = async () => {
     if (!draft?.name.trim()) return;
     if (await sync(draft.id ? 'PUT' : 'POST', draft.id, { ...draft, name: draft.name.trim(), ...(!draft.id ? { relationship: 'friend' } : {}) })) setDraft(null);
   };
-  const query = search.trim().toLowerCase();
-  const visible = contacts?.filter(contact => [contact.name, contact.phone, contact.email, contact.company, contact.notes, contact.traits, ...(contact.tags ?? [])].some(value => value?.toLowerCase().includes(query))) ?? [];
+  const visible = contacts || [];
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-4">
@@ -44,7 +44,7 @@ function ContactsEditor() {
         </div>
         <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder={uiMessage('contacts-panel.search-contacts.fcf6775e68')} className="w-full pl-9 pr-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-white/30 text-sm" />
+          <input value={search} disabled={busy} onChange={e => setSearch(e.target.value)} placeholder={uiMessage('contacts-panel.search-contacts.fcf6775e68')} className="w-full pl-9 pr-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-white/30 text-sm" />
         </div>
         {draft && (
           <fieldset disabled={busy} className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
@@ -59,6 +59,11 @@ function ContactsEditor() {
         <div className="space-y-2">
           {visible.map(contact => <ContactCard key={contact.id} contact={contact} busy={busy} isZh={t.langCode !== 'en'} onEdit={() => setDraft({ id: contact.id, name: contact.name, phone: contact.phone, email: contact.email, company: contact.company })} sync={sync} />)}
         </div>
+        <nav aria-label={copy.page(page + 1, total)} className="flex items-center justify-between">
+          <button disabled={busy || page === 0} onClick={() => setPage(page - 1)}>{copy.previous}</button>
+          <span>{copy.page(page + 1, total)}</span>
+          <button disabled={busy || (page + 1) * CONTACT_PAGE_SIZE >= total} onClick={() => setPage(page + 1)}>{copy.next}</button>
+        </nav>
       </>}
     </div>
   );
@@ -69,6 +74,8 @@ function ContactCard({ contact: c, busy, isZh, onEdit, sync }: {
   sync: (method: string, id: string, body?: unknown, action?: string) => Promise<boolean>;
 }) {
   const [note, setNote] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const copy = personalCompletenessCopy(isZh ? 'zh' : 'en');
   const record = async () => {
     if (note.trim() && await sync('POST', c.id, { note: note.trim() }, '/interact')) setNote('');
   };
@@ -78,9 +85,14 @@ function ContactCard({ contact: c, busy, isZh, onEdit, sync }: {
         <div><span className="text-white font-medium">{c.name}</span>{c.relationship && <span className="text-white/30 text-xs ml-2">{c.relationship}</span>}</div>
         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <button title={uiMessage('knowledge-base-browser.edit.e9740dbb21')} onClick={onEdit} className="p-1.5 text-white/30 hover:text-blue-400"><Edit3 size={12} /></button>
-          <button title={uiMessage('reminder-panel.delete.5b875326d1')} onClick={() => sync('DELETE', c.id)} className="p-1.5 text-white/30 hover:text-red-400"><Trash2 size={12} /></button>
+          <button title={uiMessage('reminder-panel.delete.5b875326d1')} onClick={() => setConfirming(true)} className="p-1.5 text-white/30 hover:text-red-400"><Trash2 size={12} /></button>
         </div>
       </div>
+      {confirming && <div role="alertdialog" aria-label={copy.deleteContact}>
+        <p>{copy.deleteContact} {c.name}</p>
+        <button onClick={() => setConfirming(false)}>{copy.cancel}</button>
+        <button onClick={() => void sync('DELETE', c.id).then(ok => { if (ok) setConfirming(false); })}>{copy.confirmDelete}</button>
+      </div>}
       <div className="flex items-center gap-4 mt-2 text-xs text-white/40">
         {c.phone && <span className="flex items-center gap-1"><Phone size={10} />{c.phone}</span>}
         {c.email && <span className="flex items-center gap-1"><Mail size={10} />{c.email}</span>}
