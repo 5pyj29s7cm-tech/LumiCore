@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-30T04:28:35.299278+00:00",
+  "updatedAt": "2026-10-30T04:42:37.941303+00:00",
   "localDate": "2026-10-30",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序问题修复与加载验证",
-    "status": "software-verified-runtime-loading-and-installed-skill-recovery-pending",
-    "instruction": "5处原产品问题、同源义务遗漏及技能私有依赖重签边界已修；82文件1095项隔离测试全过，类型/前端构建通过。待加载新源码及执行已审查技能恢复；真人测试暂停、已验收/保留项和默认模型不变。"
+    "title": "主程序修复已加载，技能安装恢复已验证",
+    "status": "source-fixed-loaded-installed-skills-recovered-native-ui-paused",
+    "instruction": "原5处问题、同源遗漏及技能私有依赖重签缺陷已修；1095/1095隔离测试通过，主后端已加载27a268d6，8个已启用技能恢复并验证43工具声明。真人测试仍暂停；历史遗留及外部凭据前提保持明确。"
   },
   "acceptedWholeItems": [
     3,
@@ -36,12 +36,14 @@
     "Existing file full body returned through normal Socket and persisted exactly once with terminal task/turn"
   ],
   "knownUnresolved": [
-    "Source-level and isolated tests, not native UI or whole-business acceptance.",
-    "Installed8Skill recovery has only been rehearsed; live maintenance pending.",
-    "Legacy disabled Skills and missing E2B credential are not enabled or fabricated.",
-    "Prior7scoped failures and composite calculation semantic verification remain open, outside this repair round.",
-    "Global i18n97findings and existing architecture diagnostics remain.",
-    "Cross-night baseline already had14more interactions and303more routing records before resumed tests; do not claim zero background activity."
+    "真人坐标测试继续按用户要求暂停，硬件、供应商及真实业务端到端未验收。",
+    "前轮7项历史失败和复合计算语义核验仍保留，本轮未重放已验收/暂停业务。",
+    "全局i18n检查仍有97条既有发现，架构检查保留与基线相同的失败。",
+    "旧技能多数已禁用；code-sandbox缺外部E2B凭据，未编造凭据或启用禁用项；设计师版不检查。",
+    "原5个隔离/暂停调度任务保持，健康接口因此仍显示degraded。",
+    "首次45秒就绪轮询未成功，117秒快照确认HTTP已就绪；未把首次超时掩盖成即时启动，也未计作永久失败。",
+    "启动日志保留一次原生会话凭据过期提示，随后正常bootstrap、Socket连接及Win32设备登记成功；自动重连不等于真人界面验收。",
+    "应用启动自动发生认证、设备登记、tokenUsage清理和既有WeChat轮询；指定四表计数不变不等于整个应用或数据库零写入。"
   ],
   "validation": {
     "tsc": "passed in both repositories",
@@ -53,9 +55,9 @@
   },
   "evidence": {
     "directory": "D:/Lumi-Audit-Temp/main-partition-repair-20261029",
-    "manifest": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/software-seal.json",
-    "sha256": "4754fc6728862b4b5f655d16a39c193849771835162c968beca1468ef4f38981",
-    "files": 120,
+    "manifest": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/evidence-seal.json",
+    "sha256": "5af61698a2ccfb789f481ad65dc655bef99f8bf005b96bcf73a0dea09dab9db7",
+    "files": 181,
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -136,10 +138,16 @@
     "typecheck": "passed",
     "desktopUIBuild": "passed",
     "nativeUITesting": "paused-by-user",
-    "installedSkillLiveRecovery": "pending",
+    "installedSkillLiveRecovery": "8skills/43tool declarations;0business tool calls",
     "wholeApplicationAccepted": false,
     "installerReleased": false,
-    "remotePushPerformed": false
+    "remotePushPerformed": false,
+    "runtimeLoadedSourceCommit": "27a268d6900ad27e55e5a82cfe04ad48df9f299d",
+    "backendPid": 48104,
+    "nativeClientAutomaticallyReconnected": true,
+    "defaultModelUnchanged": true,
+    "acceptedAndHeldStateUnchanged": true,
+    "checkpointOnly": true
   },
   "orderedPassSummary": {
     "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/acceptance-summary.json",
@@ -292,8 +300,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "software-verified-runtime-loading-and-installed-skill-recovery-pending",
-    "priority": "5处原产品问题、同源义务遗漏及技能私有依赖重签边界已修；82文件1095项隔离测试全过，类型/前端构建通过。待加载新源码及执行已审查技能恢复；真人测试暂停、已验收/保留项和默认模型不变。"
+    "status": "source-fixed-loaded-installed-skills-recovered-native-ui-paused",
+    "priority": "原5处问题、同源遗漏及技能私有依赖重签缺陷已修；1095/1095隔离测试通过，主后端已加载27a268d6，8个已启用技能恢复并验证43工具声明。真人测试仍暂停；历史遗留及外部凭据前提保持明确。"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -2120,7 +2128,7 @@
         "bytes": 6680
       }
     ],
-    "status": "software-verified-runtime-loading-and-installed-skill-recovery-pending",
+    "status": "source-fixed-loaded-installed-skills-recovered-native-ui-paused",
     "version": "3.1.1",
     "originalProductIssuesFixed": [
       "terminal stale callbacks",
@@ -2171,24 +2179,26 @@
       "remotePushPerformed": false
     },
     "limits": [
-      "Source-level and isolated tests, not native UI or whole-business acceptance.",
-      "Installed8Skill recovery has only been rehearsed; live maintenance pending.",
-      "Legacy disabled Skills and missing E2B credential are not enabled or fabricated.",
-      "Prior7scoped failures and composite calculation semantic verification remain open, outside this repair round.",
-      "Global i18n97findings and existing architecture diagnostics remain.",
-      "Cross-night baseline already had14more interactions and303more routing records before resumed tests; do not claim zero background activity."
+      "真人坐标测试继续按用户要求暂停，硬件、供应商及真实业务端到端未验收。",
+      "前轮7项历史失败和复合计算语义核验仍保留，本轮未重放已验收/暂停业务。",
+      "全局i18n检查仍有97条既有发现，架构检查保留与基线相同的失败。",
+      "旧技能多数已禁用；code-sandbox缺外部E2B凭据，未编造凭据或启用禁用项；设计师版不检查。",
+      "原5个隔离/暂停调度任务保持，健康接口因此仍显示degraded。",
+      "首次45秒就绪轮询未成功，117秒快照确认HTTP已就绪；未把首次超时掩盖成即时启动，也未计作永久失败。",
+      "启动日志保留一次原生会话凭据过期提示，随后正常bootstrap、Socket连接及Win32设备登记成功；自动重连不等于真人界面验收。",
+      "应用启动自动发生认证、设备登记、tokenUsage清理和既有WeChat轮询；指定四表计数不变不等于整个应用或数据库零写入。"
     ],
     "testPreparation": "Transitional integrated run overlapped final grammar edit and retained one failing new boundary; source-consistency gate rejected it. Only integrated-final is authoritative.",
     "cleanupLimit": "Automatic approval rejected cleanup of3isolated temporary config directories with blocked by policy; no alternate deletion attempted.",
     "evidence": {
       "directory": "D:/Lumi-Audit-Temp/main-partition-repair-20261029",
-      "manifest": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/software-seal.json",
-      "sha256": "4754fc6728862b4b5f655d16a39c193849771835162c968beca1468ef4f38981",
-      "files": 120,
+      "manifest": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/evidence-seal.json",
+      "sha256": "5af61698a2ccfb789f481ad65dc655bef99f8bf005b96bcf73a0dea09dab9db7",
+      "files": 181,
       "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
       "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
     },
-    "report": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/代码修复结果.txt",
+    "report": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/修复与加载最终报告.txt",
     "priorCurrentItem": {
       "id": null,
       "title": "主程序已加载验证与其余分区隔离复测",
@@ -2204,6 +2214,441 @@
       "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
     },
     "wholeApplicationAccepted": false,
-    "installerReleased": false
+    "installerReleased": false,
+    "sourceCommit": "27a268d6900ad27e55e5a82cfe04ad48df9f299d",
+    "softwareEvidence": {
+      "manifest": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/software-seal.json",
+      "sha256": "4754fc6728862b4b5f655d16a39c193849771835162c968beca1468ef4f38981",
+      "files": 120
+    },
+    "structuredReport": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/final-repair-report.json",
+    "runtimeVerification": {
+      "schema": "lumi.main-partition-repair.complete-scoped.v1",
+      "atUTC": "2026-10-30T04:42:37.941303+00:00",
+      "clientDate": "2026-10-30",
+      "sourceCommit": "27a268d6900ad27e55e5a82cfe04ad48df9f299d",
+      "version": "3.1.1",
+      "status": "source-fixed-loaded-installed-skills-recovered-native-ui-paused",
+      "softwareEvidence": {
+        "manifest": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/software-seal.json",
+        "sha256": "4754fc6728862b4b5f655d16a39c193849771835162c968beca1468ef4f38981",
+        "files": 120
+      },
+      "fixedOriginalProductIssues": [
+        "terminal stale callbacks",
+        "English navigation qualifiers",
+        "plural navigation alias precedence",
+        "attachment retrieval with edit obligation",
+        "documentation search"
+      ],
+      "additionalFixes": [
+        "same-owner retrieval/edit and resave obligations",
+        "managed Skill repair rejects changed private dependencies"
+      ],
+      "fixtureAssertionsCorrected": 4,
+      "tests": {
+        "files": 82,
+        "passed": 1095,
+        "failed": 0,
+        "skipped": 45,
+        "runnerExitCodes": [
+          0,
+          0
+        ]
+      },
+      "validation": {
+        "typecheck": "passed",
+        "desktopUIBuild": "passed",
+        "diffCheck": "passed",
+        "i18n": {
+          "baseUnique": 97,
+          "currentUnique": 97,
+          "added": [],
+          "resolved": []
+        },
+        "architectureSameExistingFailures": true,
+        "postTestChange": "One inline grammar annotation only; emitted JavaScript identical"
+      },
+      "runtime": {
+        "name": "lumi-core",
+        "version": "3.1.1",
+        "buildId": "27a268d6900ad27e55e5a82cfe04ad48df9f299d",
+        "pid": 48104,
+        "sharedBackendProtocol": 1,
+        "startedAt": "2026-10-30T04:31:22.878Z",
+        "uptimeSeconds": 117,
+        "nodeVersion": "v24.19.0",
+        "platform": "win32"
+      },
+      "runtimeHealth": {
+        "status": "degraded",
+        "fault": {
+          "degraded": false,
+          "acceptingWork": true
+        },
+        "scheduler": {
+          "degraded": true,
+          "pausedTasks": 5,
+          "queuedTasks": 0,
+          "failedTasks": 0
+        },
+        "timestamp": "2026-10-30T04:33:15.783Z",
+        "runtime": {
+          "name": "lumi-core",
+          "version": "3.1.1",
+          "buildId": "27a268d6900ad27e55e5a82cfe04ad48df9f299d"
+        },
+        "database": {
+          "dirty": false,
+          "persistence": {
+            "degraded": false
+          }
+        }
+      },
+      "nativeClient": {
+        "pidUnchanged": 43928,
+        "automaticRecoveryObserved": true,
+        "uiAttempts": 0,
+        "identityInjected": false,
+        "logEvidence": [
+          {
+            "line": 82,
+            "text": "[API_ROUTER] POST /auth/bootstrap"
+          },
+          {
+            "line": 86,
+            "text": "[Socket] Client connected: ibYM51ZBvPKk8JX1AAAB (uid=admin-uid)"
+          },
+          {
+            "line": 98,
+            "text": "[Devices] Registered: Win32 (desktop) for user admin-uid"
+          }
+        ]
+      },
+      "frontendSourceServed": {
+        "status": 200,
+        "hasQueryState": true,
+        "hasSearchFilter": true,
+        "hasTextMatcher": true
+      },
+      "independentReview": {
+        "path": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/independent-final-review.json",
+        "sha256": "b85af020f6069d5431925425aa83f13ac84fb77dbc89650a1a51251ae49011ec",
+        "status": "verified-with-explicit-limits",
+        "blockingFindings": []
+      },
+      "installedSkills": {
+        "recovered": 8,
+        "registeredTools": 43,
+        "results": [
+          {
+            "name": "admin-assistant",
+            "mode": "host-link-repair",
+            "version": "1.0.0",
+            "toolCount": 5,
+            "registeredToolNames": [
+              "mcp_admin-assistant_schedule_conflict_planner",
+              "mcp_admin-assistant_meeting_minutes_admin",
+              "mcp_admin-assistant_reimbursement_packet_check",
+              "mcp_admin-assistant_office_purchase_request",
+              "mcp_admin-assistant_notice_and_archive_plan"
+            ],
+            "manifestCapabilityIds": [
+              "mcp_admin-assistant_schedule_conflict_planner",
+              "mcp_admin-assistant_meeting_minutes_admin",
+              "mcp_admin-assistant_reimbursement_packet_check",
+              "mcp_admin-assistant_office_purchase_request",
+              "mcp_admin-assistant_notice_and_archive_plan"
+            ],
+            "businessToolCalls": 0
+          },
+          {
+            "name": "data-bi",
+            "mode": "host-link-repair",
+            "version": "1.0.0",
+            "toolCount": 5,
+            "registeredToolNames": [
+              "mcp_data-bi_csv_excel_cleaning_plan",
+              "mcp_data-bi_metric_definition_builder",
+              "mcp_data-bi_dashboard_brief",
+              "mcp_data-bi_anomaly_explainer",
+              "mcp_data-bi_weekly_monthly_report_outline"
+            ],
+            "manifestCapabilityIds": [
+              "mcp_data-bi_csv_excel_cleaning_plan",
+              "mcp_data-bi_metric_definition_builder",
+              "mcp_data-bi_dashboard_brief",
+              "mcp_data-bi_anomaly_explainer",
+              "mcp_data-bi_weekly_monthly_report_outline"
+            ],
+            "businessToolCalls": 0
+          },
+          {
+            "name": "messaging-ops",
+            "mode": "host-link-repair",
+            "version": "1.0.0",
+            "toolCount": 3,
+            "registeredToolNames": [
+              "mcp_messaging-ops_remote_message_triage",
+              "mcp_messaging-ops_draft_remote_reply",
+              "mcp_messaging-ops_feishu_wechat_setup_guide"
+            ],
+            "manifestCapabilityIds": [
+              "mcp_messaging-ops_remote_message_triage",
+              "mcp_messaging-ops_draft_remote_reply",
+              "mcp_messaging-ops_feishu_wechat_setup_guide"
+            ],
+            "businessToolCalls": 0
+          },
+          {
+            "name": "procurement-supply-chain",
+            "mode": "host-link-repair",
+            "version": "1.0.0",
+            "toolCount": 5,
+            "registeredToolNames": [
+              "mcp_procurement-supply-chain_supplier_quote_compare",
+              "mcp_procurement-supply-chain_purchase_plan_builder",
+              "mcp_procurement-supply-chain_delivery_risk_tracker",
+              "mcp_procurement-supply-chain_inventory_warning_review",
+              "mcp_procurement-supply-chain_procurement_contract_checklist"
+            ],
+            "manifestCapabilityIds": [
+              "mcp_procurement-supply-chain_supplier_quote_compare",
+              "mcp_procurement-supply-chain_purchase_plan_builder",
+              "mcp_procurement-supply-chain_delivery_risk_tracker",
+              "mcp_procurement-supply-chain_inventory_warning_review",
+              "mcp_procurement-supply-chain_procurement_contract_checklist"
+            ],
+            "businessToolCalls": 0
+          },
+          {
+            "name": "sales-customer-ops",
+            "mode": "host-link-repair",
+            "version": "1.2.0",
+            "toolCount": 5,
+            "registeredToolNames": [
+              "mcp_sales-customer-ops_lead_score",
+              "mcp_sales-customer-ops_sales_followup_draft",
+              "mcp_sales-customer-ops_objection_response_builder",
+              "mcp_sales-customer-ops_customer_health_review",
+              "mcp_sales-customer-ops_support_ticket_triage"
+            ],
+            "manifestCapabilityIds": [
+              "mcp_sales-customer-ops_lead_score",
+              "mcp_sales-customer-ops_sales_followup_draft",
+              "mcp_sales-customer-ops_objection_response_builder",
+              "mcp_sales-customer-ops_customer_health_review",
+              "mcp_sales-customer-ops_support_ticket_triage"
+            ],
+            "businessToolCalls": 0
+          },
+          {
+            "name": "stockbot",
+            "mode": "host-link-repair",
+            "version": "1.1.2",
+            "toolCount": 9,
+            "registeredToolNames": [
+              "mcp_stockbot_stock_search",
+              "mcp_stockbot_stock_quote",
+              "mcp_stockbot_stock_kline",
+              "mcp_stockbot_market_index",
+              "mcp_stockbot_hot_sectors",
+              "mcp_stockbot_stock_news",
+              "mcp_stockbot_stock_trade_plan",
+              "mcp_stockbot_paper_trade",
+              "mcp_stockbot_paper_portfolio"
+            ],
+            "manifestCapabilityIds": [
+              "skill.stockbot.stock_search",
+              "skill.stockbot.stock_quote",
+              "skill.stockbot.stock_kline",
+              "skill.stockbot.market_index",
+              "skill.stockbot.hot_sectors",
+              "skill.stockbot.stock_news",
+              "skill.stockbot.stock_trade_plan",
+              "skill.stockbot.paper_trade",
+              "skill.stockbot.paper_portfolio"
+            ],
+            "businessToolCalls": 0
+          },
+          {
+            "name": "executive-ops",
+            "mode": "host-link-repair",
+            "version": "1.0.0",
+            "toolCount": 6,
+            "registeredToolNames": [
+              "mcp_executive-ops_executive_kpi_brief",
+              "mcp_executive-ops_meeting_action_extractor",
+              "mcp_executive-ops_okr_planner",
+              "mcp_executive-ops_decision_memo_builder",
+              "mcp_executive-ops_team_risk_review",
+              "mcp_executive-ops_cash_runway_scenario"
+            ],
+            "manifestCapabilityIds": [
+              "mcp_executive-ops_executive_kpi_brief",
+              "mcp_executive-ops_meeting_action_extractor",
+              "mcp_executive-ops_okr_planner",
+              "mcp_executive-ops_decision_memo_builder",
+              "mcp_executive-ops_team_risk_review",
+              "mcp_executive-ops_cash_runway_scenario"
+            ],
+            "businessToolCalls": 0
+          },
+          {
+            "name": "content-ops",
+            "mode": "official-replacement",
+            "version": "1.0.2",
+            "toolCount": 5,
+            "registeredToolNames": [
+              "mcp_content-ops_content_topic_pipeline",
+              "mcp_content-ops_short_video_script",
+              "mcp_content-ops_account_performance_review",
+              "mcp_content-ops_comment_insight_report",
+              "mcp_content-ops_content_calendar_builder"
+            ],
+            "manifestCapabilityIds": [
+              "mcp_content-ops_content_topic_pipeline",
+              "mcp_content-ops_short_video_script",
+              "mcp_content-ops_account_performance_review",
+              "mcp_content-ops_comment_insight_report",
+              "mcp_content-ops_content_calendar_builder"
+            ],
+            "businessToolCalls": 0
+          }
+        ],
+        "readOnlyPostStartupRecheck": {
+          "atUTC": "2026-10-30T04:34:58.530Z",
+          "sourceCommit": "27a268d6900ad27e55e5a82cfe04ad48df9f299d",
+          "mode": "read-only",
+          "results": [
+            {
+              "name": "admin-assistant",
+              "version": "1.0.0",
+              "enabled": true,
+              "identityValid": true,
+              "packageSHA256": "539f880a31595f35b36a516bfb1e76ade773a926d3c493b2bab0a2fe7d6741fe",
+              "dependencyTarget": "D:\\lumiOS\\node_modules"
+            },
+            {
+              "name": "data-bi",
+              "version": "1.0.0",
+              "enabled": true,
+              "identityValid": true,
+              "packageSHA256": "e599f35eeaa666a62bc9699d407cde91e93a97d9e964603ecd347577cd0709f3",
+              "dependencyTarget": "D:\\lumiOS\\node_modules"
+            },
+            {
+              "name": "messaging-ops",
+              "version": "1.0.0",
+              "enabled": true,
+              "identityValid": true,
+              "packageSHA256": "ef87ba3b2a12624bd767a823be45bffce7407976396442bd690b198048302df1",
+              "dependencyTarget": "D:\\lumiOS\\node_modules"
+            },
+            {
+              "name": "procurement-supply-chain",
+              "version": "1.0.0",
+              "enabled": true,
+              "identityValid": true,
+              "packageSHA256": "5de7bc6d450592ea547fa3fc5b1d5649df6564892e36822593901b8a9da787c7",
+              "dependencyTarget": "D:\\lumiOS\\node_modules"
+            },
+            {
+              "name": "sales-customer-ops",
+              "version": "1.2.0",
+              "enabled": true,
+              "identityValid": true,
+              "packageSHA256": "3dbeb4ce4f3dd9af75a6bcaca6696f7ce95de968d747e715be19d3380d58906e",
+              "dependencyTarget": "D:\\lumiOS\\node_modules"
+            },
+            {
+              "name": "stockbot",
+              "version": "1.1.2",
+              "enabled": true,
+              "identityValid": true,
+              "packageSHA256": "a8fbc66cec2c0525de23bb82bbc4d1da6298a83ec5643eae8953a72f87d720c3",
+              "dependencyTarget": "D:\\lumiOS\\node_modules"
+            },
+            {
+              "name": "executive-ops",
+              "version": "1.0.0",
+              "enabled": true,
+              "identityValid": true,
+              "packageSHA256": "a4688bd720a985c667b1582b82d6ebb46a72ad4e0ddc8138cbe34a246348d90c",
+              "dependencyTarget": "D:\\lumiOS\\node_modules"
+            },
+            {
+              "name": "content-ops",
+              "version": "1.0.2",
+              "enabled": true,
+              "identityValid": true,
+              "packageSHA256": "028a633030377549af14af731a5bc6d18758c4b541ac1e64f2ca7eb19beda4f0",
+              "dependencyTarget": "D:\\lumiOS\\node_modules"
+            }
+          ],
+          "all8Valid": true,
+          "unselectedConfigUnchanged": true,
+          "unselectedServers": 25,
+          "configUnchangedDuringRead": true,
+          "businessToolCalls": 0
+        },
+        "unselectedConfigUnchanged": true,
+        "backupRoot": "C:\\Users\\Administrator\\LumiCore\\backups\\skill-maintenance-2026-10-30T04-29-57-800Z",
+        "businessToolCalls": 0
+      },
+      "preservation": {
+        "defaultModelUnchanged": true,
+        "preferences": [
+          {
+            "key": "llm_prefs_admin-uid",
+            "sha256": "8f9726c489921b5e37af6187a3e9361ef86fb177d0780295e932b7d2ae8e22f5"
+          },
+          {
+            "key": "llm_prefs_anonymous",
+            "sha256": "6daf7054ab0abb254b761301a9c5d3aa11870f69152b8143f4d0669acf54a08a"
+          }
+        ],
+        "countsDeltaSinceResume": {
+          "conversations": 0,
+          "interactions": 0,
+          "generated_archive": 0,
+          "model_routing_receipts": 0
+        },
+        "overnightCountsDeltaBeforeResume": {
+          "conversations": 0,
+          "interactions": 14,
+          "generated_archive": 0,
+          "model_routing_receipts": 303
+        },
+        "databaseQuickCheck": "ok",
+        "acceptedWholeItems": [
+          3,
+          15,
+          16
+        ],
+        "heldItemsUnchanged": true,
+        "lawyerDesignerEditionInspected": false,
+        "nativeUI": "paused-by-user",
+        "remotePushPerformed": false
+      },
+      "limits": [
+        "真人坐标测试继续按用户要求暂停，硬件、供应商及真实业务端到端未验收。",
+        "前轮7项历史失败和复合计算语义核验仍保留，本轮未重放已验收/暂停业务。",
+        "全局i18n检查仍有97条既有发现，架构检查保留与基线相同的失败。",
+        "旧技能多数已禁用；code-sandbox缺外部E2B凭据，未编造凭据或启用禁用项；设计师版不检查。",
+        "原5个隔离/暂停调度任务保持，健康接口因此仍显示degraded。",
+        "首次45秒就绪轮询未成功，117秒快照确认HTTP已就绪；未把首次超时掩盖成即时启动，也未计作永久失败。",
+        "启动日志保留一次原生会话凭据过期提示，随后正常bootstrap、Socket连接及Win32设备登记成功；自动重连不等于真人界面验收。",
+        "应用启动自动发生认证、设备登记、tokenUsage清理和既有WeChat轮询；指定四表计数不变不等于整个应用或数据库零写入。"
+      ],
+      "automaticReviewRejection": {
+        "action": "Remove3isolated temporary fixture config directories",
+        "reason": "blocked by policy; no additional reason supplied",
+        "executed": false,
+        "bypassAttempted": false
+      },
+      "wholeApplicationAccepted": false,
+      "installerReleased": false
+    }
   }
 }
