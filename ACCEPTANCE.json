@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-30T05:41:25.491017+00:00",
+  "updatedAt": "2026-10-30T06:11:51.301239+00:00",
   "localDate": "2026-10-30",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序剩余分区动态补查与历史失败核验",
-    "status": "source-fixed-loaded-with-explicit-gaps-native-ui-paused",
-    "instruction": "4个分区补齐隔离动态查证，6处问题修复并加载c41c940d；193项通过、2项保留失败，创始人2个额外缺口与复合计算blocked明确保留。真人测试继续暂停。"
+    "title": "主程序63分区完整查证",
+    "status": "all-63-reviewed-with-7-failed-assertions-native-ui-paused",
+    "instruction": "主程序63/63分区均已当前查证；1345个限定用例1338通过、7失败，新增自治配置加载风险明确保留。生产源码未改，真人测试暂停；法律、设计师及已封存业务不重放。"
   },
   "acceptedWholeItems": [
     3,
@@ -36,30 +36,18 @@
     "Existing file full body returned through normal Socket and persisted exactly once with terminal task/turn"
   ],
   "knownUnresolved": [
-    "真人坐标操作继续按用户要求暂停；隔离组件/API测试与加载检查不等于真人、硬件、供应商或整项业务端到端验收。",
-    "法律和设计师版排除；已验收3/15/16封存，2暂停和其他held状态保持，不重放已验收业务或付费生成。",
-    "原历史7项为4修复、1原生语义写入测试前提仍失败、2法律排除未运行；原生失败发生在动作契约构建，尚不能推断原生写入验收器失败。",
-    "额外保存成功声明的既有完成检查缺口另行复现，仍未修复，不计入原历史7项。",
-    "复合计算的正文保留及负例检查通过，但缺少有效算术核验证据，任务仍blocked，不能宣称计算完成。",
-    "创始人空间3个Open Archive按钮无动作，中文目录回退英文；2个独立失败探针保留。14项组件/隔离接口通过不代表档案功能实现。",
-    "审计前端仅取100条且无分页控件；后端limit/offset已隔离验证。组织聊天没有停止按钮，历史加载失败仍静默回退。",
-    "全局i18n仍97条既有发现，架构诊断与固定基线一致；两项全局检查仍退出1，无新增发现不等于检查通过。",
-    "旧技能多数保持禁用；code-sandbox缺E2B凭据，未编造凭据。原5个暂停/隔离调度任务保持，健康状态可显示degraded。",
-    "启动会自动认证、登记设备、清理tokenUsage及执行既有轮询；指定四表计数与偏好对照不能证明整个数据库零写入。",
-    "只作本地检查点提交，不推送、不发布安装包；默认模型保持。",
-    "本次后端首次45秒就绪轮询仍pending，保留进程后HTTP快照确认就绪；并非即时启动。",
-    "实际后端加载源码c41c940d；3份前端模块可由Vite返回，仅证明服务端可提供修复源码，不证明原生窗口已呈现或真人交互通过。",
-    "原生客户端PID43928保持运行且未重启；自动重连只按日志观察记录，不能替代真人验收。",
-    "本轮会话、交互、生成档案计数不变，路由回执净增12；窗口内成功回执包含13条scheduler来源标记，另1条来源未知，详见routing-review，不能声称整个应用无模型调用或零写入。",
-    "设计技能的同名、同SDK路径身份拒载在前两轮日志已存在，并非本次构建首次出现；该旧问题仍未修复。",
-    "design-studio-pack 当前配置为启用且 active，但身份校验拒绝加载；不能把它描述成禁用项，也不属于此前恢复的8个技能。",
-    "此前恢复的8个技能在新后端仍登记相同43项工具声明，仅能确认本轮未发现这些声明的加载回归，不等于逐技能启动、真实业务或端到端验收通过。",
-    "本次只读核对日志、加载边界及少量配置状态；未检查设计师包内容或身份元数据，未执行修复、重签、安装、启动、工具或模型调用，也未追溯最初哪次更新造成SDK身份漂移。",
-    "14 条窗口内成功回执与净增 12 条不是同一指标；现有每用户 5000 条保留机制及到上限用户的 2 条新记录能解释差额，但缺少前快照逐行身份，不能证明具体淘汰了哪两条。",
-    "13 条有 scheduler 来源标记；另 1 条空 source 的成功回执缺少请求与会话绑定，具体调用者仍未知，不能仅凭临近微信轮询日志归因。",
-    "成功路由回执证明当时既有主进程存在真实后台模型活动；隔离测试网络 guard 只约束测试进程，不能据此声称主程序本轮没有 provider 调用。",
-    "本补查只读时间、计数、来源与绑定存在性；未读取或导出提示词、模型正文、凭据或 token 正文，未改库或触发模型。",
-    "会话、交互和产物归档计数零增量不代表整个数据库或后台没有活动。"
+    "63项均有本轮源码、加载及相关隔离测试记录；覆盖深度不同。1345个用例来自139个文件的限定选择，不是全仓测试或所有功能路径覆盖。",
+    "真人坐标操作继续暂停，实际麦克风/摄像头/原生窗口、供应商与外部平台业务链路未验收；页面加载、模拟返回和子例通过不能算整分区通过。",
+    "法律与设计师业务仍排除；已验收3/15/16封存，2暂停、10保留及其他held状态不变。合成会议/消息组件测试没有重放已验收业务。",
+    "自治配置加载风险、创始人档案动作/中文标签、额外保存声明检查均未修复；两项前提或政策冲突的旧断言另行保留，不冒称产品已修好。",
+    "复合计算仅验证正文保留和缺失证据时blocked；没有有效算术核验证据，不能宣称计算完成。",
+    "本轮8次向127.0.0.1:11434的嵌入探测被隔离守卫阻断。个人及组织知识库只证明关键词回退/索引缺失如实报告，不证明向量服务可用。",
+    "组织审计前端100条且无分页控件；组织聊天没有停止按钮，历史加载失败静默回退等已知限制保持。",
+    "设计技能design-studio-pack启用但因既有运行身份漂移拒载，按排除范围保留；此前8个已恢复技能的43项声明不等于逐技能真实业务验收。code-sandbox仍缺E2B凭据。",
+    "全局i18n的97条既有发现与架构检查失败沿用前轮证据；本轮生产源码未改，未重新宣称这些全局检查通过，也未重建安装包。",
+    "5个原暂停/隔离调度任务保持，健康接口仍degraded。指定四表计数/默认偏好比对不代表后台、整个数据库或供应商完全没有活动。",
+    "行号和SHA用于定位当前源码，341个锚点不是341行动态执行覆盖。测试中的工具、消息和模型响应有明确隔离边界。",
+    "本轮只新增6份回归测试和检查点，不修改生产源码、默认模型或真实业务数据，不重启主程序，不推送远程。"
   ],
   "validation": {
     "tsc": "passed in both repositories",
@@ -70,10 +58,10 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "D:/Lumi-Audit-Temp/main-partition-verification-20261030",
-    "manifest": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/evidence-seal.json",
-    "sha256": "e8132b47bf793b770e4afad476d347e445b85fca9e962981b453c876dae1dfe5",
-    "files": 223,
+    "directory": "D:/Lumi-Audit-Temp/main-all-partitions-20261030",
+    "manifest": "D:/Lumi-Audit-Temp/main-all-partitions-20261030/evidence-seal.json",
+    "sha256": "86b45f1a63fc83d26aeb15f5f06ac31a9f6712ff7bce1517bb21a7013d157509",
+    "files": 423,
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -148,86 +136,37 @@
   "currentCheckpointValidation": {
     "jsonParsed": true,
     "gitDiffCheck": "passed",
-    "sourceChanged": true,
-    "productionFiles": 6,
+    "sourceChanged": false,
+    "testFilesAdded": 6,
+    "newPassingTestCases": 51,
     "tests": {
-      "uniqueExecutedFiles": 14,
-      "executed": 195,
-      "passed": 193,
-      "failed": 2,
+      "uniqueExecutedFiles": 139,
+      "executed": 1345,
+      "passed": 1338,
+      "failed": 7,
       "duplicateExecutedCases": 0,
-      "groups": [
-        {
-          "group": "surfaces",
-          "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/integrated/surfaces/vitest.json",
-          "sha256": "c41d3596bf688431f775c18c5d4b3810acf266ab96f5300f134b4ed415b3a838",
-          "executed": 111,
-          "passed": 111,
-          "failed": 0
-        },
-        {
-          "group": "cognition",
-          "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/integrated/cognition/vitest.json",
-          "sha256": "e2ac6df957bc5d5b7898a9cb818eda0ab58ad5b2d735878cd708b390124fff6b",
-          "executed": 82,
-          "passed": 82,
-          "failed": 0
-        },
-        {
-          "group": "retained-failures",
-          "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/integrated/retained-failures/vitest.json",
-          "sha256": "b2c3e4411338933897acd765729903f30bbba340e714030b59ba5f8256b44252",
-          "executed": 2,
-          "passed": 0,
-          "failed": 2
-        }
-      ],
-      "retainedFailures": [
-        {
-          "file": "D:/lumiOS/test/action_contract.test.ts",
-          "name": "Lumi action contract accepts native semantic text writes with a later same-path readback",
-          "status": "failed",
-          "group": "retained-failures"
-        },
-        {
-          "file": "D:/lumiOS/test/completion_guard.test.ts",
-          "name": "completion guard current-app UI evidence blocks an extra save-success claim until save and post-save evidence exist",
-          "status": "failed",
-          "group": "retained-failures"
-        }
-      ],
-      "founderSeparateProbes": {
-        "executed": 2,
-        "failed": 2,
-        "includedIn195": false
-      },
-      "countingRule": "Unique executed file + fullName pairs only. Child repetitions, independent pure-function observations, builds, unselected inventory and founder defect probes are not added. These assertions do not accept whole partitions."
+      "conflictingResults": 0,
+      "countingRule": "Unique (file, fullName, same-name occurrence). This preserves distinct parameterized cases sharing a title and deduplicates repeated runs across groups. Unselected inventories and non-final attempts are not added."
     },
     "typecheck": "passed",
-    "desktopUIBuild": "passed",
+    "frontendModuleLoading": "73/73 HTTP200 JavaScript",
+    "desktopBuild": "not-rerun-production-source-unchanged",
+    "sourceAnchorsVerified": 341,
     "nativeUITesting": "paused-by-user",
-    "runtimeLoading": "loaded",
-    "acceptedAndHeldStateUnchanged": true,
-    "defaultModelUnchanged": true,
-    "wholeApplicationAccepted": false,
-    "installerReleased": false,
-    "remotePushPerformed": false,
     "runtimeLoadedSourceCommit": "c41c940de2d602076aa64b7fac66f1bac261f7cd",
     "backendPid": 33520,
-    "servedFrontendModules": 3,
-    "nativeClientRestarted": false,
-    "nativeLogObservations": {
-      "nativeBootstrap": false,
-      "socketLog": true,
-      "win32Device": true
-    },
+    "runtimeRestartedThisRound": false,
+    "defaultModelUnchanged": true,
     "databaseCountsDelta": {
       "conversations": 0,
       "interactions": 0,
       "generated_archive": 0,
-      "model_routing_receipts": 12
+      "model_routing_receipts": 0
     },
-    "checkpointOnly": true
+    "acceptedAndHeldStateUnchanged": true,
+    "wholeApplicationAccepted": false,
+    "installerReleased": false,
+    "remotePushPerformed": false
   },
   "orderedPassSummary": {
     "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/acceptance-summary.json",
@@ -380,8 +319,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "source-fixed-loaded-with-explicit-gaps-native-ui-paused",
-    "priority": "4个分区补齐隔离动态查证，6处问题修复并加载c41c940d；193项通过、2项保留失败，创始人2个额外缺口与复合计算blocked明确保留。真人测试继续暂停。"
+    "status": "all-63-reviewed-with-7-failed-assertions-native-ui-paused",
+    "priority": "主程序63/63分区均已当前查证；1345个限定用例1338通过、7失败，新增自治配置加载风险明确保留。生产源码未改，真人测试暂停；法律、设计师及已封存业务不重放。"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -3025,5 +2964,167 @@
       "sha256": "25b727fa0ebaf0d27a7b0e79ef5dc510e5e8e0e0a40b17d5c15f1abd5e47f1c0",
       "files": 201
     }
+  },
+  "latestAllMainPartitionsAudit": {
+    "atUTC": "2026-10-30T06:11:51.301239+00:00",
+    "status": "all-63-reviewed-with-7-failed-assertions-native-ui-paused",
+    "baseCommit": "153c233a059db9f4be6ba31823789f4fbc3ceab1",
+    "version": "3.1.1",
+    "runtimeSourceCommit": "c41c940de2d602076aa64b7fac66f1bac261f7cd",
+    "partitionCount": 63,
+    "reviewedThisRound": 63,
+    "tests": {
+      "uniqueExecutedFiles": 139,
+      "executed": 1345,
+      "passed": 1338,
+      "failed": 7,
+      "duplicateExecutedCases": 0,
+      "conflictingResults": 0,
+      "countingRule": "Unique (file, fullName, same-name occurrence). This preserves distinct parameterized cases sharing a title and deduplicates repeated runs across groups. Unselected inventories and non-final attempts are not added."
+    },
+    "newTests": {
+      "files": 6,
+      "passedCases": 51
+    },
+    "productionSourceChanged": false,
+    "findings": [
+      {
+        "id": "AUTONOMY-UNCONFIRMED-CONFIG",
+        "severity": "P2",
+        "newlyConfirmed": true,
+        "status": "unfixed",
+        "failedAssertions": 2,
+        "partition": "settings-neural",
+        "title": "自治配置未确认仍可编辑，加载失败静默",
+        "detail": "组件以默认配置直接启用按钮；GET仍pending或返回403时没有锁定和明确错误。PUT发送的是单字段patch，未证明全量覆盖配置或越权。",
+        "anchors": [
+          "src/components/settings/autonomy.tsx:53",
+          "src/components/settings/autonomy.tsx:59",
+          "src/components/settings/autonomy.tsx:180"
+        ]
+      },
+      {
+        "id": "FOUNDERS-ARCHIVE-NO-ACTION",
+        "severity": "P2",
+        "newlyConfirmed": false,
+        "status": "unfixed-reproduced",
+        "failedAssertions": 1,
+        "partition": "docs-founders",
+        "title": "创始人档案入口未实现动作",
+        "detail": "3个Open Archive按钮点击后无DOM、网络、窗口或父级操作变化。",
+        "anchors": [
+          "src/components/FoundersSanctuary.tsx:90"
+        ]
+      },
+      {
+        "id": "FOUNDERS-CHINESE-FALLBACK",
+        "severity": "P3",
+        "newlyConfirmed": false,
+        "status": "unfixed-reproduced",
+        "failedAssertions": 1,
+        "partition": "docs-founders",
+        "title": "创始人档案按钮中文回退英文",
+        "detail": "实际中文目录下3个按钮仍显示Open Archive。",
+        "anchors": [
+          "src/components/FoundersSanctuary.tsx:91"
+        ]
+      },
+      {
+        "id": "EXTRA-SAVE-SUCCESS-CLAIM",
+        "severity": "P2",
+        "newlyConfirmed": false,
+        "status": "unfixed-reproduced",
+        "failedAssertions": 1,
+        "partition": "chat/shared-completion",
+        "title": "额外保存成功声明检查仍有缺口",
+        "detail": "现有断言要求保存及保存后证据不足时阻断，但完成检查仍未阻断；前轮已用旧owner复现。",
+        "anchors": [
+          "test/completion_guard.test.ts:820",
+          "server/work_product/completion_guard.ts:226"
+        ]
+      },
+      {
+        "id": "NATIVE-WRITE-FIXTURE-PREMISE",
+        "severity": "test-conflict",
+        "newlyConfirmed": false,
+        "status": "retained-failed-premise",
+        "failedAssertions": 1,
+        "partition": "chat/shared-completion",
+        "title": "原生语义写入旧测试前提未满足",
+        "detail": "时间前置语句未建立artifact动作契约，断言在证据验证之前失败；不能据此认定原生写入验收器故障。",
+        "anchors": [
+          "test/action_contract.test.ts:244"
+        ]
+      },
+      {
+        "id": "HISTORY-PROSE-ASSERTION-CONFLICT",
+        "severity": "test-conflict",
+        "newlyConfirmed": true,
+        "status": "retained-stale-assertion",
+        "failedAssertions": 1,
+        "partition": "chat",
+        "title": "历史正文旧断言与现行保真规则冲突",
+        "detail": "旧用例期望固定中文替换普通历史文本；当前owner及另外31项政策测试要求仅剥离协议标记并保留普通正文，未为变绿改写旧断言。",
+        "anchors": [
+          "test/conversation_routes.test.ts:139",
+          "shared/public_execution_language.ts:67",
+          "server/routes/conversations.ts:39"
+        ]
+      }
+    ],
+    "limits": [
+      "63项均有本轮源码、加载及相关隔离测试记录；覆盖深度不同。1345个用例来自139个文件的限定选择，不是全仓测试或所有功能路径覆盖。",
+      "真人坐标操作继续暂停，实际麦克风/摄像头/原生窗口、供应商与外部平台业务链路未验收；页面加载、模拟返回和子例通过不能算整分区通过。",
+      "法律与设计师业务仍排除；已验收3/15/16封存，2暂停、10保留及其他held状态不变。合成会议/消息组件测试没有重放已验收业务。",
+      "自治配置加载风险、创始人档案动作/中文标签、额外保存声明检查均未修复；两项前提或政策冲突的旧断言另行保留，不冒称产品已修好。",
+      "复合计算仅验证正文保留和缺失证据时blocked；没有有效算术核验证据，不能宣称计算完成。",
+      "本轮8次向127.0.0.1:11434的嵌入探测被隔离守卫阻断。个人及组织知识库只证明关键词回退/索引缺失如实报告，不证明向量服务可用。",
+      "组织审计前端100条且无分页控件；组织聊天没有停止按钮，历史加载失败静默回退等已知限制保持。",
+      "设计技能design-studio-pack启用但因既有运行身份漂移拒载，按排除范围保留；此前8个已恢复技能的43项声明不等于逐技能真实业务验收。code-sandbox仍缺E2B凭据。",
+      "全局i18n的97条既有发现与架构检查失败沿用前轮证据；本轮生产源码未改，未重新宣称这些全局检查通过，也未重建安装包。",
+      "5个原暂停/隔离调度任务保持，健康接口仍degraded。指定四表计数/默认偏好比对不代表后台、整个数据库或供应商完全没有活动。",
+      "行号和SHA用于定位当前源码，341个锚点不是341行动态执行覆盖。测试中的工具、消息和模型响应有明确隔离边界。",
+      "本轮只新增6份回归测试和检查点，不修改生产源码、默认模型或真实业务数据，不重启主程序，不推送远程。"
+    ],
+    "typecheck": "passed",
+    "frontendModules": {
+      "moduleCount": 73,
+      "loaded": 73,
+      "failed": 0
+    },
+    "sourceAnchorsVerified": 341,
+    "databasePreservation": {
+      "beforeAtUTC": "2026-10-30T05:48:49.028130+00:00",
+      "afterAtUTC": "2026-10-30T06:04:57.611188+00:00",
+      "countsDelta": {
+        "conversations": 0,
+        "interactions": 0,
+        "generated_archive": 0,
+        "model_routing_receipts": 0
+      },
+      "defaultPreferenceHashesUnchanged": true,
+      "quickCheck": "ok",
+      "captureScope": "The first database snapshot was captured after some isolated test processes had begun. Its four counts and default hashes also match the previous sealed round snapshot; this is not whole-database zero-write proof.",
+      "matchesPriorSealedRoundSnapshot": true
+    },
+    "matrix": "D:/Lumi-Audit-Temp/main-all-partitions-20261030/63-partition-matrix.json",
+    "report": "D:/Lumi-Audit-Temp/main-all-partitions-20261030/final-audit-report.json",
+    "readableReport": "D:/Lumi-Audit-Temp/main-all-partitions-20261030/全部63分区检查表.txt",
+    "evidence": {
+      "directory": "D:/Lumi-Audit-Temp/main-all-partitions-20261030",
+      "manifest": "D:/Lumi-Audit-Temp/main-all-partitions-20261030/evidence-seal.json",
+      "sha256": "86b45f1a63fc83d26aeb15f5f06ac31a9f6712ff7bce1517bb21a7013d157509",
+      "files": 423,
+      "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
+      "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
+    },
+    "independentReview": {
+      "path": "D:/Lumi-Audit-Temp/main-all-partitions-20261030/independent-review.json",
+      "sha256": "33d37ab6025f4fc986a6d932c8c16457c33f81af0b839eb5726b5fc6f2130ca2"
+    },
+    "wholeApplicationAccepted": false,
+    "nativeUITested": false,
+    "installerReleased": false,
+    "remotePushPerformed": false
   }
 }
