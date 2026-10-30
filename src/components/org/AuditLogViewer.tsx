@@ -66,7 +66,10 @@ function AuditLog() {
   };
 
   const parseDetails = (details: string): Record<string, any> => {
-    try { return JSON.parse(details); } catch { return {}; }
+    try {
+      const parsed = JSON.parse(details);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch { return {}; }
   };
 
   const actionColor = (action: string): string => {

@@ -1027,7 +1027,9 @@ function outgoingMessageSend(text: string): NormalizedActionIntent | null {
   // The outer affirmative predicate owns delivery. An embedded send inside
   // a request to write a draft is content, while sending that draft is work.
   // i18n-allow: Shared Chinese imperative modifiers and foreground preparation.
-  const prefix = String.raw`^(?:(?:用|使用|通过)\s*[^，,。！？!?；;\n]{1,80}?\s*|[^\s，,。！？!?；;\n]{1,32}?(?=帮我|替我|请你))?(?:(?:我|帮我|替我|麻烦你?|请你?|你|现在|先|再|然后|接着|随后|并且|准备)\s*)*`;
+  const modifiers = String.raw`(?:(?:我|帮我|替我|麻烦你?|请你?|你|现在|先|再|然后|接着|随后|并且|另外|准备)\s*)*`;
+  // i18n-allow: Chinese channel/instrument grammar and imperative-role boundaries; not user-visible copy.
+  const prefix = String.raw`^${modifiers}(?:(?:用|使用|通过)\s*(?<instrument>[^，,。！？!?；;\n]{1,80}?)\s*|[^\s，,。！？!?；;\n]{1,32}?(?=帮我|替我|请你))?${modifiers}`;
   const foreground = String.raw`(?:(?:打开|启动|切换到)\s*[^，,。！？!?；;\n]{1,80}?\s*(?:然后|并|再)?\s*)?`;
   const patterns: Array<{ pattern: RegExp; payloadFirst?: boolean; recipientOnly?: boolean; allowPronoun?: boolean }> = [
     // i18n-allow: Disposal/object-before-send and send-object-to-recipient roles.
@@ -1041,14 +1043,26 @@ function outgoingMessageSend(text: string): NormalizedActionIntent | null {
     { pattern: /^(?:(?:please|now|then|next|also)\s+|(?:can|could|would|will)\s+you\s+)*(?:send\s+(?:a\s+message\s+)?(?:to\s+)?|message\s+|reply\s+to\s+)(?!(?:has|have|had|is|was|were|contains?|includes?|with|body|content|attachment|file|text)\b)([\p{L}\p{N}_.'-]{1,40})\s*:?\s*([\s\S]{1,1000})/iu },
     { pattern: new RegExp(prefix + String.raw`(?:发送|回复|发)给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})[。！？!?\s]*$`, 'u'), recipientOnly: true, allowPronoun: true },
   ];
-  for (const { text: clauseText, probe } of affirmativeActionInstructionClauses(text)) {
-    // Quoted recipients are masked; only an outer delivery predicate may restore them.
+  for (const { text: clauseText, probe: rawProbe } of affirmativeActionInstructionClauses(text)) {
+    const probe = withoutLocationLiterals(rawProbe);
+    // Quoted recipients and location operands are masked; only an outer delivery predicate may restore them.
     if (!patterns.some(({ pattern }) => pattern.test(probe))
       && !new RegExp(prefix + foreground + String.raw`(?:给\s*(?:[^\s，。！？!?：:；;、「」『』“”"']{1,32}\s*)?(?:发送消息|发消息|发送|回复|告诉|发|说)|(?:发送|回复|发)给)`, 'u').test(probe)) continue;
     for (const { pattern, payloadFirst, recipientOnly, allowPronoun } of patterns) {
       const match = clauseText.match(pattern);
-      const target = trimSlot(match?.[payloadFirst ? 2 : 1] || '');
-      const payload = recipientOnly ? '' : trimSlot(match?.[payloadFirst ? 1 : 2] || '');
+      // An instrument ends before the foreground predicate. A method request
+      // such as explain/how-to before the delivery verb is not a channel name.
+      // Inspect only the prefix role, never words in the actual message payload.
+      const roleOffset = match?.groups && 'instrument' in match.groups ? 1 : 0;
+      const target = trimSlot(match?.[(payloadFirst ? 2 : 1) + roleOffset] || '');
+      const payload = recipientOnly ? '' : trimSlot(match?.[(payloadFirst ? 1 : 2) + roleOffset] || '');
+      // i18n-allow: Method-question operators and foreground explanation predicates.
+      if (match?.groups?.instrument && /(?:怎么|如何|怎样|(?:演示|了解|说明|解释|告诉我|教我)(?:一下|具体)?)\s*$/u.test(match.groups.instrument)) continue;
+      // A question explicitly introduced as message content belongs to the
+      // payload. A trailing question without that boundary is not a send grant.
+      // i18n-allow: Explicit message/content boundary versus outer interrogative punctuation.
+      const explicitMessageContent = !payloadFirst && /^(?:消息\s*[:：]?|[:：]|[「『“"'])/u.test(payload);
+      if (match?.groups?.instrument && /[？?]\s*$/u.test(probe) && !explicitMessageContent) continue;
       if (!target || !recipientOnly && !payload || !allowPronoun && /^(?:我|我们|你|你们)$/u.test(target)) continue; // i18n-allow: Conversational pronouns alone are not an addressed message.
       return {
         kind: 'messaging_send', operation: 'mutate', subject: 'user', target, payload,

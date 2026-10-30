@@ -106,10 +106,10 @@ export function exportAuditCSV(orgId: string, filters: AuditFilter = {}): string
   const entries = queryAuditLog(orgId, filters, 10000, 0);
 
   const header = ['timestamp', 'userId', 'action', 'resourceType', 'resourceId', 'details'].join(',');
-  const rows = entries.map(e => {
-    const details = (e.details || '').replace(/"/g, '""');
-    return [e.timestamp, e.userId, e.action, e.resourceType, e.resourceId, `"${details}"`].join(',');
-  });
+  const rows = entries.map(e =>
+    [e.timestamp, e.userId, e.action, e.resourceType, e.resourceId, e.details]
+      .map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')
+  );
 
   return [header, ...rows].join('\n');
 }

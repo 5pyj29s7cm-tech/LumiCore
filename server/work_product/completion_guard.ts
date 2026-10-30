@@ -220,7 +220,10 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
     blocked: true, reason: 'Current-turn canonical execution outcome is unknown.' };
   }
 
-  const currentAppMutationTask = requiresCurrentAppUiMutation(task);
+  // The accepted contract owns required effects. Historical saves and excluded
+  // edits in an artifact handoff do not create a separate current-app mutation.
+  // Composite contracts still verify every child through core evidence above.
+  const currentAppMutationTask = actionContract.kind === 'desktop_operation' && requiresCurrentAppUiMutation(task);
   if (currentAppMutationTask && !hasCurrentAppUiMutationEvidence(toolCalls, task)) {
     const reason = 'Missing verified in-app UI mutation evidence.';
     return { text: buildGuardedResponse(task, reason, successful, failed), blocked: true, reason };

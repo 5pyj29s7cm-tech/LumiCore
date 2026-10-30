@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-30T04:42:37.941303+00:00",
+  "updatedAt": "2026-10-30T05:34:30.899726+00:00",
   "localDate": "2026-10-30",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序修复已加载，技能安装恢复已验证",
-    "status": "source-fixed-loaded-installed-skills-recovered-native-ui-paused",
-    "instruction": "原5处问题、同源遗漏及技能私有依赖重签缺陷已修；1095/1095隔离测试通过，主后端已加载27a268d6，8个已启用技能恢复并验证43工具声明。真人测试仍暂停；历史遗留及外部凭据前提保持明确。"
+    "title": "主程序剩余分区动态补查与历史失败核验",
+    "status": "software-verified-with-retained-gaps-runtime-loading-pending",
+    "instruction": "补查组织看板、组织聊天、组织审计和创始人空间；6处产品问题已修并隔离复测，已确认未实现/历史限制保留。待加载新后端；真人测试仍暂停。"
   },
   "acceptedWholeItems": [
     3,
@@ -36,14 +36,17 @@
     "Existing file full body returned through normal Socket and persisted exactly once with terminal task/turn"
   ],
   "knownUnresolved": [
-    "真人坐标测试继续按用户要求暂停，硬件、供应商及真实业务端到端未验收。",
-    "前轮7项历史失败和复合计算语义核验仍保留，本轮未重放已验收/暂停业务。",
-    "全局i18n检查仍有97条既有发现，架构检查保留与基线相同的失败。",
-    "旧技能多数已禁用；code-sandbox缺外部E2B凭据，未编造凭据或启用禁用项；设计师版不检查。",
-    "原5个隔离/暂停调度任务保持，健康接口因此仍显示degraded。",
-    "首次45秒就绪轮询未成功，117秒快照确认HTTP已就绪；未把首次超时掩盖成即时启动，也未计作永久失败。",
-    "启动日志保留一次原生会话凭据过期提示，随后正常bootstrap、Socket连接及Win32设备登记成功；自动重连不等于真人界面验收。",
-    "应用启动自动发生认证、设备登记、tokenUsage清理和既有WeChat轮询；指定四表计数不变不等于整个应用或数据库零写入。"
+    "真人坐标操作继续按用户要求暂停；隔离组件/API测试与加载检查不等于真人、硬件、供应商或整项业务端到端验收。",
+    "法律和设计师版排除；已验收3/15/16封存，2暂停和其他held状态保持，不重放已验收业务或付费生成。",
+    "原历史7项为4修复、1原生语义写入测试前提仍失败、2法律排除未运行；原生失败发生在动作契约构建，尚不能推断原生写入验收器失败。",
+    "额外保存成功声明的既有完成检查缺口另行复现，仍未修复，不计入原历史7项。",
+    "复合计算的正文保留及负例检查通过，但缺少有效算术核验证据，任务仍blocked，不能宣称计算完成。",
+    "创始人空间3个Open Archive按钮无动作，中文目录回退英文；2个独立失败探针保留。14项组件/隔离接口通过不代表档案功能实现。",
+    "审计前端仅取100条且无分页控件；后端limit/offset已隔离验证。组织聊天没有停止按钮，历史加载失败仍静默回退。",
+    "全局i18n仍97条既有发现，架构诊断与固定基线一致；两项全局检查仍退出1，无新增发现不等于检查通过。",
+    "旧技能多数保持禁用；code-sandbox缺E2B凭据，未编造凭据。原5个暂停/隔离调度任务保持，健康状态可显示degraded。",
+    "启动会自动认证、登记设备、清理tokenUsage及执行既有轮询；指定四表计数与偏好对照不能证明整个数据库零写入。",
+    "只作本地检查点提交，不推送、不发布安装包；默认模型保持。"
   ],
   "validation": {
     "tsc": "passed in both repositories",
@@ -54,10 +57,10 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "D:/Lumi-Audit-Temp/main-partition-repair-20261029",
-    "manifest": "D:/Lumi-Audit-Temp/main-partition-repair-20261029/evidence-seal.json",
-    "sha256": "5af61698a2ccfb789f481ad65dc655bef99f8bf005b96bcf73a0dea09dab9db7",
-    "files": 181,
+    "directory": "D:/Lumi-Audit-Temp/main-partition-verification-20261030",
+    "manifest": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/software-seal.json",
+    "sha256": "25b727fa0ebaf0d27a7b0e79ef5dc510e5e8e0e0a40b17d5c15f1abd5e47f1c0",
+    "files": 201,
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -133,21 +136,69 @@
     "jsonParsed": true,
     "gitDiffCheck": "passed",
     "sourceChanged": true,
-    "productionFiles": 4,
-    "tests": "1095/1095 across82files;45unselected",
+    "productionFiles": 6,
+    "tests": {
+      "uniqueExecutedFiles": 14,
+      "executed": 195,
+      "passed": 193,
+      "failed": 2,
+      "duplicateExecutedCases": 0,
+      "groups": [
+        {
+          "group": "surfaces",
+          "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/integrated/surfaces/vitest.json",
+          "sha256": "c41d3596bf688431f775c18c5d4b3810acf266ab96f5300f134b4ed415b3a838",
+          "executed": 111,
+          "passed": 111,
+          "failed": 0
+        },
+        {
+          "group": "cognition",
+          "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/integrated/cognition/vitest.json",
+          "sha256": "e2ac6df957bc5d5b7898a9cb818eda0ab58ad5b2d735878cd708b390124fff6b",
+          "executed": 82,
+          "passed": 82,
+          "failed": 0
+        },
+        {
+          "group": "retained-failures",
+          "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/integrated/retained-failures/vitest.json",
+          "sha256": "b2c3e4411338933897acd765729903f30bbba340e714030b59ba5f8256b44252",
+          "executed": 2,
+          "passed": 0,
+          "failed": 2
+        }
+      ],
+      "retainedFailures": [
+        {
+          "file": "D:/lumiOS/test/action_contract.test.ts",
+          "name": "Lumi action contract accepts native semantic text writes with a later same-path readback",
+          "status": "failed",
+          "group": "retained-failures"
+        },
+        {
+          "file": "D:/lumiOS/test/completion_guard.test.ts",
+          "name": "completion guard current-app UI evidence blocks an extra save-success claim until save and post-save evidence exist",
+          "status": "failed",
+          "group": "retained-failures"
+        }
+      ],
+      "founderSeparateProbes": {
+        "executed": 2,
+        "failed": 2,
+        "includedIn195": false
+      },
+      "countingRule": "Unique executed file + fullName pairs only. Child repetitions, independent pure-function observations, builds, unselected inventory and founder defect probes are not added. These assertions do not accept whole partitions."
+    },
     "typecheck": "passed",
     "desktopUIBuild": "passed",
     "nativeUITesting": "paused-by-user",
-    "installedSkillLiveRecovery": "8skills/43tool declarations;0business tool calls",
+    "runtimeLoading": "pending",
+    "acceptedAndHeldStateUnchanged": true,
+    "defaultModelUnchanged": true,
     "wholeApplicationAccepted": false,
     "installerReleased": false,
-    "remotePushPerformed": false,
-    "runtimeLoadedSourceCommit": "27a268d6900ad27e55e5a82cfe04ad48df9f299d",
-    "backendPid": 48104,
-    "nativeClientAutomaticallyReconnected": true,
-    "defaultModelUnchanged": true,
-    "acceptedAndHeldStateUnchanged": true,
-    "checkpointOnly": true
+    "remotePushPerformed": false
   },
   "orderedPassSummary": {
     "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/acceptance-summary.json",
@@ -300,8 +351,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "source-fixed-loaded-installed-skills-recovered-native-ui-paused",
-    "priority": "原5处问题、同源遗漏及技能私有依赖重签缺陷已修；1095/1095隔离测试通过，主后端已加载27a268d6，8个已启用技能恢复并验证43工具声明。真人测试仍暂停；历史遗留及外部凭据前提保持明确。"
+    "status": "software-verified-with-retained-gaps-runtime-loading-pending",
+    "priority": "补查组织看板、组织聊天、组织审计和创始人空间；6处产品问题已修并隔离复测，已确认未实现/历史限制保留。待加载新后端；真人测试仍暂停。"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -2650,5 +2701,259 @@
       "wholeApplicationAccepted": false,
       "installerReleased": false
     }
+  },
+  "latestMainPartitionVerification": {
+    "atUTC": "2026-10-30T05:34:30.899726+00:00",
+    "status": "software-verified-with-retained-gaps-runtime-loading-pending",
+    "version": "3.1.1",
+    "baseCommit": "254bfb53676c4a150f3a163244d8cdc3d4a289af",
+    "partitions": [
+      {
+        "id": "org-dashboard",
+        "status": "scoped-dynamic-checks-passed",
+        "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/org-dashboard-audit/result.json"
+      },
+      {
+        "id": "org-audit",
+        "status": "scoped-dynamic-checks-passed-with-ui-pagination-limit",
+        "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/org-dashboard-audit/result.json"
+      },
+      {
+        "id": "org-chat",
+        "status": "scoped-dynamic-checks-passed-with-retained-gaps",
+        "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/org-chat/result.json"
+      },
+      {
+        "id": "founders",
+        "status": "partial-archive-and-localization-probes-failed",
+        "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/founders/result.json"
+      }
+    ],
+    "fixedIssues": [
+      {
+        "id": "ORG-DASHBOARD-ROLE-SHORTCUTS",
+        "problem": "成员/访客可看到无权使用的成员与审计快捷入口",
+        "change": "复用组织工作区权限判定隐藏不适用入口",
+        "anchor": "src/components/org/BranchDashboard.tsx:119",
+        "scope": "前端入口一致性；后端权限另有隔离路由测试"
+      },
+      {
+        "id": "ORG-AUDIT-NULL-DETAILS",
+        "problem": "审计详情为JSON null或原始值时可能崩溃",
+        "change": "仅接受非null对象作为详情，其余归一为空对象",
+        "anchor": "src/components/org/AuditLogViewer.tsx:68"
+      },
+      {
+        "id": "ORG-AUDIT-CSV-FIELDS",
+        "problem": "导出CSV含逗号、引号或换行时字段错位",
+        "change": "所有字段统一加引号并转义内部引号，保留原始文本",
+        "anchor": "server/org/audit.ts:109"
+      },
+      {
+        "id": "ORG-CHAT-ACTIVE-REQUEST",
+        "problem": "首段流式输出或等待提示后再次发送覆盖未结束请求",
+        "change": "使用独立活动请求锁，直到终态或上下文重置释放",
+        "anchor": "src/components/org/CentralLumiChat.tsx:510"
+      },
+      {
+        "id": "MESSAGING-COMPOUND-OBLIGATION",
+        "problem": "另外通过微信/再用微信的附加发送要求丢失",
+        "change": "保留发送子任务，同时排除说明、外层疑问和路径文字；保留真实消息内疑问句",
+        "anchor": "server/cognition/normalized_action_intent.ts:1030"
+      },
+      {
+        "id": "EXISTING-ARTIFACT-RETRIEVAL-COMPLETION",
+        "problem": "已验证文件取回被文案中的保存/发在这里误判为桌面修改而重复调用",
+        "change": "额外桌面修改检查限定到已接受的desktop_operation契约，复合子任务证据仍逐项检查",
+        "anchor": "server/work_product/completion_guard.ts:226",
+        "scope": "合成模型与文件工具夹具，一次调用完成；未重放真实已验收媒体"
+      }
+    ],
+    "tests": {
+      "uniqueExecutedFiles": 14,
+      "executed": 195,
+      "passed": 193,
+      "failed": 2,
+      "duplicateExecutedCases": 0,
+      "groups": [
+        {
+          "group": "surfaces",
+          "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/integrated/surfaces/vitest.json",
+          "sha256": "c41d3596bf688431f775c18c5d4b3810acf266ab96f5300f134b4ed415b3a838",
+          "executed": 111,
+          "passed": 111,
+          "failed": 0
+        },
+        {
+          "group": "cognition",
+          "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/integrated/cognition/vitest.json",
+          "sha256": "e2ac6df957bc5d5b7898a9cb818eda0ab58ad5b2d735878cd708b390124fff6b",
+          "executed": 82,
+          "passed": 82,
+          "failed": 0
+        },
+        {
+          "group": "retained-failures",
+          "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/integrated/retained-failures/vitest.json",
+          "sha256": "b2c3e4411338933897acd765729903f30bbba340e714030b59ba5f8256b44252",
+          "executed": 2,
+          "passed": 0,
+          "failed": 2
+        }
+      ],
+      "retainedFailures": [
+        {
+          "file": "D:/lumiOS/test/action_contract.test.ts",
+          "name": "Lumi action contract accepts native semantic text writes with a later same-path readback",
+          "status": "failed",
+          "group": "retained-failures"
+        },
+        {
+          "file": "D:/lumiOS/test/completion_guard.test.ts",
+          "name": "completion guard current-app UI evidence blocks an extra save-success claim until save and post-save evidence exist",
+          "status": "failed",
+          "group": "retained-failures"
+        }
+      ],
+      "founderSeparateProbes": {
+        "executed": 2,
+        "failed": 2,
+        "includedIn195": false
+      },
+      "countingRule": "Unique executed file + fullName pairs only. Child repetitions, independent pure-function observations, builds, unselected inventory and founder defect probes are not added. These assertions do not accept whole partitions."
+    },
+    "historicalSeven": {
+      "fixed": 4,
+      "retainedFixtureFailure": 1,
+      "legalExcludedNotRun": 2,
+      "disposition": {
+        "fixedIsolated": 4,
+        "fixturePremiseFailedUnchanged": 1,
+        "legalExcludedNotRerun": 2
+      },
+      "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/history-composite/result.json"
+    },
+    "limits": [
+      "真人坐标操作继续按用户要求暂停；隔离组件/API测试与加载检查不等于真人、硬件、供应商或整项业务端到端验收。",
+      "法律和设计师版排除；已验收3/15/16封存，2暂停和其他held状态保持，不重放已验收业务或付费生成。",
+      "原历史7项为4修复、1原生语义写入测试前提仍失败、2法律排除未运行；原生失败发生在动作契约构建，尚不能推断原生写入验收器失败。",
+      "额外保存成功声明的既有完成检查缺口另行复现，仍未修复，不计入原历史7项。",
+      "复合计算的正文保留及负例检查通过，但缺少有效算术核验证据，任务仍blocked，不能宣称计算完成。",
+      "创始人空间3个Open Archive按钮无动作，中文目录回退英文；2个独立失败探针保留。14项组件/隔离接口通过不代表档案功能实现。",
+      "审计前端仅取100条且无分页控件；后端limit/offset已隔离验证。组织聊天没有停止按钮，历史加载失败仍静默回退。",
+      "全局i18n仍97条既有发现，架构诊断与固定基线一致；两项全局检查仍退出1，无新增发现不等于检查通过。",
+      "旧技能多数保持禁用；code-sandbox缺E2B凭据，未编造凭据。原5个暂停/隔离调度任务保持，健康状态可显示degraded。",
+      "启动会自动认证、登记设备、清理tokenUsage及执行既有轮询；指定四表计数与偏好对照不能证明整个数据库零写入。",
+      "只作本地检查点提交，不推送、不发布安装包；默认模型保持。"
+    ],
+    "validation": {
+      "typecheck": {
+        "command": [
+          "node",
+          "node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ],
+        "startedUTC": "2026-10-30T05:28:46.288694+00:00",
+        "finishedUTC": "2026-10-30T05:29:13.931664+00:00",
+        "exitCode": 0,
+        "sourceBefore": {
+          "server/cognition/normalized_action_intent.ts": "81b438b6083ddaea3586817b31fee06765493301afe04d301b62cf9b875800f6",
+          "server/org/audit.ts": "1da0b34c442a780215460884ede3d9842fa3d0a4cd730de741b46c525a1cda66",
+          "server/work_product/completion_guard.ts": "320bac56aa2a617aceefa64d93e60c5667f6d3905305fa70f1b567c24d96b4fc",
+          "src/components/org/AuditLogViewer.tsx": "0f4b80d7635c41e4930bf771901ee6e1c825d694fdb11e8d07d19c48acec007a",
+          "src/components/org/BranchDashboard.tsx": "42124a8298519be74680d804ecd4eeee2eaf7e56f8d85cee03248845721dd3cd",
+          "src/components/org/CentralLumiChat.tsx": "85d6cdc1149a8e51da4d904cf82644ce17a3594e7a1a052e6b2ae0020d692de4",
+          "test/founders_surface_verification.test.tsx": "c051201ee1d9a458314ade133530b445974aee608650c08d8eedb99f55ce4232",
+          "test/founders_vision_routes.test.ts": "20386e95cf847e05d4d3c8a3f922ca522ad7a9c752b303df6683ef1e160678fb",
+          "test/historical_composite_verification.test.ts": "39bdac44dcb4558df7986df0e23764e5a859a9cc736b7c5a21e6b0fbe672e31e",
+          "test/org_chat_dynamic.test.tsx": "311c9da7fd56102f6db01b77883ec6e3467db3b6fab3de846feba7c19b0eb1e0",
+          "test/org_dashboard_audit_dynamic.test.tsx": "aca7ec1d365cebd460dd28a2bbc3dac5e3d18ffabe7161cd140dde860a2cee3a"
+        },
+        "sourceAfter": {
+          "server/cognition/normalized_action_intent.ts": "81b438b6083ddaea3586817b31fee06765493301afe04d301b62cf9b875800f6",
+          "server/org/audit.ts": "1da0b34c442a780215460884ede3d9842fa3d0a4cd730de741b46c525a1cda66",
+          "server/work_product/completion_guard.ts": "320bac56aa2a617aceefa64d93e60c5667f6d3905305fa70f1b567c24d96b4fc",
+          "src/components/org/AuditLogViewer.tsx": "0f4b80d7635c41e4930bf771901ee6e1c825d694fdb11e8d07d19c48acec007a",
+          "src/components/org/BranchDashboard.tsx": "42124a8298519be74680d804ecd4eeee2eaf7e56f8d85cee03248845721dd3cd",
+          "src/components/org/CentralLumiChat.tsx": "85d6cdc1149a8e51da4d904cf82644ce17a3594e7a1a052e6b2ae0020d692de4",
+          "test/founders_surface_verification.test.tsx": "c051201ee1d9a458314ade133530b445974aee608650c08d8eedb99f55ce4232",
+          "test/founders_vision_routes.test.ts": "20386e95cf847e05d4d3c8a3f922ca522ad7a9c752b303df6683ef1e160678fb",
+          "test/historical_composite_verification.test.ts": "39bdac44dcb4558df7986df0e23764e5a859a9cc736b7c5a21e6b0fbe672e31e",
+          "test/org_chat_dynamic.test.tsx": "311c9da7fd56102f6db01b77883ec6e3467db3b6fab3de846feba7c19b0eb1e0",
+          "test/org_dashboard_audit_dynamic.test.tsx": "aca7ec1d365cebd460dd28a2bbc3dac5e3d18ffabe7161cd140dde860a2cee3a"
+        },
+        "sourceUnchanged": true
+      },
+      "desktopBuild": {
+        "command": [
+          "cmd",
+          "/d",
+          "/c",
+          "npm",
+          "run",
+          "build:desktop-ui"
+        ],
+        "startedUTC": "2026-10-30T05:20:26.778050+00:00",
+        "finishedUTC": "2026-10-30T05:20:33.656277+00:00",
+        "exitCode": 0,
+        "frontendSourceBefore": {
+          "src/components/org/AuditLogViewer.tsx": "0f4b80d7635c41e4930bf771901ee6e1c825d694fdb11e8d07d19c48acec007a",
+          "src/components/org/BranchDashboard.tsx": "42124a8298519be74680d804ecd4eeee2eaf7e56f8d85cee03248845721dd3cd",
+          "src/components/org/CentralLumiChat.tsx": "85d6cdc1149a8e51da4d904cf82644ce17a3594e7a1a052e6b2ae0020d692de4",
+          "src/components/FoundersSanctuary.tsx": "99a18d58692f8463f8ae84ad846379b77c73a2b36c24e186109296586f7d66a8"
+        },
+        "frontendSourceAfter": {
+          "src/components/org/AuditLogViewer.tsx": "0f4b80d7635c41e4930bf771901ee6e1c825d694fdb11e8d07d19c48acec007a",
+          "src/components/org/BranchDashboard.tsx": "42124a8298519be74680d804ecd4eeee2eaf7e56f8d85cee03248845721dd3cd",
+          "src/components/org/CentralLumiChat.tsx": "85d6cdc1149a8e51da4d904cf82644ce17a3594e7a1a052e6b2ae0020d692de4",
+          "src/components/FoundersSanctuary.tsx": "99a18d58692f8463f8ae84ad846379b77c73a2b36c24e186109296586f7d66a8"
+        },
+        "sourceUnchanged": true
+      },
+      "staticChecks": {
+        "records": [
+          {
+            "check": "i18n",
+            "mode": "base",
+            "exitCode": 1
+          },
+          {
+            "check": "i18n",
+            "mode": "current",
+            "exitCode": 1
+          },
+          {
+            "check": "architecture",
+            "mode": "base",
+            "exitCode": 1
+          },
+          {
+            "check": "architecture",
+            "mode": "current",
+            "exitCode": 1
+          }
+        ],
+        "i18n": {
+          "baseUnique": 97,
+          "currentUnique": 97,
+          "added": [],
+          "resolved": []
+        },
+        "architectureSameDiagnostics": true,
+        "method": "Read-only fs projection of changed production files to the fixed round baseline254bfb53 for baseline; repo files unchanged and no baseline files updated."
+      }
+    },
+    "report": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/software-verification-report.json",
+    "evidence": {
+      "directory": "D:/Lumi-Audit-Temp/main-partition-verification-20261030",
+      "manifest": "D:/Lumi-Audit-Temp/main-partition-verification-20261030/software-seal.json",
+      "sha256": "25b727fa0ebaf0d27a7b0e79ef5dc510e5e8e0e0a40b17d5c15f1abd5e47f1c0",
+      "files": 201,
+      "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
+      "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
+    },
+    "wholeApplicationAccepted": false,
+    "installerReleased": false,
+    "remotePushPerformed": false
   }
 }

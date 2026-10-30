@@ -19,6 +19,7 @@ import { useT } from '../../lib/useT';
 import { useApp } from '../../contexts/AppContext';
 import { formatUiMessage } from '../../i18n/uiMessages';
 import { getBranchDashboardCopy } from '../../i18n/locales/branchDashboard';
+import { canAccessOrganizationWorkspaceView } from '../../../shared/org_workspace';
 
 interface DashboardStats {
   memberCount: number | null;
@@ -115,8 +116,8 @@ function Dashboard() {
         <section className="grid gap-3 md:grid-cols-2">
           <QuickAction icon={<BookOpen size={18} />} label={copy.openKnowledge} desc={copy.openKnowledgeDescription} onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'kb' } }))} />
           <QuickAction icon={<Activity size={18} />} label={copy.organizationLumiCore} desc={copy.organizationLumiCoreDescription} onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'chat' } }))} />
-          <QuickAction icon={<ShieldCheck size={18} />} label={copy.membersAndAccess} desc={copy.membersAndAccessDescription} onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'members' } }))} />
-          <QuickAction icon={<Clock size={18} />} label={copy.auditLog} desc={copy.auditLogDescription} onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'audit' } }))} />
+          {canAccessOrganizationWorkspaceView(orgConnection?.orgRole || 'member', 'members') && <QuickAction icon={<ShieldCheck size={18} />} label={copy.membersAndAccess} desc={copy.membersAndAccessDescription} onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'members' } }))} />}
+          {canAccessOrganizationWorkspaceView(orgConnection?.orgRole || 'member', 'audit') && <QuickAction icon={<Clock size={18} />} label={copy.auditLog} desc={copy.auditLogDescription} onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'audit' } }))} />}
         </section>
 
         {stats.lastSync && <div className="flex items-center gap-2 text-xs text-white/45"><Clock size={13} /><span>{formatUiMessage('branch-dashboard.last-refreshed-value0.0140c57047', { value0: { en: new Date(stats.lastSync).toLocaleString(), zh: new Date(stats.lastSync).toLocaleString('zh-CN') } })}</span></div>}

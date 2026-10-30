@@ -108,6 +108,7 @@ function useCentralChatAttachmentsAndHistory() {
   const chatViewWorkRef = useRef(new ChatViewWorkRegistry());
   const uploadWorkRef = useRef<ReturnType<ChatViewWorkRegistry['begin']> | null>(null);
   const [loading, setLoading] = useState(false);
+  const [requestActive, setRequestActive] = useState(false);
   const [requestNotice, setRequestNotice] = useState('');
   const [modelPreference, setModelPreference] = useState<LumiModelPreference | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -147,6 +148,7 @@ function useCentralChatAttachmentsAndHistory() {
       timeoutRef.current = null;
     }
     activeRequestIdRef.current = null;
+    setRequestActive(false);
     streamingMessageIdRef.current = null;
     streamingRawTextRef.current = '';
     setLoading(false);
@@ -337,7 +339,7 @@ function useCentralChatAttachmentsAndHistory() {
     socket, activeRequestIdRef, setMessages, streamingMessageIdRef, setLoading, setRequestNotice,
     streamingRawTextRef, locale, clearActiveRequest, attachmentConversationIdRef,
     bindAttachmentContextToConversation, loadConversationMessages, setDragActive,
-    uploadChatAttachments, input, pendingAttachments, conversationAttachmentsRef, loading, uploadWorkRef,
+    uploadChatAttachments, input, pendingAttachments, conversationAttachmentsRef, loading, requestActive, setRequestActive, uploadWorkRef,
     orgConnection, messages, timeoutRef, setInput, pendingAttachmentsRef, setPendingAttachments,
     rememberConversationAttachments, previewFile, isZh, setPreviewFile, dragActive, t, modelPreferenceValue,
     modelPreferenceLabel, openModelSettings, endRef, fileInputRef, requestNotice, conversationAttachments,
@@ -346,7 +348,7 @@ function useCentralChatAttachmentsAndHistory() {
 }
 
 function useCentralChatEventsAndView(previousBindings: ReturnType<typeof useCentralChatAttachmentsAndHistory>) {
-  const { socket, activeRequestIdRef, setMessages, streamingMessageIdRef, setLoading, setRequestNotice, streamingRawTextRef, locale, clearActiveRequest, attachmentConversationIdRef, bindAttachmentContextToConversation, loadConversationMessages, setDragActive, uploadChatAttachments, input, pendingAttachments, conversationAttachmentsRef, loading, uploadWorkRef, orgConnection, messages, timeoutRef, setInput, pendingAttachmentsRef, setPendingAttachments, rememberConversationAttachments, previewFile, isZh, setPreviewFile, dragActive, t, modelPreferenceValue, modelPreferenceLabel, openModelSettings, endRef, fileInputRef, requestNotice, conversationAttachments, clearConversationAttachments, removePendingAttachment, uploading } = previousBindings;
+  const { socket, activeRequestIdRef, setMessages, streamingMessageIdRef, setLoading, setRequestNotice, streamingRawTextRef, locale, clearActiveRequest, attachmentConversationIdRef, bindAttachmentContextToConversation, loadConversationMessages, setDragActive, uploadChatAttachments, input, pendingAttachments, conversationAttachmentsRef, loading, requestActive, setRequestActive, uploadWorkRef, orgConnection, messages, timeoutRef, setInput, pendingAttachmentsRef, setPendingAttachments, rememberConversationAttachments, previewFile, isZh, setPreviewFile, dragActive, t, modelPreferenceValue, modelPreferenceLabel, openModelSettings, endRef, fileInputRef, requestNotice, conversationAttachments, clearConversationAttachments, removePendingAttachment, uploading } = previousBindings;
 
 
   useEffect(() => {
@@ -503,7 +505,9 @@ function useCentralChatEventsAndView(previousBindings: ReturnType<typeof useCent
       conversationAttachmentsRef.current.map(serializeChatAttachment),
       directAttachments,
     ).attachments;
-    if ((!text && directAttachments.length === 0) || loading || uploadWorkRef.current) return;
+    // Streaming and the slow-response notice end the spinner, not the request.
+    // The ref also rejects duplicate submissions before React can rerender.
+    if ((!text && directAttachments.length === 0) || activeRequestIdRef.current || loading || uploadWorkRef.current) return;
     setRequestNotice('');
     if (!socket) {
       setMessages(prev => [...prev, {
@@ -546,6 +550,7 @@ function useCentralChatEventsAndView(previousBindings: ReturnType<typeof useCent
     };
 
     activeRequestIdRef.current = requestId;
+    setRequestActive(true);
     streamingMessageIdRef.current = null;
     streamingRawTextRef.current = '';
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -797,7 +802,7 @@ function useCentralChatEventsAndView(previousBindings: ReturnType<typeof useCent
           />
           <button
             onClick={handleSend}
-            disabled={(!input.trim() && pendingAttachments.length === 0) || loading || uploading}
+            disabled={(!input.trim() && pendingAttachments.length === 0) || requestActive || loading || uploading}
             className="p-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed text-white transition-colors"
           >
             {loading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
