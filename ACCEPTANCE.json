@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-30T08:42:37.765298+00:00",
+  "updatedAt": "2026-10-30T08:44:41.283884+00:00",
   "localDate": "2026-10-30",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
     "title": "主程序46项未完善点处理与63分区复核",
-    "status": "46-gaps-locally-remediated-8-local-workflows-added-runtime-pending",
-    "instruction": "46项缺口逐项处理：36项本地问题修复，8项补齐本地工作流，2项外部服务依赖待验；真实平台、ERP和真人界面未验。新后端加载待确认。"
+    "status": "46-gaps-locally-remediated-8-local-workflows-added-loaded-native-ui-paused",
+    "instruction": "36项本地问题已修、8项本地业务流程已补、2项外部服务依赖待验；已按核验提交加载主后端，真人测试继续暂停。软件复测不等于全应用验收。"
   },
   "acceptedWholeItems": [
     3,
@@ -46,7 +46,13 @@
     "本地工作表同key锁仅在单后端进程内有效；持续磁盘故障、进程崩溃和跨进程写入未验证。",
     "全局国际化检查仍有38个法律范围既有发现（57处字面量次数），未动排除范围；主程序59个发现已处理，架构检查通过。",
     "来源读取后的误导目标诊断已修，缺产物依然阻断；复合计算仍需有效算术证据，其他自然语言与事实核验不能由本轮有限用例推定全面通过。",
-    "运行服务仍可能有后台活动，不能以网络隔离测试推断生产全库零写入或零模型调用。加载验证另行记录。"
+    "运行服务仍可能有后台活动，不能以网络隔离测试推断生产全库零写入或零模型调用。加载验证另行记录。",
+    "按已核验提交重新加载后端PID35808，原生PID43928及创建时间未变；106个前端源码模块HTTP读取通过，仅证明源码转换可用，不是原生界面或真人操作验收。",
+    "仅执行version/health/docs与前端源码读取，不发送聊天、生成、支付或外部业务。后台本身活动独立记录。",
+    "本轮指定四表净变化：{\"conversations\": 0, \"interactions\": 0, \"generated_archive\": 0, \"model_routing_receipts\": 2}；默认模型偏好SHA一致、SQLite quick_check=ok，不代表全库零写入或后台零模型调用。",
+    "健康状态degraded；暂停任务5、排队任务0，未恢复held任务。",
+    "模型路由时间窗记录按source：{\"<empty>\": 2, \"scheduler_predictive_assistant\": 1, \"scheduler_proactive_lumi_scan\": 2}；按状态：{\"succeeded\": 5}；重启前后：{\"before-restart\": 5}。不据此声称整个应用零模型活动。",
+    "首次重载因保存/排队前置检查未满足而停止于检查阶段，旧进程未被停止；重新检查通过后才重载。新进程45秒内尚未就绪，保留进程后已核验正常就绪。"
   ],
   "validation": {
     "tsc": "passed in both repositories",
@@ -58,9 +64,9 @@
   },
   "evidence": {
     "directory": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030",
-    "manifest": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030/software-seal.json",
-    "sha256": "ad33df3e0b63ae903160d9c34b5550716cac2214a9944dd7117c9f15de250c34",
-    "files": 648,
+    "manifest": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030/evidence-seal.json",
+    "sha256": "d393c3a4df9c63a0c36e2fe0d06b3a5142fdb92377ee6925d0c5f76955af6d5c",
+    "files": 772,
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -254,12 +260,26 @@
       "precision": "Every current line and SHA verified; ambiguous exact matches retain candidate list and selection rule."
     },
     "nativeUITesting": "paused-by-user",
-    "runtimeLoading": "pending",
+    "runtimeLoading": "loaded",
     "acceptedAndHeldStateUnchanged": true,
     "defaultModelUnchanged": true,
     "wholeApplicationAccepted": false,
     "installerReleased": false,
-    "remotePushPerformed": false
+    "remotePushPerformed": false,
+    "runtimeLoadedSourceCommit": "3c2ce945157df4c9ad0a638433d1deedc0c65567",
+    "backendPid": 35808,
+    "frontendModules": {
+      "moduleCount": 106,
+      "loaded": 106,
+      "failed": 0
+    },
+    "databaseCountsDelta": {
+      "conversations": 0,
+      "interactions": 0,
+      "generated_archive": 0,
+      "model_routing_receipts": 2
+    },
+    "nativeClientRestarted": false
   },
   "orderedPassSummary": {
     "path": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/ordered-acceptance-20261026-1793014468384/acceptance-summary.json",
@@ -412,8 +432,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "46-gaps-locally-remediated-8-local-workflows-added-runtime-pending",
-    "priority": "46项缺口逐项处理：36项本地问题修复，8项补齐本地工作流，2项外部服务依赖待验；真实平台、ERP和真人界面未验。新后端加载待确认。"
+    "status": "46-gaps-locally-remediated-8-local-workflows-added-loaded-native-ui-paused",
+    "priority": "36项本地问题已修、8项本地业务流程已补、2项外部服务依赖待验；已按核验提交加载主后端，真人测试继续暂停。软件复测不等于全应用验收。"
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -9229,21 +9249,114 @@
       "本地工作表同key锁仅在单后端进程内有效；持续磁盘故障、进程崩溃和跨进程写入未验证。",
       "全局国际化检查仍有38个法律范围既有发现（57处字面量次数），未动排除范围；主程序59个发现已处理，架构检查通过。",
       "来源读取后的误导目标诊断已修，缺产物依然阻断；复合计算仍需有效算术证据，其他自然语言与事实核验不能由本轮有限用例推定全面通过。",
-      "运行服务仍可能有后台活动，不能以网络隔离测试推断生产全库零写入或零模型调用。加载验证另行记录。"
+      "运行服务仍可能有后台活动，不能以网络隔离测试推断生产全库零写入或零模型调用。加载验证另行记录。",
+      "按已核验提交重新加载后端PID35808，原生PID43928及创建时间未变；106个前端源码模块HTTP读取通过，仅证明源码转换可用，不是原生界面或真人操作验收。",
+      "仅执行version/health/docs与前端源码读取，不发送聊天、生成、支付或外部业务。后台本身活动独立记录。",
+      "本轮指定四表净变化：{\"conversations\": 0, \"interactions\": 0, \"generated_archive\": 0, \"model_routing_receipts\": 2}；默认模型偏好SHA一致、SQLite quick_check=ok，不代表全库零写入或后台零模型调用。",
+      "健康状态degraded；暂停任务5、排队任务0，未恢复held任务。",
+      "模型路由时间窗记录按source：{\"<empty>\": 2, \"scheduler_predictive_assistant\": 1, \"scheduler_proactive_lumi_scan\": 2}；按状态：{\"succeeded\": 5}；重启前后：{\"before-restart\": 5}。不据此声称整个应用零模型活动。",
+      "首次重载因保存/排队前置检查未满足而停止于检查阶段，旧进程未被停止；重新检查通过后才重载。新进程45秒内尚未就绪，保留进程后已核验正常就绪。"
     ],
-    "runtimeLoading": "pending",
+    "runtimeLoading": "loaded",
     "wholeApplicationAccepted": false,
     "remotePushPerformed": false,
-    "status": "46-gaps-locally-remediated-8-local-workflows-added-runtime-pending",
+    "finalizedAtUTC": "2026-10-30T08:44:41.283884+00:00",
+    "sourceCommit": "3c2ce945157df4c9ad0a638433d1deedc0c65567",
+    "runtime": {
+      "atUTC": "2026-10-30T08:44:24.536591+00:00",
+      "version": "3.1.1",
+      "buildId": "3c2ce945157df4c9ad0a638433d1deedc0c65567",
+      "backendPid": 35808,
+      "nativePid": 43928,
+      "nativeRestarted": false,
+      "baseHTTPReads": 3,
+      "modules": {
+        "moduleCount": 106,
+        "loaded": 106,
+        "failed": 0
+      },
+      "health": {
+        "status": "degraded",
+        "fault": {
+          "degraded": false,
+          "acceptingWork": true
+        },
+        "scheduler": {
+          "degraded": true,
+          "pausedTasks": 5,
+          "queuedTasks": 0,
+          "failedTasks": 0
+        },
+        "timestamp": "2026-10-30T08:44:17.924Z",
+        "runtime": {
+          "name": "lumi-core",
+          "version": "3.1.1",
+          "buildId": "3c2ce945157df4c9ad0a638433d1deedc0c65567"
+        },
+        "database": {
+          "dirty": false,
+          "persistence": {
+            "degraded": false
+          }
+        }
+      },
+      "database": {
+        "countsDelta": {
+          "conversations": 0,
+          "interactions": 0,
+          "generated_archive": 0,
+          "model_routing_receipts": 2
+        },
+        "defaultPreferencesUnchanged": true,
+        "quickCheck": "ok",
+        "beforeAtUTC": "2026-10-30T07:29:44.008104+00:00",
+        "afterAtUTC": "2026-10-30T08:44:23.867417+00:00"
+      },
+      "routingWindowReview": {
+        "retainedRowsInWindow": 5,
+        "routingNetCountDelta": 2,
+        "sources": {
+          "<empty>": 2,
+          "scheduler_predictive_assistant": 1,
+          "scheduler_proactive_lumi_scan": 2
+        },
+        "statuses": {
+          "succeeded": 5
+        },
+        "phases": {
+          "before-restart": 5
+        }
+      },
+      "limits": [
+        "按已核验提交重新加载后端PID35808，原生PID43928及创建时间未变；106个前端源码模块HTTP读取通过，仅证明源码转换可用，不是原生界面或真人操作验收。",
+        "仅执行version/health/docs与前端源码读取，不发送聊天、生成、支付或外部业务。后台本身活动独立记录。",
+        "本轮指定四表净变化：{\"conversations\": 0, \"interactions\": 0, \"generated_archive\": 0, \"model_routing_receipts\": 2}；默认模型偏好SHA一致、SQLite quick_check=ok，不代表全库零写入或后台零模型调用。",
+        "健康状态degraded；暂停任务5、排队任务0，未恢复held任务。",
+        "模型路由时间窗记录按source：{\"<empty>\": 2, \"scheduler_predictive_assistant\": 1, \"scheduler_proactive_lumi_scan\": 2}；按状态：{\"succeeded\": 5}；重启前后：{\"before-restart\": 5}。不据此声称整个应用零模型活动。",
+        "首次重载因保存/排队前置检查未满足而停止于检查阶段，旧进程未被停止；重新检查通过后才重载。新进程45秒内尚未就绪，保留进程后已核验正常就绪。"
+      ],
+      "nativeUITested": false,
+      "wholeApplicationAccepted": false,
+      "startup": {
+        "preflightHeldBeforeStop": true,
+        "initialReadiness": "pending",
+        "laterVerifiedReady": true
+      }
+    },
+    "softwareEvidence": {
+      "path": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030/software-seal.json",
+      "sha256": "ad33df3e0b63ae903160d9c34b5550716cac2214a9944dd7117c9f15de250c34"
+    },
+    "status": "46-gaps-locally-remediated-8-local-workflows-added-loaded-native-ui-paused",
     "evidence": {
       "directory": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030",
-      "manifest": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030/software-seal.json",
-      "sha256": "ad33df3e0b63ae903160d9c34b5550716cac2214a9944dd7117c9f15de250c34",
-      "files": 648,
+      "manifest": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030/evidence-seal.json",
+      "sha256": "d393c3a4df9c63a0c36e2fe0d06b3a5142fdb92377ee6925d0c5f76955af6d5c",
+      "files": 772,
       "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
       "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
     },
-    "report": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030/report.json",
-    "readableReport": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030/未完善项处理报告.txt"
+    "report": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030/final-report.json",
+    "readableReport": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030/最终未完善项处理报告.txt"
   }
 }
