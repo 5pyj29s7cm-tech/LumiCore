@@ -1,6 +1,6 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-11-01T12:56:50.073165+00:00",
+  "updatedAt": "2026-11-01T13:25:47.590281+00:00",
   "localDate": "2026-11-01",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
@@ -10022,5 +10022,94 @@
     "edition": "main",
     "sourceRoot": "D:/lumiOS",
     "sourceBaseCommit": "034c9b40985779657d849233bfced701238dc9bd"
+  },
+  "latestApplicabilityAudit": {
+    "atUTC": "2026-11-01T13:25:47.590281+00:00",
+    "status": "audited-with-obsolete-candidates-and-current-boundary-failures",
+    "scope": "Three-edition source applicability review; no product source modifications or whole application acceptance.",
+    "report": "D:/Lumi-Audit-Temp/legacy-applicability-audit-20261101/report.json",
+    "readableReport": "D:/Lumi-Audit-Temp/legacy-applicability-audit-20261101/report.txt",
+    "sourceVersions": {
+      "main": "3.1.1",
+      "legal": "3.1.1",
+      "designer": "3.1.1"
+    },
+    "recommendations": 17,
+    "recommendationMeaning": "Deduplicated cleanup/migration/clarification entries, not 17 directly deletable modules.",
+    "currentDefects": [
+      {
+        "id": "CURRENT-01",
+        "summary": "Recall-only request explicitly excluding search still marked executionRequested; original chat/voice tests fail in each edition. Tool routing/exposure only, no actual search executed.",
+        "editions": [
+          "main",
+          "legal",
+          "designer"
+        ]
+      }
+    ],
+    "validation": {
+      "mainExistingTests": {
+        "executed": 17,
+        "passed": 15,
+        "failed": 2,
+        "unselected": 0,
+        "report": "main/mode-verification/tests.json"
+      },
+      "legalOldFailureDiagnosis": {
+        "executed": 6,
+        "passed": 0,
+        "failed": 6,
+        "unselected": 41,
+        "report": "legal/six-observed.json"
+      },
+      "legalRecallBoundary": {
+        "executed": 2,
+        "passed": 0,
+        "failed": 2,
+        "unselected": 3,
+        "report": "legal/recall-boundary/tests.json"
+      },
+      "designerRecallBoundary": {
+        "executed": 2,
+        "passed": 0,
+        "failed": 2,
+        "unselected": 3,
+        "report": "designer/recall-boundary.json"
+      },
+      "totalsWithinThisAudit": {
+        "executed": 27,
+        "passed": 15,
+        "failed": 12,
+        "countRule": "不同版/不同文件原用例合计，排除Main被动追踪的重复单例；未选不计通过。法律6旧失败与三版各2召回失败分列，不能当12个独立产品缺陷。"
+      },
+      "runtimeScopeZh": "隔离fixture、真实源码规划/局部本地工具驱动，模型均mock。无实际provider、搜索、外部业务、原生UI、安装部署或旧业务验收重放。",
+      "fullSuite": false,
+      "wholeApplicationAccepted": false
+    },
+    "evidenceSeal": "D:/Lumi-Audit-Temp/legacy-applicability-audit-20261101/evidence-seal.json",
+    "evidenceSha256": "dc4d96b7397526091aeafd103255533df6c2d28033f32e0740756b5763f1c19b",
+    "evidenceFiles": 228,
+    "latestImplementationRecord": "latestCrossEditionMaintenance",
+    "priorImplementationEvidencePreserved": true,
+    "legacyLegalFailures": {
+      "count": 6,
+      "status": "still-failed; assertion migration identified, not implemented or accepted"
+    },
+    "productSourceChanged": false,
+    "checkpointMetadataOnly": true,
+    "wholeApplicationAccepted": false,
+    "nativeCoordinateTesting": "paused",
+    "defaultModelChanged": false,
+    "historicalAcceptedItemsPreserved": [
+      3,
+      15,
+      16
+    ],
+    "heldStatusesUnchanged": true,
+    "archiveAcceptanceResumed": false,
+    "remotePushPerformed": false,
+    "edition": "main",
+    "sourceRoot": "D:/lumiOS",
+    "sourceBaseCommit": "250fb0446de1b799d3ae7360c59fc2566683dc84"
   }
 }
