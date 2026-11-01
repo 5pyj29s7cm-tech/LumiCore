@@ -243,6 +243,7 @@ export function DesktopShellView(input: DesktopShellViewInput) {
       data-theme-scope="shell"
       data-appearance={resolvedAppearanceMode}
       data-view-mode={viewMode}
+      data-personal-background={viewMode === 'personal' && activeTab !== 'org' ? (resolvedAppearanceMode === 'light' ? 'white' : 'black') : undefined}
       data-ui-density={desktopChrome.density}
       data-compact-layout={isCompactDesktopLayout ? 'true' : 'false'}
       data-wallpaper-presentation={isWallpaperMode ? wallpaperPresentation : undefined}
@@ -253,12 +254,13 @@ export function DesktopShellView(input: DesktopShellViewInput) {
       resolvedAppearanceMode === 'light' ? 'bg-[#f8fbff]' : 'bg-[#010103]'
     }`}
       style={{
-        ...(wallpaper === 'custom' && wallpaperUrl && !isWallpaperMode ? {
+        ...((viewMode !== 'personal' || activeTab === 'org') && wallpaper === 'custom' && wallpaperUrl && !isWallpaperMode ? {
           backgroundImage: `url(${wallpaperUrl})`,
           backgroundSize: 'cover',
           backgroundPosition: 'center',
           backgroundRepeat: 'no-repeat',
         } : {}),
+        ...(viewMode === 'personal' && activeTab !== 'org' ? { backgroundColor: resolvedAppearanceMode === 'light' ? '#fff' : '#000', backgroundImage: 'none' } : {}),
       }}
     >
       <input ref={wallpaperInputRef} type="file" accept="image/*" onChange={handleWallpaperUpload} className="hidden" />
@@ -276,6 +278,7 @@ export function DesktopShellView(input: DesktopShellViewInput) {
           <X size={15} />
         </motion.button>
       )}
+      {(viewMode !== 'personal' || activeTab === 'org') && <>
       {/* CRT Scanline / Noise Overlay */}
       <div className={`fixed inset-0 z-[1000] pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%] select-none transition-opacity duration-500 ${isWallpaperMode ? 'opacity-0' : 'opacity-[0.03]'}`} />
 
@@ -328,6 +331,8 @@ export function DesktopShellView(input: DesktopShellViewInput) {
         <div className={`absolute inset-0 pointer-events-none ${resolvedAppearanceMode === 'light' ? 'shadow-[inset_0_0_140px_rgba(73,109,142,0.045)]' : 'shadow-[inset_0_0_300px_rgba(0,0,0,1)]'}`} />
 
       </div>
+
+      </>}
 
       {/* Nexus Globe — WebGL 3D Earth with constellation + globe + neural layers */}
       <AnimatePresence>

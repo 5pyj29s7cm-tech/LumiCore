@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-11-01T09:54:20.948524+00:00",
+  "updatedAt": "2026-11-01T11:10:56.905631+00:00",
   "localDate": "2026-11-01",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "律师版、设计师版与主程序只读对照检查",
-    "status": "audit-complete-with-open-findings",
-    "instruction": "源码、Git、当前静态及离线反例检查已记录；未修改产品代码，已知失败保留；不恢复已封存业务或真人验收。"
+    "title": "Three-edition personal background and scoped fixes; Designer synchronized with Main",
+    "status": "implemented-locally-verified-with-retained-baseline-failures",
+    "instruction": "Local source/profile maintenance finished with explicit retained baseline failures. Historical business acceptance and native coordinate testing remain sealed or held."
   },
   "acceptedWholeItems": [
     3,
@@ -63,12 +63,12 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "D:/Lumi-Audit-Temp/edition-comparison-20261101",
-    "manifest": "D:/Lumi-Audit-Temp/edition-comparison-20261101/evidence-seal.json",
-    "sha256": "4938b94a68fbe893a815fab7bb73e9017a940155cdc1561143a402a1ff47abc0",
-    "files": 959,
-    "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
-    "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
+    "directory": "D:\\Lumi-Audit-Temp\\edition-optimization-20261101",
+    "manifest": "D:\\Lumi-Audit-Temp\\edition-optimization-20261101\\evidence-seal.json",
+    "sha256": "9217f8e56a1be63a44b630a6e03ee939e3bab69f39f7e818f295a02199b4ccc9",
+    "files": 1420,
+    "canonicalLedger": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\joint-acceptance-20261023.json",
+    "canonicalCheckpoint": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\active-closure-checkpoint.json"
   },
   "workflow": {
     "afterEachSubcase": [
@@ -428,12 +428,12 @@
   },
   "workFocus": {
     "area": "main-program-optimization",
-    "sourceRoot": "D:/lumiOS",
+    "sourceRoot": "D:\\lumiOS",
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "46-gaps-locally-remediated-8-local-workflows-added-loaded-native-ui-paused",
-    "priority": "36项本地问题已修、8项本地业务流程已补、2项外部服务依赖待验；已按核验提交加载主后端，真人测试继续暂停。软件复测不等于全应用验收。"
+    "status": "implemented-locally-verified-with-retained-baseline-failures",
+    "priority": "Scoped source and skill startup repairs completed. Retained baseline failures and real-provider/native validation remain explicit; no accepted business operation replay."
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -9854,5 +9854,64 @@
       "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
     },
     "archiveAcceptanceResumed": false
+  },
+  "latestEditionOptimization": {
+    "atUTC": "2026-11-01T11:10:56.905631+00:00",
+    "status": "implemented-locally-verified-with-retained-baseline-failures",
+    "scope": "Three-edition personal background and scoped audit fixes; reviewed Main merge into Designer. Not whole-application acceptance or an installer release.",
+    "report": "D:\\Lumi-Audit-Temp\\edition-optimization-20261101\\report.json",
+    "readableReport": "D:\\Lumi-Audit-Temp\\edition-optimization-20261101\\report.txt",
+    "manifest": "D:\\Lumi-Audit-Temp\\edition-optimization-20261101\\evidence-seal.json",
+    "manifestSha256": "9217f8e56a1be63a44b630a6e03ee939e3bab69f39f7e818f295a02199b4ccc9",
+    "sealedFiles": 1420,
+    "versions": {
+      "main": "3.1.1",
+      "legal": "3.1.1",
+      "designer": "3.1.1"
+    },
+    "personalBackground": {
+      "day": "#ffffff",
+      "night": "#000000",
+      "decorativeStarsAndWaves": false
+    },
+    "designerIntegrationCommit": "65d7e3890e00d39c3e09d6b9ea26d34bb616a98b",
+    "actualDesignerProfileRepair": {
+      "path": "D:\\Lumi-Audit-Temp\\edition-optimization-20261101\\designer-skills\\official-profile-repair-v2.json",
+      "sha256": "7f759236e7c8b56f6e2642724a8ce1f2386abf8dd39774dcaff8983e7776cee6",
+      "registeredToolCount": 13,
+      "businessToolsInvoked": 0,
+      "onlyTwoAlreadyEnabledSkillConfigurationsChanged": true,
+      "protectedIdentityDatabaseAndSettingsUnchanged": true
+    },
+    "retainedFailures": {
+      "mainLegalBoundary": 7,
+      "turnFlow": 2,
+      "resultFinalizer": {
+        "count": 37,
+        "newFailuresComparedWithLoadedCoreBaseline": 0,
+        "baselineScope": "14 actually loaded prior core owners; not a complete historical checkout"
+      },
+      "i18n": "Gate remains failed; inherited/copied Designer literals and known Main language-resource gaps are explicit.",
+      "mergeWhitespace": "Remaining whole-merge diff-check warnings are inherited upstream/old-edition content; official HTML fixture left intact.",
+      "i18nFinalCommand": "D:\\Lumi-Audit-Temp\\edition-optimization-20261101\\final-validation\\designer-i18n-final-command.json"
+    },
+    "boundaries": {
+      "defaultModelChanged": false,
+      "businessProviderCalls": false,
+      "paidGeneration": false,
+      "externalMessagesSent": false,
+      "nativeCoordinateTests": "still paused",
+      "runningMainBackendRestarted": false,
+      "installedNativeBinariesRebuilt": false,
+      "wholeApplicationAccepted": false,
+      "sealedHistoricalItemsPreserved": [
+        3,
+        15,
+        16
+      ],
+      "remotePushPerformed": false
+    },
+    "localCommitsRequired": true,
+    "remotePushPerformed": false
   }
 }

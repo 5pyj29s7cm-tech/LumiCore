@@ -234,7 +234,7 @@ export function useChatHistoryAndRequests(previousBindings: ReturnType<typeof us
       seen.add(m.id);
       return true;
     });
-  }, [user?.displayName, user?.username, t.chatUserFallback, agentNameRef, isZh]);
+  }, [user?.displayName, user?.username, t.chatUserFallback, agentNameRef]);
 
   useEffect(() => {
     const query = searchQuery.trim();

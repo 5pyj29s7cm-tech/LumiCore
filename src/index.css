@@ -3641,3 +3641,52 @@ html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper
 [data-video-player] video::-webkit-media-controls-fullscreen-button {
   display: none !important;
 }
+
+/* Personal desktop background preference. Organization surfaces keep their theme. */
+[data-personal-background="black"] {
+  background: #000 !important;
+}
+html [data-personal-background="black"] .lumi-chat-root[data-lumi-command-center-view] {
+  --lumi-chat-background: #000;
+  --cc-workspace-bg: #000;
+  --cc-layer-bg: #000;
+  --cc-office-bg: #000;
+  --cc-field-bg: #000;
+  --cc-layer-field-bg: #000;
+  --cc-vignette: none;
+  --cc-ink: rgba(255, 255, 255, .90);
+  --cc-muted: rgba(226, 232, 240, .70);
+  --cc-faint: rgba(226, 232, 240, .54);
+  --cc-card: #0a1720;
+  --cc-card-secondary: #09151c;
+  --cc-card-tertiary: #081219;
+  --cc-card-current: #103039;
+  --cc-code-bg: #0b1821;
+  background: #000 !important;
+}
+[data-personal-background] .lumi-core-command-field,
+[data-personal-background] .lumi-command-center-workspace {
+  background: var(--cc-workspace-bg) !important;
+}
+[data-personal-background] .lumi-core-command-field__backdrop,
+[data-personal-background] .lumi-core-command-field::before {
+  display: none !important;
+}
+html[data-mode="light"] [data-personal-background="black"] .desktop-icon-label {
+  color: rgba(255, 255, 255, .88) !important;
+  text-shadow: 0 1px 3px #000;
+}
+
+[data-personal-background="white"] {
+  background: #fff !important;
+}
+html [data-personal-background="white"] .lumi-chat-root[data-lumi-command-center-view] {
+  --lumi-chat-background: #fff;
+  --cc-workspace-bg: #fff;
+  --cc-layer-bg: #fff;
+  --cc-office-bg: #fff;
+  --cc-field-bg: #fff;
+  --cc-layer-field-bg: #fff;
+  --cc-vignette: none;
+  background: #fff !important;
+}

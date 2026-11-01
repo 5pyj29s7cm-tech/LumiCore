@@ -1,3 +1,5 @@
+import { searchSubjectCasesHandler } from './subject_cases';
+import { searchPublicFootprintHandler } from './public_footprint';
 import { explicitNoMutationScope } from '../../../../cognition/tool_intent';
 import type { ToolDefinition } from '../../../../tools/types';
 import { searchExternalAuthoritiesHandler, companyDatabaseLookupHandler, searchTenderProjectsHandler } from "./company_research";
@@ -93,6 +95,41 @@ queryType: { ...stringField('企查查本次明确查询范围；默认registrat
       ? { ...args, persistCase: false, confirmedForKb: false } : args,
     handler: withLegalReceipt(companyDatabaseLookupHandler, { status: 'observed', expectCaseMutation: 'when_requested' }),
   }),
+defineLegalTool({
+name: 'legal_search_subject_cases',
+description: '主体涉诉/执行来源查询 — 按明确提供的企业或个人名称调用已配置的授权案件或执行查询来源，保留原始回执、时间和来源；不使用本地语义相似案例替代主体查询，不自动归档。',
+properties: {
+name: stringField('明确提供的企业或个人名称'),
+subjectType: { ...stringField('主体类型，仅用于说明输入'), enum: ['enterprise', 'individual'] },
+scope: { ...stringField('本次查询范围'), enum: ['cases', 'enforcement'] },
+},
+required: ['name'],
+serverOwnedArgumentBinder: args => ({ ...args, persistCase: false, confirmedForKb: false }),
+handler: withLegalReceipt(searchSubjectCasesHandler, { status: 'observed' }),
+capability: legalCapability({
+  id: 'legal.subject-cases.search', operation: 'observe', risk: 'low', successStatuses: ['observed'],
+  sideEffects: [{ type: 'network_read', scope: 'authorized case or enforcement source for the explicitly supplied subject', reversible: true }],
+  limitations: ['A returned provider receipt does not establish identity or an exhaustive absence of cases.'],
+}),
+evidence: legalEvidence('legal.subject-cases.search', 'observe', 'name'),
+}),
+defineLegalTool({
+name: 'legal_search_public_footprint',
+description: '公开网络线索检索 — 按明确提供的企业或个人名称调用已有公开网页搜索，返回实际标题、搜索摘要和原文链接；同名命中仅作为候选，不推断主体关联、财产归属或违法行为。不生成检索计划，不调用模型，不自动归档。',
+properties: {
+name: stringField('明确提供的企业或个人名称'),
+subjectType: { ...stringField('调查主体类型'), enum: ['enterprise', 'individual'] },
+},
+required: ['name'],
+serverOwnedArgumentBinder: args => ({ ...args, persistCase: false, confirmedForKb: false }),
+handler: withLegalReceipt(searchPublicFootprintHandler, { status: 'observed' }),
+capability: legalCapability({
+  id: 'legal.public-footprint.search', operation: 'observe', risk: 'low', successStatuses: ['observed'],
+  sideEffects: [{ type: 'network_read', scope: 'public search results for the explicitly supplied subject name', reversible: true }],
+  limitations: ['Search snippets are candidate leads. The operation does not read source pages or establish identity, relationships, ownership, or misconduct.'],
+}),
+evidence: legalEvidence('legal.public-footprint.search', 'observe', 'name'),
+}),
   defineLegalTool({
     name: 'legal_external_research_plan',
     description: '半自动外部检索行动单 — 生成法条、人民法院案例库、裁判文书网、法蝉、Alpha、企查查、国家企业信用、法院在线服务的检索顺序、网页登录预设和来源登记表。',

@@ -374,7 +374,7 @@ ${sourceErrors.length ? '### 本次查询异常\n' + sourceErrors.map(message =>
   });
 
   return encodeToolResult(`${report}\n\n## 六、入库与案件归档\n${kbLine}\n${caseLine}`, { ok: complete, status: complete ? 'observed' : 'partial',
-    sourceResults: sourceOriginals.map(({ text, ...source }) => ({ ...source, subject: name, queryType, status: 'observed', sourceTextSha256: createHash('sha256').update(text).digest('hex') })),
+    sourceResults: sourceOriginals.map(({ text, ...source }) => ({ ...source, subject: name, queryType, status: 'observed', sourceText: text, sourceTextSha256: createHash('sha256').update(text).digest('hex') })),
   });
 }
 

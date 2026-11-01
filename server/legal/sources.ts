@@ -748,6 +748,10 @@ export async function queryQichachaMcp(searchKey: string, kind: QichachaQueryTyp
   return target ? callQichachaMcp(target[0], target[1], { searchKey }, localOnly) : null;
 }
 
+export async function queryQichachaSubjectCases(subjectName: string, localOnly = false): Promise<ExternalSourceReceipt | null> {
+  return callQichachaMcp('case', 'get_judicial_case_search', { party: subjectName.trim() }, localOnly);
+}
+
 async function searchQichachaCompany(keyword: string, localOnly = false): Promise<CompanyInfo | null> {
   const settings = qichachaConfig();
   if (settings.mcpConfigured) {
