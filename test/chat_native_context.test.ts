@@ -24,7 +24,7 @@ beforeAll(() => initDatabase());
 afterEach(() => vi.restoreAllMocks());
 
 describe('normal chat uses native history and explicitly obtained sources', () => {
-  it('does not inject generated summaries, topics, memories or retrieved knowledge while retaining complete native history', async () => {
+  it('injects retrieved scoped saved memory while excluding generated summaries, topics and unrelated context and retaining complete native history', async () => {
     const uid = 'native-context-' + randomUUID();
     const conversation = getOrCreateActiveConversation(uid, 'lumi', 'personal', '');
     const currentId = randomUUID(), requestId = 'request-' + randomUUID();
@@ -37,11 +37,19 @@ describe('normal chat uses native history and explicitly obtained sources', () =
     db.interactions.push({ id: randomUUID(), userId: uid, conversationId: conversation.id, role: 'user', message: longHistory, timestamp: new Date(Date.now() - 1000).toISOString() },
       { id: currentId, userId: uid, conversationId: conversation.id, role: 'user', message: text, requestId, externalMessageId: requestId, source: 'chat', channel: 'chat', timestamp: new Date().toISOString() });
     commitDatabaseTables(db);
+    const savedMemory = memory.addMemory({ userId: uid, type: 'preference',
+      content: 'For the native discussion and supplied material, the owner prefers concise replies.',
+      keywords: ['discussion', 'material'], confidence: 0.95, sourceInteractionId: 'prior-dialogue-' + randomUUID(),
+      source: 'chat', domain: 'personal', orgId: '', privacyClass: 'private', retention: 'long_term',
+    }, { agentId: 'lumi', generateEmbedding: false });
     const personality = personalityRegistry.getDefault();
-    const build = vi.spyOn(personalityRegistry, 'buildSystemPrompt').mockReturnValue({ config: personality, systemPrompt: 'Actual user-configured personality.' });
+    const build = vi.spyOn(personalityRegistry, 'buildSystemPrompt').mockImplementation((_id, _context, options) => ({
+      config: personality, systemPrompt: 'Actual user-configured personality.\n\n' + memory.formatMemoriesForContext(options?.memories || [], { currentTurnText: text }),
+    }));
     const base: any = { uid, conversationId: conversation.id, requestId, acceptedUserMessageId: currentId, text, visibleUserText: text,
       resolvedDomain: 'personal', resolvedOrgId: '', isMemoryAvatar: false, personalityId: 'lumi', conversationAgentId: 'lumi',
-      conversationMode: '', operationMode: 'assistant', relevantMemories: [{ content: 'AUTO-MEMORY-DO-NOT-INJECT' }],
+      conversationMode: '', operationMode: 'assistant',
+      requestScope: { domain: 'personal', orgId: '' }, turnAuthorization: { assertCurrent: () => {} },
       ragChunks: ['AUTO-RAG-DO-NOT-INJECT'], kbContext: 'AUTO-KB-DO-NOT-INJECT', attachments: [{ path: 'D:/fixtures/explicit-source.txt' }],
       persistedConversationHistory: [], sensoryFn: () => ({}), buildNaturalReplyStyleOverlay: () => '',
       toolSecurityContext: { executionBoundary: 'local' }, eventSource: 'chat', activeProvider: 'relay', activeModel: 'fixture-model',
@@ -51,11 +59,15 @@ describe('normal chat uses native history and explicitly obtained sources', () =
       rememberRequestToolRecord: () => {}, taskAwareRecords: (records: any[]) => records, isChatCancelled: () => false };
     vi.spyOn(contacts, 'matchContactsFromText').mockReturnValue([{ name: 'Named contact' }] as any);
     vi.spyOn(contactContext, 'formatContactsForContext').mockReturnValue('AUTO-CONTACT-DO-NOT-INJECT');
-    const setup = await prepareChatPromptContext(base);
+    const loaded = await retrieveChatContext(base);
+    expect(loaded.relevantMemories).toEqual([expect.objectContaining({ id: savedMemory.id, userId: uid, sourceInteractionId: savedMemory.sourceInteractionId })]);
+    const setup = await prepareChatPromptContext({ ...base, ...loaded });
     const assembled = await setup.assemble({ turnIntent: { flow: { promptOverlay: '', currentAttachmentPaths: [], routeText: '' }, promptOverlay: '' }, executionRequested: false } as any);
     const turn = await prepareChatModelTurn({ ...base, ...assembled } as any);
-    expect(JSON.stringify(turn.messages)).not.toMatch(/AUTO-(?:SUMMARY|TOPIC|MEMORY|RAG|KB|CONTACT)-DO-NOT-INJECT/);
-    expect(build.mock.calls[0][2]).not.toHaveProperty('memories');
+    expect(JSON.stringify(turn.messages)).not.toMatch(/AUTO-(?:SUMMARY|TOPIC|RAG|KB|CONTACT)-DO-NOT-INJECT/);
+    expect(build.mock.calls[0][2]?.memories).toEqual(loaded.relevantMemories);
+    expect(turn.messages[0].content).toContain(savedMemory.content);
+    expect(turn.messages[0].content).toContain('source=chat; interaction=' + savedMemory.sourceInteractionId);
     expect(turn.messages).toContainEqual({ role: 'user', content: longHistory });
     expect(turn.messages.at(-1)).toEqual({ role: 'user', content: text, sourceMessageId: currentId });
     expect(turn.messages[0].content).toBe(assembled.effectiveSystemPrompt);
@@ -72,8 +84,9 @@ describe('normal chat uses native history and explicitly obtained sources', () =
     expect(readDatabaseTables(['conversations']).conversations.find(row => row.id === conversation.id)!.summary).toBe('AUTO-SUMMARY-DO-NOT-INJECT');
   });
 
-  it('loads configured personality and emotional state without automatic memory, agent RAG or knowledge queries', async () => {
-    const query = vi.spyOn(memory, 'queryMemoriesVector').mockRejectedValue(new Error('automatic memory query'));
+  it('loads scoped local saved memory and configured personality without vector, agent RAG or knowledge queries', async () => {
+    const query = vi.spyOn(memory, 'queryMemories').mockReturnValue([]);
+    const vector = vi.spyOn(memory, 'queryMemoriesVector').mockRejectedValue(new Error('unexpected vector query'));
     const chunks = vi.spyOn(rag, 'retrieveChunks').mockRejectedValue(new Error('automatic agent RAG query'));
     const kb = vi.spyOn(knowledge, 'retrieveConversationKnowledge').mockRejectedValue(new Error('automatic knowledge query'));
     const uid = 'no-auto-retrieval-' + randomUUID();
@@ -83,7 +96,11 @@ describe('normal chat uses native history and explicitly obtained sources', () =
     expect(loaded.personalityConfig).toBeTruthy();
     expect(loaded.emotionalState).toBeTruthy();
     expect(loaded.himState).toBeTruthy();
-    expect(query).not.toHaveBeenCalled();
+    expect(query).toHaveBeenCalledOnce();
+    expect(query).toHaveBeenCalledWith(expect.objectContaining({ userId: uid, domain: 'personal', orgId: '',
+      agentIds: ['', 'lumi'], recordRetrieval: false, useVector: false }));
+    expect(loaded.relevantMemories).toEqual([]);
+    expect(vector).not.toHaveBeenCalled();
     expect(chunks).not.toHaveBeenCalled();
     expect(kb).not.toHaveBeenCalled();
   });

@@ -18,7 +18,7 @@ import { personalityRegistry } from "../../personality";
 
 
 
-type prepareChatPromptContextInput = NonNullable<Awaited<ReturnType<typeof prepareChatPriorTaskQuery>>['context']> & Pick<Awaited<ReturnType<typeof retrieveChatContext>>, 'emotionalState' | 'personalityConfig'> & {
+type prepareChatPromptContextInput = NonNullable<Awaited<ReturnType<typeof prepareChatPriorTaskQuery>>['context']> & Pick<Awaited<ReturnType<typeof retrieveChatContext>>, 'emotionalState' | 'personalityConfig' | 'relevantMemories'> & {
   conversationId: string;
   conversationMode: string;
   operationMode: LumiClientMode;
@@ -32,8 +32,13 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
         mode: 'chat' as const,
         sensory,
       };
+      if (context.relevantMemories?.length) {
+        context.abortController.signal.throwIfAborted();
+        context.turnAuthorization.assertCurrent();
+      }
       const personalityOptions = {
         emotionalState: context.emotionalState,
+        memories: context.isMemoryAvatar ? [] : context.relevantMemories || [],
         userId: context.uid,
         userText: context.text,
         domain: context.resolvedDomain,

@@ -45,6 +45,11 @@ export function matchesMemoryQueryFilters(memory: Memory, query: MemoryQuery): b
   if (query.includeOperationalTraces !== true && isOperationalTraceMemory(memory)) return false;
   if (query.evidenceClasses && !query.evidenceClasses.includes(classifyMemoryEvidence(memory))) return false;
   if (!matchesMemoryScope(memory, query.domain, query.orgId, query.agentId, query.userId)) return false;
+  if (query.types && !query.types.includes(memory.type)) return false;
+  if (query.agentIds && !query.agentIds.includes(memory.agentId || '')) return false;
+  if (memory.privacyClass && query.excludePrivacyClasses?.includes(memory.privacyClass)) return false;
+  if (memory.retention && query.excludeRetentions?.includes(memory.retention)) return false;
+  if (query.requireAcceptedFirewall && memory.firewall?.accepted === false) return false;
   if (query.type && memory.type !== query.type) return false;
   if (query.minConfidence !== undefined && memory.confidence < query.minConfidence) return false;
   if (query.tier && memory.tier !== query.tier) return false;

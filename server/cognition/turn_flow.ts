@@ -1,6 +1,7 @@
 import { TurnAnalysis } from './turn_analysis';
 import { isExplicitConfirmationReply } from '../tools/pending_confirmation';
 import { isStoredMemoryRecallQuestion } from './normalized_action_intent';
+import { isSavedMemoryLookupOnlyRequest } from './saved_memory_intent';
 import { withoutLocationLiterals } from './location_literals';
 import { mediaCreationInstruction, isAvatarAuthoringRequest } from './media_creation_intent';
 import type { OperationMode } from './operation_modes';
@@ -401,7 +402,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const clientActionIntent = rawClientActionIntent && !continuationNamesExternalTarget;
   // i18n-allow: A standalone Chinese completed-action acknowledgement has no new instruction.
   const completedActionAcknowledgement = /^(?:已经|已)?(?:打开|关闭|保存|发送|完成)(?:好)?了[。.!！\s]*$/u.test(input.text);
-  const storedMemoryRecall = isStoredMemoryRecallQuestion(input.text);
+  const storedMemoryRecall = isStoredMemoryRecallQuestion(input.text) || isSavedMemoryLookupOnlyRequest(input.text);
   const readOnlyConversationTurn = completedActionAcknowledgement || storedMemoryRecall
     || currentActionIntent.kind === 'none' && isInformationOnlyQuestion(input.text, analysis)
     || !statusOnlyContinuation && currentActionIntent.kind === 'status_query' && currentActionIntent.target === 'previous_action'
@@ -443,8 +444,8 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     ? null
     : matchSkillWorkflow(routingText, { targetIsLumi: input.targetIsLumi });
   // A pure recall question uses the channel's existing context; it must not
-  // turn a negated lookup into a fresh tool action. Chat retains native history
-  // without automatic cross-session memory retrieval; voice owns its prefetch.
+  // turn a negated lookup into a fresh tool action. Chat and voice own their
+  // scoped memory-context retrieval separately from tool permission.
   // Mixed requests with an affirmative follow-up are excluded by the parser.
   const allowToolUseForTurn = Boolean(input.text.trim())
     && !immediateAssistantRestatement && !explicitNoToolInstruction && !storedMemoryRecall;

@@ -1,4 +1,5 @@
 import type { prepareChatPriorTaskQuery } from './phases/prepare_chat_prior_task_query';
+import { retrieveChatSavedMemories } from './saved_memory_context';
 
 import { loadEmotionalState, loadHIMState } from "../../personality/state";
 
@@ -23,5 +24,17 @@ export async function retrieveChatContext(context: retrieveChatContextInput) {
       const emotionalState = loadEmotionalState(emotionKey);
       const himState = loadHIMState(emotionKey);
       console.log('[ChatHandler] emotionalState loaded');
-return { emotionalState, personalityConfig, himState, emotionKey };
+      const relevantMemories = retrieveChatSavedMemories({
+        userId: context.uid,
+        text: context.visibleUserText || context.text,
+        domain: context.resolvedDomain,
+        orgId: context.resolvedOrgId,
+        agentId: context.conversationAgentId,
+        isMemoryAvatar: context.isMemoryAvatar,
+        executionBoundary: context.toolSecurityContext?.executionBoundary,
+        memoryPolicy: personalityConfig?.memoryPolicy,
+        signal: context.abortController.signal,
+        assertCurrent: () => context.turnAuthorization.assertCurrent(),
+      });
+return { emotionalState, personalityConfig, himState, emotionKey, relevantMemories };
 }

@@ -21,7 +21,7 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
 
       if (await answerPriorTaskStatus(context)) { return { terminal: true as const, context: undefined, planning: undefined, resume: undefined }; }
 
-      let { emotionalState, personalityConfig, himState, emotionKey } = await retrieveChatContext(context);
+      let { emotionalState, personalityConfig, himState, emotionKey, relevantMemories } = await retrieveChatContext(context);
 
       // ── Conversation mode: get/create conversation, apply mode from payload ──
       const conversationId = context.selectedConversationId;
@@ -150,6 +150,7 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
     set emotionalState(value: typeof emotionalState) { emotionalState = value; },
     get personalityConfig(): typeof personalityConfig { return personalityConfig; },
     set personalityConfig(value: typeof personalityConfig) { personalityConfig = value; },
+    relevantMemories,
     conversationId,
     conversationMode,
     operationMode,

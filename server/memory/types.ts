@@ -127,6 +127,13 @@ export interface MemoryQuery {
   /** Administrative history may explicitly include superseded/test records. */
   includeSuperseded?: boolean;
   userId?: string;
+  /** Optional automatic-context filters; applied before ranking and limiting. */
+  types?: readonly MemoryType[];
+  agentIds?: readonly string[];
+  excludePrivacyClasses?: readonly MemoryPrivacyClass[];
+  excludeRetentions?: readonly MemoryRetention[];
+  /** Reject explicitly denied records; legacy records without metadata remain compatible. */
+  requireAcceptedFirewall?: boolean;
   /** Free-text search — matched against keywords and content */
   query?: string;
   /**
