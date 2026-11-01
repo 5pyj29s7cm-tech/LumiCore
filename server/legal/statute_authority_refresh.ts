@@ -1,4 +1,6 @@
-import { normalizeStatuteReferenceTitle, statuteTextCopy, createStatuteTextSnapshot, parseOfficialStatuteText, extractReviewedStatuteHtml, extractStatuteReferences, statuteNumber, type StatuteTextSnapshot, type ReviewedStatuteHtmlSource } from '../regions/packs/cn/statute_provisions';
+import { normalizeStatuteReferenceTitle, statuteTextCopy, createStatuteTextSnapshot, parseOfficialStatuteText, extractReviewedStatuteHtml, officialStatuteQueryLocator as officialQueryLocator, officialStatuteArticleLabel, OFFICIAL_STATUTE_NATIONAL_TITLE_PREFIX, type StatuteTextSnapshot, type ReviewedStatuteHtmlSource } from '../regions/packs/cn/statute_provisions';
+import { statuteSourceMessages, type StatuteSourceLanguage } from '../regions/messages/statute_source_messages';
+export { officialStatuteQueryLocator as officialQueryLocator } from '../regions/packs/cn/statute_provisions';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -235,27 +237,10 @@ async function fetchOfficialDetails(
     { method: 'GET' }, timeoutMs, session, 'record details')).data;
 }
 
-export function officialQueryLocator(keyword: string): { title: string; articleKeys: string[] } | undefined {
-  const number = '[零〇一二两三四五六七八九十百千万\\d]+';
-  if (/[\r\n。！？；;!?]/u.test(keyword)) return undefined;
-  const namedTitle = /^[\p{Script=Han}A-Za-z0-9《》〈〉·（）()—-]{2,160}(?:法|法典|条例|规定|办法|解释|规则|细则|决定)$/u;
-  const tokens = keyword.split(/[ \t　]+/u).map(token => token.split(new RegExp(`第${number}[编章节条]`, 'u'))[0]);
-  const tokenTitles = tokens.filter(token => namedTitle.test(token));
-  const quotedTitles = extractStatuteReferences(keyword).map(reference => reference.lawName || '').filter(name => name && !tokenTitles.some(title => title.includes('《' + name + '》')));
-  const titles = [...quotedTitles, ...tokenTitles];
-  const unique = [...new Map(titles.map(title => [normalizeStatuteReferenceTitle(title), title])).values()];
-  if (unique.length !== 1) return undefined;
-  const title = unique[0];
-  const articleKeys = [...keyword.matchAll(new RegExp(`第(${number})条(?:之(${number}))?`, 'gu'))]
-    .map(match => `${statuteNumber(match[1])}${match[2] ? '-' + statuteNumber(match[2]) : ''}`);
-  return { title, articleKeys: [...new Set(articleKeys)] };
-}
-
-function requestedOfficialProvisions(provisions: StatuteTextSnapshot['provisions'], articleKeys: string[]): string {
+function requestedOfficialProvisions(provisions: StatuteTextSnapshot['provisions'], articleKeys: string[], language: StatuteSourceLanguage = 'zh'): string {
   return articleKeys.map(key => {
-    const [article, addition] = key.split('-');
-    const label = `第${article}条${addition ? '之' + addition : ''}`;
-    return provisions[key] ? `${label}\n${provisions[key].text}` : `${label}：本次未定位，未取得该条正文。`;
+    const label = officialStatuteArticleLabel(key);
+    return provisions[key] ? `${label}\n${provisions[key].text}` : label + statuteSourceMessages(language).missingProvision;
   }).join('\n\n');
 }
 
@@ -291,7 +276,7 @@ function cacheStatuteOriginal(observed: StatuteAuthorityObservedVersion, origina
 
 /** Reparse the bound original, never a displayed summary or its directory. */
 export function projectCachedStatuteOriginal(keyword: string, source: CurrentStatuteOriginalEvidence,
-  cached: CachedStatuteOriginal): { sourceText: string; statuteSource: CurrentStatuteOriginalEvidence } | undefined {
+  cached: CachedStatuteOriginal, language: StatuteSourceLanguage = 'zh'): { sourceText: string; statuteSource: CurrentStatuteOriginalEvidence } | undefined {
   const locator = officialQueryLocator(keyword.trim());
   if (!locator?.articleKeys.length || !source || !cached || source.sourceId !== 'national-law-regulations'
     || normalizeStatuteReferenceTitle(normalizeTitle(locator.title)) !== normalizeStatuteReferenceTitle(normalizeTitle(source.title))
@@ -307,19 +292,19 @@ export function projectCachedStatuteOriginal(keyword: string, source: CurrentSta
   if (crypto.createHash('sha256').update(JSON.stringify(parsed)).digest('hex') !== cached.bodySha256) return undefined;
   const provisions = Object.fromEntries(locator.articleKeys.filter(key => parsed[key]).map(key => [key, parsed[key]]));
   const statuteSource = { ...source, requestedArticleKeys: locator.articleKeys, provisions };
+  const copy = statuteSourceMessages(language);
   const sourceText = [
-    '来源名称：' + source.title, '官方记录：' + source.recordId, '原始检索词：' + keyword,
-    '公布日期：' + source.versionDate + '；施行日期：' + source.effectiveDate,
-    '效力代码：' + (source.effectivenessCode ?? '未返回'), '来源链接：' + source.sourceUrl,
-    '原件读取时间：' + source.queriedAt,
-    '读取范围：复用同一新鲜缓存中身份和哈希匹配的原件文字，重新解析后仅返回明确请求的条文；未发起新的联网查询。',
-    '请求条文（来源原文摘录；未定位条文明确标注）：', requestedOfficialProvisions(provisions, locator.articleKeys),
+    copy.source + source.title, copy.record + source.recordId, copy.query + keyword,
+    copy.published + source.versionDate + copy.separator + copy.effective + source.effectiveDate,
+    copy.effectiveness + (source.effectivenessCode ?? copy.unavailable), copy.url + source.sourceUrl,
+    copy.originalReadAt + source.queriedAt,
+    copy.cachedScope, copy.requested, requestedOfficialProvisions(provisions, locator.articleKeys, language),
   ].join('\n');
   return { sourceText, statuteSource };
 }
 
-export async function searchOfficialStatuteRecords(keyword: string, limit = 5): Promise<Array<{
-  details: OfficialLawDetails; sourceUrl: string; sourceEndpoint: string; queriedAt: string; sourceText: string; statuteSource: CurrentStatuteOriginalEvidence; originalCache?: CachedStatuteOriginal;
+export async function searchOfficialStatuteRecords(keyword: string, limit = 5, language: StatuteSourceLanguage = 'zh'): Promise<Array<{
+  details: OfficialLawDetails; sourceUrl: string; sourceEndpoint: string; queriedAt: string; sourceText: string; statuteSource: CurrentStatuteOriginalEvidence; originalCache?: CachedStatuteOriginal; sourceTextByLanguage: Record<StatuteSourceLanguage, string>;
 }>> {
   if (!keyword.trim()) return [];
   const session: OfficialFetchSession = {};
@@ -330,7 +315,7 @@ export async function searchOfficialStatuteRecords(keyword: string, limit = 5): 
   const exactRows = rows.filter(row => sameTitle(row.title));
   // The national formal prefix may be omitted in a citation. Resolve it only
   // from actual returned full titles; arbitrary suffixes cannot identify a law.
-  const nationalPrefix = '中华人民共和国';
+  const nationalPrefix = OFFICIAL_STATUTE_NATIONAL_TITLE_PREFIX;
   const normalizedQuery = normalizeStatuteReferenceTitle(normalizeTitle(titleQuery));
   const formalRows = locator && !exactRows.length ? rows.filter(row => {
     const title = normalizeStatuteReferenceTitle(normalizeTitle(row.title));
@@ -355,15 +340,15 @@ export async function searchOfficialStatuteRecords(keyword: string, limit = 5): 
     };
     const sourceEndpoint = OFFICIAL_SEARCH_URL;
     const requestedArticleKeys = locator?.articleKeys || [];
-    const sourceMetadata = [
-      `来源名称：${observed.title}`, `官方记录：${observed.recordId}`, `原始检索词：${keyword}`,
-      `公布日期：${observed.versionDate || '未返回'}；施行日期：${observed.effectiveDate || '未返回'}`,
-      `效力代码：${observed.effectivenessCode ?? '未返回'}；制定机关：${observed.issuingAuthority || '未返回'}；类别：${observed.category || '未返回'}`,
+    const sourceMetadata = (copy: ReturnType<typeof statuteSourceMessages>) => [
+      copy.source + observed.title, copy.record + observed.recordId, copy.query + keyword,
+      copy.published + (observed.versionDate || copy.unavailable) + copy.separator + copy.effective + (observed.effectiveDate || copy.unavailable),
+      copy.effectiveness + (observed.effectivenessCode ?? copy.unavailable) + copy.separator + copy.authority + (observed.issuingAuthority || copy.unavailable) + copy.separator + copy.category + (observed.category || copy.unavailable),
       ...(requestedArticleKeys.length ? [] : [
-        `官方目录最后条号：${observed.articleMax ?? '未返回'}`,
-        `原件路径：${[observed.wordPath, observed.pdfPath].filter(Boolean).join('；') || '未返回'}`,
+        copy.articleMax + (observed.articleMax ?? copy.unavailable),
+        copy.originalPath + ([observed.wordPath, observed.pdfPath].filter(Boolean).join(copy.separator) || copy.unavailable),
       ]),
-      `来源链接：${sourceUrl}`, ...(requestedArticleKeys.length ? [] : [`查询端点：${sourceEndpoint}`]), `查询时间：${queriedAt}`,
+      copy.url + sourceUrl, ...(requestedArticleKeys.length ? [] : [copy.endpoint + sourceEndpoint]), copy.queriedAt + queriedAt,
     ].join('\n');
     const statuteSource: CurrentStatuteOriginalEvidence = {
       sourceId: 'national-law-regulations', title: observed.title, recordId: observed.recordId,
@@ -373,27 +358,28 @@ export async function searchOfficialStatuteRecords(keyword: string, limit = 5): 
     const selectProvisions = (provisions: StatuteTextSnapshot['provisions']) => Object.fromEntries(
       requestedArticleKeys.filter(key => provisions[key]).map(key => [key, provisions[key]]),
     );
-    let sourceText: string;
+    let sourceBody: (language: StatuteSourceLanguage) => string;
     let originalCache: CachedStatuteOriginal | undefined;
     try {
       if (observed.articleMax === null) {
         const original = await fetchOriginalDocumentText(observed, fetch, DEFAULT_TIMEOUT_MS, session);
         statuteSource.originalSha256 = crypto.createHash('sha256').update(original).digest('hex');
-        const scope = '正文提取范围：已读取同一官方记录的原件文字；官方目录未提供条数，未作外部条数或完整性核验。';
         if (requestedArticleKeys.length) {
           const observedTextMax = extractOfficialArticleMax(original.split(/\r?\n/u).map(title => ({ title })));
           if (!observedTextMax) throw new Error('Requested article boundaries unavailable in official original');
           const parsed = parseOfficialStatuteText(original, observedTextMax);
           statuteSource.provisions = selectProvisions(parsed);
           originalCache = cacheStatuteOriginal(observed, original, parsed, observedTextMax, queriedAt);
-          const requested = requestedOfficialProvisions(statuteSource.provisions, requestedArticleKeys);
-          sourceText = `${sourceMetadata}\n\n${scope}本次仅返回明确请求的条文。\n\n请求条文（来源原文摘录；未定位条文明确标注）：\n${requested}`;
+          sourceBody = lang => {
+            const copy = statuteSourceMessages(lang);
+            return `${copy.uncountedScope}${copy.selectedOnly}\n\n${copy.requested}\n${requestedOfficialProvisions(statuteSource.provisions, requestedArticleKeys, lang)}`;
+          };
         } else {
           try {
             const originalMax = extractOfficialArticleMax(original.split(/\r?\n/u).map(title => ({ title })));
             if (originalMax) originalCache = cacheStatuteOriginal(observed, original, parseOfficialStatuteText(original, originalMax), originalMax, queriedAt);
           } catch { /* Unstructured originals remain readable, with no reusable provision binding. */ }
-          sourceText = `${sourceMetadata}\n\n${scope}\n${original}`;
+          sourceBody = lang => `${statuteSourceMessages(lang).uncountedScope}\n${original}`;
         }
       } else {
         const originalText = await fetchOriginalDocumentText(observed, fetch, DEFAULT_TIMEOUT_MS, session);
@@ -404,23 +390,29 @@ export async function searchOfficialStatuteRecords(keyword: string, limit = 5): 
         statuteSource.originalSha256 = original.sha256;
         statuteSource.provisions = selectProvisions(original.provisions);
         if (requestedArticleKeys.length) {
-          const requested = requestedOfficialProvisions(original.provisions, requestedArticleKeys);
-          sourceText = `${sourceMetadata}\n\n原件内部核对：共 ${Object.keys(original.provisions).length} 条，条号与官方目录一致。本次仅返回明确请求的条文。\n\n请求条文（来源原文摘录；未定位条文明确标注）：\n${requested}`;
+          sourceBody = lang => {
+            const copy = statuteSourceMessages(lang);
+            return `${copy.checkedOriginal(Object.keys(original.provisions).length)}${copy.selectedOnly}\n\n${copy.requested}\n${requestedOfficialProvisions(original.provisions, requestedArticleKeys, lang)}`;
+          };
         } else {
           const provisions = Object.entries(original.provisions).map(([number, provision]) => {
-            const [article, addition] = number.split('-');
-            return `第${article}条${addition ? '之' + addition : ''}\n${provision.text}`;
+            return `${officialStatuteArticleLabel(number)}\n${provision.text}`;
           }).join('\n\n');
-          sourceText = `${sourceMetadata}\n\n正文提取范围：已提取并核对全部 ${Object.keys(original.provisions).length} 条正文；条号与官方目录一致。\n${String(details.title)}${locator ? '\n原始检索词：' + keyword : ''}\n\n${provisions}`;
+          sourceBody = lang => {
+            const copy = statuteSourceMessages(lang);
+            return `${copy.fullOriginal(Object.keys(original.provisions).length)}\n${String(details.title)}${locator ? '\n' + copy.query + keyword : ''}\n\n${provisions}`;
+          };
         }
       }
     } catch (error) {
       delete statuteSource.originalSha256;
       statuteSource.provisions = {};
       originalCache = undefined;
-      sourceText = `${sourceMetadata}\n\n读取范围：已取得来源元数据，正文提取未完成：${error instanceof Error ? error.message : String(error)}`;
+      sourceBody = lang => statuteSourceMessages(lang).incomplete + (error instanceof Error ? error.message : String(error));
     }
-    return { details, sourceUrl, sourceEndpoint, queriedAt, sourceText, statuteSource, originalCache };
+    const render = (lang: StatuteSourceLanguage) => `${sourceMetadata(statuteSourceMessages(lang))}\n\n${sourceBody(lang)}`;
+    const sourceTextByLanguage = { zh: render('zh'), en: render('en') };
+    return { details, sourceUrl, sourceEndpoint, queriedAt, sourceText: sourceTextByLanguage[language], statuteSource, originalCache, sourceTextByLanguage };
   }));
 }
 

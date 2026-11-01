@@ -5,6 +5,7 @@ import { buildActionEvidenceContract, claimsCurrentAppSaveCompletion, hasCoreAct
 import { affirmativeActionClauses } from '../cognition/action_instruction_clauses';
 import { responseClaimFileTargets, responseExecutionClaims } from './response_execution_claims';
 import { hasPublicSourceObservationEvidence } from '../cognition/contracts/receipt_evidence';
+import { evaluateMediaGenerationEvidence } from '../cognition/contracts/media_contract';
 import { CN_COMPLETION_GUARD_MESSAGES } from "../regions/messages/completion_guard_messages";
 import { normalizeActionIntent, isStoredMemoryRecallQuestion } from '../cognition/normalized_action_intent';
 import { hasMediaPlaybackEvidence } from '../cognition/action_contract';
@@ -25,8 +26,18 @@ export interface CompletionGuardResult {
 /** Only a full displayed source block is data; a short word cannot erase a predicate in prose. */
 export function omitObservedSourceBlocks(text: string, bodies: string[]): string {
   for (const body of new Set(bodies.filter(Boolean))) {
-    const escaped = body.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    text = text.replace(new RegExp('(^|\\n)' + escaped + '(?=\\r?\\n|$)', 'u'), '$1');
+    let offset = 0;
+    while (offset <= text.length - body.length) {
+      const index = text.indexOf(body, offset);
+      if (index < 0) break;
+      const end = index + body.length;
+      if ((index === 0 || text[index - 1] === '\n')
+        && (end === text.length || text[end] === '\n' || text.slice(end, end + 2) === '\r\n')) {
+        text = text.slice(0, index) + text.slice(end);
+        break;
+      }
+      offset = index + 1;
+    }
   }
   return text;
 }
@@ -251,16 +262,17 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
 
   // This guard checks what the answer claims. A pending-input explanation is
   // preserved; the finalizer still owns whether the requested task is complete.
-  if (claims.length === 0 && replyClaims.deferred) return { text: response, blocked: false };
+  if (claims.length === 0 && replyClaims.deferred
+    && !durableCalls.some(call => !isSuccessfulToolCall(call))
+    && !(actionContract.applies && !hasDomainCompletionEvidence
+      && failed.some(call => artifactRecordMatchesTurn(call, input)))) return { text: response, blocked: false };
   const containsKind = (contract: LumiActionContract, kind: LumiActionContract['kind']): boolean => contract.kind === kind
     || Boolean(contract.components?.some(component => containsKind(component.contract, kind)));
+  const matchesClaimedPath = (target: string, actual: string) => /[\\/]/u.test(target) ? sameArtifactPath(target, actual)
+    : Boolean(actual) && actual.split(/[\\/]/u).pop()?.toLocaleLowerCase() === target.toLocaleLowerCase();
   const matchesFileClaim = (text: string, records: ToolExecutionRecord[]) => {
     const targets = responseClaimFileTargets(text);
-    return targets.length ? targets.every(target => records.some(record => {
-      const actual = artifactPathFromRecord(record);
-      return /[\\/]/u.test(target) ? sameArtifactPath(target, actual)
-        : Boolean(actual) && actual.split(/[\\/]/u).pop()?.toLocaleLowerCase() === target.toLocaleLowerCase();
-    })) : records.length > 0;
+    return targets.length ? targets.every(target => records.some(record => matchesClaimedPath(target, artifactPathFromRecord(record)))) : records.length > 0;
   };
   const unsupportedClaim = claims.find(claim => {
     if (claim.immediate && currentSuccessful.every(isSuccessfulExactDocumentRead)) return true;
@@ -278,6 +290,17 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
       { requestId: input.requestId, taskId: input.taskId });
     if (claim.kind === 'configuration') return !isModelConfigurationReadRequest(task) || !hasDomainCompletionEvidence;
     if (claim.kind === 'artifact') {
+      if (claim.mediaKind === 'video') {
+        const matchingMediaContract = (contract: LumiActionContract): boolean => {
+          if (contract.kind === 'media_generation' && contract.mediaGeneration?.toolName === 'generate_video') {
+            const evidence = evaluateMediaGenerationEvidence(contract, currentSuccessful, input);
+            return evidence.complete && responseClaimFileTargets(claim.text, claim.mediaKind).every(target =>
+              evidence.receipt?.artifacts.some(artifact => matchesClaimedPath(target, artifact.path || '')));
+          }
+          return Boolean(contract.components?.some(component => matchingMediaContract(component.contract)));
+        };
+        return !matchingMediaContract(actionContract);
+      }
       if (hasDomainCompletionEvidence && actionContract.kind === 'work_task'
         && responseClaimFileTargets(claim.text).length === 0
         // i18n-allow: A task-creation receipt does not substantiate a saved file.

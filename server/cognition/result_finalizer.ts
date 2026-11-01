@@ -1,3 +1,4 @@
+import { isReportedStatusExcerpt } from '../work_product/response_execution_claims';
 import { affirmativeActionInstructionClauses } from './action_instruction_clauses';
 import { hasTerminalExecutionClaim } from './execution_claims';
 import { CN_ACTION_CONTRACT_COPY } from '../regions/messages/action_contract_copy';
@@ -590,7 +591,8 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   // A terminal reply cannot claim a new action is still running using only finished observations.
   // i18n-allow: Standalone ongoing-status tails; never remove verified source text.
   const ongoingTail = /(?:^|\n)\s*(?:正在执行|我正在执行)[—…\s。.!！]*$/u.exec(input.responseText || '');
-  if (ongoingTail && !(input.toolRecords || []).some(record => isSuccessfulExactDocumentRead(record)
+  if (ongoingTail && !isReportedStatusExcerpt(input.responseText || '', ongoingTail.index)
+    && !(input.toolRecords || []).some(record => isSuccessfulExactDocumentRead(record)
     && actualDocumentReadContent(record).includes(ongoingTail[0].trim()))) {
     if (actionContract.applies && hasResultCoreActionEvidence(input, actionContract, input.toolRecords || [], actionText)) {
       input = { ...input, responseText: input.responseText.slice(0, ongoingTail.index).trim() };

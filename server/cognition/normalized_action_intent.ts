@@ -891,6 +891,8 @@ function clientNavigation(text: string): NormalizedActionIntent | null {
     // A registered English surface name must be a complete UI target, not a segment of another identifier.
     if (/^[a-z0-9]/iu.test(match[0]) && /[a-z0-9_-]/iu.test(clauseText[match.index - 1] || '')
       || /[a-z0-9]$/iu.test(match[0]) && /[a-z0-9_-]/iu.test(clauseText[match.index + match[0].length] || '')) return false;
+    // A UI alias inside a bare domain or filename is still an external operand.
+    if (/^(?:\.[\p{L}\p{N}]|[\\/])/u.test(clauseText.slice(match.index + match[0].length))) return false;
     const prefix = clauseText.slice(0, match.index).replace(/[“”‘’「」『』"'\x60]/gu, '').trim();
     const suffix = clauseText.slice(match.index + match[0].length).replace(/^[”’」』"'\x60]+/u, '').trim();
     // i18n-allow: The operand ends at its UI noun/command boundary, not an external page's owner or location.

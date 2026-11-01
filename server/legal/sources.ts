@@ -17,6 +17,7 @@ import { normalizeStatuteReferenceTitle } from '../regions/packs/cn/statute_prov
 import { searchOfficialStatuteRecords, officialQueryLocator, projectCachedStatuteOriginal, type CurrentStatuteOriginalEvidence, type CachedStatuteOriginal } from './statute_authority_refresh';
 import { CN_QICHACHA_QUERY_COPY } from '../regions/packs/cn/qichacha_copy';
 import { CN_ASSET_TRACE_SOURCE_COPY } from '../regions/packs/cn/legal_asset_trace_sources';
+import { statuteEffectivenessLabel, type StatuteSourceLanguage } from '../regions/messages/statute_source_messages';
 
 // ── Cache ───────────────────────────────────────────────────────────────
 
@@ -445,6 +446,7 @@ export async function searchLegalAuthorityDatabase(params: {
   sourceIds?: string[];
   limit?: number;
   includeOfficialWeb?: boolean;
+  language?: StatuteSourceLanguage;
 }): Promise<ExternalLegalSearchResult[]> {
   const query = params.query.trim();
   if (!query) return [];
@@ -474,7 +476,7 @@ export async function searchLegalAuthorityDatabase(params: {
     && (params.type === 'law' || params.type === 'mixed' || !params.type)
     && isSelectedSource(params.sourceIds, 'national-law-regulations', ['flk', 'npc-law'])
   ) {
-    const statutes = await searchFLK(query);
+    const statutes = await searchFLK(query, params.language);
     results.push(...statutes.slice(0, limit).map(item => ({
       sourceId: 'national-law-regulations',
       sourceName: '国家法律法规数据库',
@@ -517,7 +519,10 @@ function officialStatuteCacheKey(query: string): string {
 function officialStatuteOriginalKey(title: string): string {
   return cacheKey('flk-original-v1', crypto.createHash('sha256').update(normalizeStatuteReferenceTitle(title)).digest('hex'));
 }
-type CachedStatuteSearchResult = StatuteSearchResult & { _originalCache?: CachedStatuteOriginal };
+type CachedStatuteSearchResult = StatuteSearchResult & {
+  _originalCache?: CachedStatuteOriginal;
+  _sourceTextByLanguage?: Record<StatuteSourceLanguage, string>;
+};
 function rememberStatuteOriginals(rows: CachedStatuteSearchResult[]): void {
   for (const title of new Set(rows.filter(row => row._originalCache).map(row => row.title))) {
     const key = officialStatuteOriginalKey(title);
@@ -527,51 +532,54 @@ function rememberStatuteOriginals(rows: CachedStatuteSearchResult[]): void {
     const versions = new Map(candidates.map(row => [identity(row), row]));
     // Keep metadata-only versions too; one successful version cannot erase ambiguity.
     for (const row of rows.filter(row => row.title === title)) {
-      const { sourceText: _display, ...original } = row;
+      const { sourceText: _display, _sourceTextByLanguage: _localizedDisplay, ...original } = row;
       versions.set(identity(row), original);
     }
     writeCache(key, [...versions.values()]);
   }
 }
-function publicStatuteRows(rows: CachedStatuteSearchResult[]): StatuteSearchResult[] {
-  return rows.map(({ _originalCache, ...row }) => row);
+function publicStatuteRows(rows: CachedStatuteSearchResult[], language: StatuteSourceLanguage): StatuteSearchResult[] {
+  return rows.map(({ _originalCache, _sourceTextByLanguage, ...row }) => ({ ...row,
+    status: row.statuteSource ? statuteEffectivenessLabel(row.statuteSource.effectivenessCode, language) : row.status,
+    // Legacy display-only caches remain readable without a fresh source request.
+    sourceText: _sourceTextByLanguage?.[language] ?? row.sourceText,
+  }));
 }
 
-function selectedStatuteRows(keyword: string, rows: CachedStatuteSearchResult[]): StatuteSearchResult[] | undefined {
+function selectedStatuteRows(keyword: string, rows: CachedStatuteSearchResult[], language: StatuteSourceLanguage): StatuteSearchResult[] | undefined {
   const selected = rows.map(row => {
       const source = row.statuteSource;
       if (!source || !row._originalCache || row.docId !== source.recordId || row.title !== source.title
         || row.publishDate !== source.versionDate || row.effectiveDate !== source.effectiveDate || row.url !== source.sourceUrl
         || row.queriedAt !== source.queriedAt) return undefined;
-      const projection = projectCachedStatuteOriginal(keyword, source, row._originalCache);
-      return projection ? { ...publicStatuteRows([row])[0], ...projection } : undefined;
+      const projection = projectCachedStatuteOriginal(keyword, source, row._originalCache, language);
+      return projection ? { ...publicStatuteRows([row], language)[0], ...projection } : undefined;
   });
   return selected.length && selected.every(row => row !== undefined) ? selected as StatuteSearchResult[] : undefined;
 }
 
-export async function searchFLK(keyword: string): Promise<StatuteSearchResult[]> {
+export async function searchFLK(keyword: string, language: StatuteSourceLanguage = 'zh'): Promise<StatuteSearchResult[]> {
   if (!keyword.trim()) return [];
   const ck = officialStatuteCacheKey(keyword.trim());
   const cached = readCache(ck, 24 * 60 * 60 * 1000);
   const locator = officialQueryLocator(keyword.trim());
   if (Array.isArray(cached) && cached.length > 0) {
     rememberStatuteOriginals(cached);
-    if (!locator?.articleKeys.length) return publicStatuteRows(cached);
-    const selected = selectedStatuteRows(keyword, cached);
+    if (!locator?.articleKeys.length) return publicStatuteRows(cached, language);
+    const selected = selectedStatuteRows(keyword, cached, language);
     if (selected) return selected;
   }
   if (locator?.articleKeys.length) {
     const whole = readCache(officialStatuteOriginalKey(locator.title), 24 * 60 * 60 * 1000);
     const matching: CachedStatuteSearchResult[] = Array.isArray(whole)
       ? whole.filter(row => normalizeStatuteReferenceTitle(row.title) === normalizeStatuteReferenceTitle(locator.title)) : [];
-    const selected = selectedStatuteRows(keyword, matching);
+    const selected = selectedStatuteRows(keyword, matching, language);
     if (selected) return selected;
   }
-  const statuses: Record<number, string> = { 1: '已废止', 2: '已修改', 3: '现行有效', 4: '尚未生效' };
-  const results = (await searchOfficialStatuteRecords(keyword, 20)).map(({ details, sourceUrl, sourceEndpoint, queriedAt, sourceText, statuteSource, originalCache }) => ({
+  const results = (await searchOfficialStatuteRecords(keyword, 20, language)).map(({ details, sourceUrl, sourceEndpoint, queriedAt, sourceText, statuteSource, originalCache, sourceTextByLanguage }) => ({
     title: String(details.title || '').replace(/<[^>]+>/g, '').trim(),
     docId: details.bbbs!,
-    status: statuses[Number(details.sxx)] || '未知',
+    status: statuteEffectivenessLabel(details.sxx, language),
     publishDate: String(details.gbrq || ''),
     effectiveDate: String(details.sxrq || ''),
     issuingBody: String(details.zdjgName || ''),
@@ -579,12 +587,13 @@ export async function searchFLK(keyword: string): Promise<StatuteSearchResult[]>
     sourceText,
     statuteSource,
     _originalCache: originalCache,
+    _sourceTextByLanguage: sourceTextByLanguage,
     sourceEndpoint,
     queriedAt,
   }));
   if (results.length > 0) writeCache(ck, results);
   rememberStatuteOriginals(results);
-  return publicStatuteRows(results);
+  return publicStatuteRows(results, language);
 }
 
 // ── 住建部合同模板 (mohurd.gov.cn) ─────────────────────────────────────

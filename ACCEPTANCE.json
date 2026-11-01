@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-11-01T11:52:51.683192+00:00",
+  "updatedAt": "2026-11-01T12:56:50.073165+00:00",
   "localDate": "2026-11-01",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "Main program retained-failure remediation",
-    "status": "implemented-locally-verified-with-held-runtime-validation",
-    "instruction": "730 isolated regression cases passed; native coordinate testing and historical business acceptance remain held or sealed. See latestRetainedFailureRemediation for current scope and remaining limits."
+    "title": "Cross-edition source alignment and wallpaper regression",
+    "status": "implemented-locally-verified-with-six-retained-legal-test-failures",
+    "instruction": "Common fixes and edition-specific compatibility were verified with isolated regression. Native coordinate testing and historical business acceptance remain held or sealed. See latestCrossEditionMaintenance."
   },
   "acceptedWholeItems": [
     3,
@@ -63,10 +63,10 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "D:\\Lumi-Audit-Temp\\retained-failures-remediation-20261101",
-    "manifest": "D:\\Lumi-Audit-Temp\\retained-failures-remediation-20261101\\evidence-seal.json",
-    "sha256": "31a2996974f42d0e1c08968e322548ad7082aad15b416c10af1dcc68a08bc8ea",
-    "files": 527,
+    "directory": "D:\\Lumi-Audit-Temp\\i18n-variant-sync-20261101",
+    "manifest": "D:\\Lumi-Audit-Temp\\i18n-variant-sync-20261101\\evidence-seal.json",
+    "sha256": "c6df417adefc0319effab3b8b5fd2908cc72036b39b780866b8cfc1069b472ae",
+    "files": 1603,
     "canonicalLedger": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\active-closure-checkpoint.json"
   },
@@ -432,8 +432,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "implemented-locally-verified-with-held-runtime-validation",
-    "priority": "Main reply/receipt/task-flow source fixes verified locally. Global i18n baseline, variant synchronization and real runtime validation remain explicit."
+    "status": "implemented-locally-verified-with-six-retained-legal-test-failures",
+    "priority": "Main maintenance and scoped Designer/Legal source synchronization completed locally. Wallpaper transparency and topbar appearance repaired; native/business validation remains explicitly separate."
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -9965,5 +9965,62 @@
     "installerReleased": false,
     "designerAndLawyerSynchronized": false,
     "historicalEvidencePreserved": true
+  },
+  "latestCrossEditionMaintenance": {
+    "atUTC": "2026-11-01T12:56:50.073165+00:00",
+    "status": "implemented-locally-verified-with-six-retained-legal-test-failures",
+    "scope": "Cross-edition source maintenance, wallpaper/topbar regression and isolated common/specialty checks",
+    "report": "D:\\Lumi-Audit-Temp\\i18n-variant-sync-20261101\\report.json",
+    "sourceVersions": {
+      "main": "3.1.1",
+      "legal": "3.1.1",
+      "designer": "3.1.1"
+    },
+    "counts": {
+      "main": {
+        "files": 42,
+        "executed": 1269,
+        "passed": 1269,
+        "failed": 0,
+        "skipped": 0
+      },
+      "designer": {
+        "files": 37,
+        "executed": 809,
+        "passed": 809,
+        "failed": 0,
+        "unselected": 0
+      },
+      "legal": {
+        "uniqueFiles": 36,
+        "executed": 1010,
+        "passed": 1004,
+        "failed": 6,
+        "skipped": 0,
+        "duplicateCases": 0,
+        "countKey": "file+fullName+same-name occurrence; latest complete file run replaces earlier file"
+      }
+    },
+    "remainingLegalTestFailures": 6,
+    "wholeApplicationAccepted": false,
+    "nativeCoordinateTesting": "paused",
+    "paidOrAcceptedBusinessReplayed": false,
+    "defaultModelChanged": false,
+    "sourceManifests": "D:\\Lumi-Audit-Temp\\i18n-variant-sync-20261101\\source-manifests-final.json",
+    "limitations": [
+      "Native coordinate testing remains paused. The Windows wallpaper display and running client reload were not visually accepted.",
+      "No paid generation, real customer legal/design operation, production provider request, installer release, service restart or remote push was performed.",
+      "Accepted items 3, 15 and 16 and historical held/sealed business checkpoints are preserved. The legal development archive is not reopened.",
+      "Six Legal specialty test failures remain: three read invocation counts, two mocked model invocation counts and one direct sanitizer trim equality. They are not relabelled as passes; exact invocation paths and later assertions remain bounded by the raw results.",
+      "Designer CAD evidence includes real isolated DXF/SVG generation and canonical verification; the workflow completion business handler is synthetic, so it is not full project archive acceptance.",
+      "Surface counts describe registered UI definitions, not independent accepted features. Source versions remain 3.1.1; installed packages were not rebuilt or released.",
+      "Internationalization gates protect repository boundaries and baselines; they do not prove every provider response or every existing UI string has been exhaustively localized."
+    ],
+    "evidenceSeal": "D:\\Lumi-Audit-Temp\\i18n-variant-sync-20261101\\evidence-seal.json",
+    "evidenceSha256": "c6df417adefc0319effab3b8b5fd2908cc72036b39b780866b8cfc1069b472ae",
+    "evidenceFiles": 1603,
+    "edition": "main",
+    "sourceRoot": "D:/lumiOS",
+    "sourceBaseCommit": "034c9b40985779657d849233bfced701238dc9bd"
   }
 }

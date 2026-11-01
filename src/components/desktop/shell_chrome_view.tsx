@@ -19,7 +19,7 @@ export function renderShellChrome({ viewMode, isWallpaperMode, handleTopbarPoint
           inert={isWallpaperMode ? true : undefined}
           aria-hidden={isWallpaperMode ? true : undefined}
           onPointerDown={(event) => void handleTopbarPointerDown(event)}
-          className={`lumi-shell-topbar absolute top-0 inset-x-0 h-10 glass-dark border-b border-white/5 flex items-center px-6 pointer-events-auto backdrop-blur-md transition-all duration-1000 ${isWallpaperMode ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+          className={`lumi-shell-topbar absolute top-0 inset-x-0 h-10 glass-dark border-0 flex items-center px-6 pointer-events-auto backdrop-blur-md transition-all duration-1000 ${isWallpaperMode ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
         >
           <div className="lumi-shell-topbar-left flex min-w-0 items-center gap-6">
             <button data-lumi-target="home" onClick={() => toggleWindow('home')} className="flex items-center gap-2 group transition-all">

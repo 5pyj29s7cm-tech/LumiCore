@@ -98,7 +98,7 @@ export function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], 
   const projectionInput = { task, toolCalls: executionLog, requestId: context?.requestId, taskId: context?.taskId, completionRequest: context?.completionRequest };
   const currentRecords = context?.requestId && context?.taskId
     ? inspectPublicExecutionReferences(projectionInput, '').currentRecords : [];
-  const sourceBodies = readOnly ? currentRecords.filter(record => isSuccessfulExactDocumentRead(record)
+  const sourceBodies = readOnly ? currentRecords.filter(record => record.capability?.operation === 'observe' && isSuccessfulExactDocumentRead(record)
     && documentReadMatchesRequestedTarget(record, task, context?.acceptedTaskTarget, [], context?.userId
       ? { userId: context.userId, domain: context.domain || 'personal', orgId: context.orgId || '' } : undefined))
     .map(record => [artifactPathFromRecord(record), actualDocumentReadContent(record)].filter(Boolean).join('\n')) : [];

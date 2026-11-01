@@ -1,6 +1,26 @@
 import crypto from 'node:crypto';
 
 const NUM = '[零〇一二两三四五六七八九十百千万\\d]+';
+
+/** Official Chinese citation grammar and identifiers remain in their source language. */
+export const OFFICIAL_STATUTE_NATIONAL_TITLE_PREFIX = '中华人民共和国';
+export function officialStatuteArticleLabel(key: string): string {
+  const [article, addition] = key.split('-');
+  return `第${article}条${addition ? '之' + addition : ''}`;
+}
+export function officialStatuteQueryLocator(keyword: string): { title: string; articleKeys: string[] } | undefined {
+  if (/[\r\n。！？；;!?]/u.test(keyword)) return undefined;
+  const namedTitle = /^[\p{Script=Han}A-Za-z0-9《》〈〉·（）()—-]{2,160}(?:法|法典|条例|规定|办法|解释|规则|细则|决定)$/u;
+  const tokens = keyword.split(/[ \t　]+/u).map(token => token.split(new RegExp(`第${NUM}[编章节条]`, 'u'))[0]);
+  const tokenTitles = tokens.filter(token => namedTitle.test(token));
+  const quotedTitles = extractStatuteReferences(keyword).map(reference => reference.lawName || '').filter(name => name && !tokenTitles.some(title => title.includes('《' + name + '》')));
+  const titles = [...quotedTitles, ...tokenTitles];
+  const unique = [...new Map(titles.map(title => [normalizeStatuteReferenceTitle(title), title])).values()];
+  if (unique.length !== 1) return undefined;
+  const articleKeys = [...keyword.matchAll(new RegExp(`第(${NUM})条(?:之(${NUM}))?`, 'gu'))]
+    .map(match => `${statuteNumber(match[1])}${match[2] ? '-' + statuteNumber(match[2]) : ''}`);
+  return { title: unique[0], articleKeys: [...new Set(articleKeys)] };
+}
 export const statuteTextCopy = {
   domainRule: '- 仅访问国家法律法规数据库及其已核对的官方文件存储 HTTPS 域名；买卖合同解释的固定2020版本另核验已登记的最高法院官方正文、独立章节及正文SHA，不跟随任意下载跳转。',
   saleContractHtml: {

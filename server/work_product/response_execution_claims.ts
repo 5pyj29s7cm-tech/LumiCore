@@ -2,9 +2,16 @@ import { actionInstructionClauses, affirmativeActionInstructionClauses } from '.
 import { hasConcreteTerminalExecutionClaim, hasImmediateExecutionPromise, hasTerminalExecutionClaim } from '../cognition/execution_claims';
 import { withoutLocationLiterals } from '../cognition/location_literals';
 import { claimsCurrentAppSaveCompletion } from '../cognition/action_request';
-import { ABSOLUTE_FILE_RE, FILE_NAME_RE, POSIX_ABSOLUTE_FILE_RE } from '../conversation/targets/recognition';
+import { ABSOLUTE_FILE_RE, FILE_EXTENSIONS, FILE_NAME_RE, POSIX_ABSOLUTE_FILE_RE } from '../conversation/targets/recognition';
 
-export type ResponseExecutionClaim = { kind: 'artifact' | 'read' | 'source' | 'source_verification' | 'send' | 'open' | 'playback' | 'configuration' | 'generic'; text: string; immediate: boolean };
+export type ResponseExecutionClaim = { kind: 'artifact' | 'read' | 'source' | 'source_verification' | 'send' | 'open' | 'playback' | 'configuration' | 'generic'; text: string; immediate: boolean; mediaKind?: 'video' };
+
+/** An explicit source-status label owns only the immediately following status line. */
+export function isReportedStatusExcerpt(response: string, start: number): boolean {
+  const prefix = response.slice(0, start).trimEnd().split(/\r?\n/u).at(-1)?.trim() || '';
+  // i18n-allow: Quoted source-status label grammar, never an execution authorization.
+  return /^(?:(?:此前|之前|历史|已提供的)?(?:记录|日志|原文|材料|手册)(?:中|里|内|上)?(?:的)?(?:状态短语|状态|原话|文字|内容)(?:如下|为|是)[：:。.]?|(?:the\s+)?(?:record|log|source|material|manual)\s+(?:status|status\s+text)\s+(?:reads|says|is|follows)[:.]?)$/iu.test(prefix);
+}
 
 /** Reply evidence requirements only. These declarations never authorize an action. */
 export function responseExecutionClaims(response: string): { claims: ResponseExecutionClaim[]; deferred: boolean } {
@@ -15,9 +22,13 @@ export function responseExecutionClaims(response: string): { claims: ResponseExe
   let hasDeferred = actionInstructionClauses(response).some(({ probe }) => /(?:如果|假如|假设|确认后再|请先核对|请(?:先)?把[^。！？!?\n]{0,80}告诉我)|\b(?:if\s+you|once\s+you|after\s+you)\b/iu.test(probe));
   let waitingForInput = false;
   let priorEnd = -1;
-  for (const clause of affirmativeActionInstructionClauses(response)) {
+  const clauses = affirmativeActionInstructionClauses(response);
+  for (const [index, clause] of clauses.entries()) {
     if (clause.start !== priorEnd) waitingForInput = false;
     let text = withoutLocationLiterals(clause.probe).trim();
+    // i18n-allow: Only the labelled standalone status line is quoted data; later claims are still checked.
+    if (/^(?:我)?(?:现在就做|马上动手|正在执行)[—…\s。.!！]*$/u.test(text)
+      && isReportedStatusExcerpt(response, clause.start)) continue;
     // i18n-allow: A question or figurative object is not a report of a physical action.
     if (/[?？]\s*$/u.test(text)) continue;
     text = text.replace(/打开(?:了)?(?:思路|话题|心扉)|\bopened\s+(?:my|our)\s+mind\b/giu, ' ');
@@ -56,10 +67,19 @@ export function responseExecutionClaims(response: string): { claims: ResponseExe
         // i18n-allow: Physical document operands, excluding conversational reading.
         || /(?:文件|文档|附件|原件|正文)|\b(?:the|this|that|attached|source)\s+(?:file|document|attachment|report)\b/iu.test(text));
     const send = /(?:已(?:经)?发送|(?:已|把)[^。！？!?；;\n]{0,48}发给[^。！？!?；;\n]{1,48}了)|\b(?:sent|delivered)\b/iu.test(text);
+    // The shared projection splits coordination. Carry a source-search subject
+    // only across an adjacent, unquoted "and"; filtered denials and sentence
+    // boundaries cannot lend a subject to a later assertion.
+    const previous = clauses[index - 1];
+    const coordinatedSource = previous && previous.start + previous.text.length === clause.start
+      && /\band\s*$/iu.test(previous.text)
+      && /^(?:I|we)\s+have\s+(?:searched|verified|checked)$/iu.test(previous.probe.trim())
+      && /^(?:searched|verified|checked)\b/iu.test(text);
+    const sourceText = coordinatedSource ? `${previous.probe} and ${text}` : text;
     // i18n-allow: Asserted source search/inspection, excluding inline calculation checks.
-    const source = /^(?:(?:我|我们|本轮)\s*)?已(?:经)?(?:检索|查询)(?:并|且)(?:核验|查阅)|\b(?:I|we)\s+have\s+searched\s+and\s+verified\b/iu.test(text)
+    const source = /^(?:(?:我|我们|本轮)\s*)?已(?:经)?(?:检索|查询)(?:并|且)(?:核验|查阅)|\b(?:I|we)\s+have\s+searched\s+and\s+verified\b/iu.test(sourceText)
       // i18n-allow: A source operand makes a standalone completed search explicit.
-      || /^(?:(?:我|我们|本轮)\s*)?已(?:经)?(?:检索|查询|核验|查阅)[^。！？!?\n]{0,32}(?:来源|网页|网站)|\b(?:I|we)\s+have\s+(?:searched|verified|checked)[^.!?\n]{0,32}\b(?:sources?|websites?|webpages?)\b/iu.test(text);
+      || /^(?:(?:我|我们|本轮)\s*)?已(?:经)?(?:检索|查询|核验|查阅)[^。！？!?\n]{0,32}(?:来源|网页|网站)|\b(?:I|we)\s+have\s+(?:searched|verified|checked)[^.!?\n]{0,32}\b(?:sources?|websites?|webpages?)\b/iu.test(sourceText);
     // i18n-allow: Immediate execution status, including short standalone replies.
     const immediate = hasImmediateExecutionPromise(text)
       || /^(?:我)?(?:现在就做|马上动手|正在执行)[—…\s。.!！]*$/u.test(text)
@@ -82,27 +102,34 @@ export function responseExecutionClaims(response: string): { claims: ResponseExe
     // i18n-allow: Reported live state requires a matching observation; this never authorizes a tool.
     const playback = /^(?:播放|播放器|音乐|视频)(?:已(?:经)?启动|正在播放)|\b(?:playback has started|the player is playing)\b/iu.test(text);
     const configuration = /^(?:当前|现在)(?:使用|用的|语音|音色|模型)[^。！？!?\n]{0,40}(?:TTS|音色|语音|模型)|^(?:我)?已(?:经)?(?:切换|改为|更换)[^。！？!?\n]{0,60}(?:音色|语音|模型)|\b(?:currently using|current (?:voice|model) is|(?:I have )?switched (?:the )?(?:voice|model))\b/iu.test(text);
-    if (!(ownsAction && (read || send)) && !source && !immediate && !concrete && !generic && !playback && !configuration) continue;
+    // A passive video completion still claims a produced media artifact. It is
+    // evidence-only grammar, never an accepted request or generation permission.
+    const videoCompletion = /^(?:the\s+)?requested\s+video\s+(?:is|was|has\s+been)\s+(?:successfully\s+)?(?:generated|created)\b/iu.test(text);
+    if (!(ownsAction && (read || send)) && !source && !immediate && !concrete && !generic && !playback && !configuration && !videoCompletion) continue;
     // i18n-allow: Categorize existing predicates for receipt selection, not permission.
     // i18n-allow: Source verification is a stronger claim than retrieving text.
-    const sourceVerification = source && /核验|\bverified\b/iu.test(text);
-    const kind = playback ? 'playback' : configuration ? 'configuration' : send ? 'send' : read ? 'read' : sourceVerification ? 'source_verification' : source ? 'source'
+    const sourceVerification = source && /核验|\bverified\b/iu.test(sourceText);
+    const kind = videoCompletion ? 'artifact' : playback ? 'playback' : configuration ? 'configuration' : send ? 'send' : read ? 'read' : sourceVerification ? 'source_verification' : source ? 'source'
       // i18n-allow: Artifact predicates select the matching receipt category only.
       : /(?:保存|写好|写完|写入|创建|新建|生成|导出)|\b(?:save|saved|write|written|create|created|generate|generated|exported)\b/iu.test(text) ? 'artifact'
         // i18n-allow: Existing open predicates select a receipt category, not UI copy.
         : /(?:打开)|\b(?:open|opened|opening)\b/iu.test(text) ? 'open' : 'generic';
-    claims.push({ kind, text: clause.text, immediate });
+    claims.push({ kind, text: source && coordinatedSource ? previous.text + clause.text : clause.text, immediate,
+      ...(videoCompletion ? { mediaKind: 'video' as const } : {}) });
   }
   return { claims, deferred: hasDeferred };
 }
 
 /** Reuse existing file operand grammar; this never turns a reply into a task. */
-export function responseClaimFileTargets(text: string): string[] {
+export function responseClaimFileTargets(text: string, mediaKind?: 'video'): string[] {
   const targets: string[] = [];
   let rest = text;
+  // Extend only reported-video operand recognition; task/permission grammar is unchanged.
+  const patternSource = (pattern: RegExp) => mediaKind === 'video'
+    ? pattern.source.replaceAll(FILE_EXTENSIONS, `(?:${FILE_EXTENSIONS}|mp4)`) : pattern.source;
   for (const pattern of [ABSOLUTE_FILE_RE, POSIX_ABSOLUTE_FILE_RE]) {
-    rest = rest.replace(new RegExp(pattern.source, 'giu'), target => { targets.push(target.trim()); return ' '; });
+    rest = rest.replace(new RegExp(patternSource(pattern), 'giu'), target => { targets.push(target.trim()); return ' '; });
   }
-  for (const match of rest.matchAll(new RegExp(FILE_NAME_RE.source, 'giu'))) targets.push(match[1].trim());
+  for (const match of rest.matchAll(new RegExp(patternSource(FILE_NAME_RE), 'giu'))) targets.push(match[1].trim());
   return targets;
 }

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { queryQichachaMcp, QICHACHA_QUERY_TOOLS, type QichachaQueryType } from '../../../../legal/sources';
 import { encodeToolResult } from '../../../../tools/result_envelope';
 import { searchCompany, searchEnforcementRecords, type ExternalLegalSearchKind, searchLegalAuthorityDatabase, listLegalSourceCapabilities, searchCompanySources, searchTenderSources } from "../../../../legal/sources";
+import { statuteSourceLanguage } from '../../../messages/statute_source_messages';
 import { legalWrite, legalExecutionSignal } from "../../../../legal/execution";
 import { createLegalArticle, indexLegalArticle } from "../../../../legal/kb";
 import { textArg, legalWorkspaceId, listArg } from "./context";
@@ -195,6 +196,7 @@ export async function searchExternalAuthoritiesHandler(args: Record<string, any>
 
   const results = await searchLegalAuthorityDatabase({
     query,
+    language: statuteSourceLanguage(context?.completionRequest?.currentText || context?.actionIntent),
     type,
     sourceIds,
     limit,
