@@ -108,7 +108,18 @@ export function claimsExternalLegalPlatformFinalAction(text: string): boolean {
     .test(value);
 }
 
-export function claimsExternalLegalPlatformResult(text: string): boolean {
+const COMPANY_LOOKUP_KINDS = [
+    ['registration', /\u5de5\u5546|\u767b\u8bb0|registration/iu, 'get_company_registration_info'],
+    ['shareholders', /\u80a1\u4e1c|shareholder/iu, 'get_shareholder_info'],
+    ['controller', /\u5b9e\u63a7|\u5b9e\u9645\u63a7\u5236|controller/iu, 'get_actual_controller'],
+    ['risk', /\u98ce\u9669|risk/iu, 'get_company_risk_scan'],
+    ['enforcement', /\u88ab\u6267\u884c|enforcement/iu, 'get_judgment_debtor_info'],
+    ['dishonesty', /\u5931\u4fe1|dishonesty/iu, 'get_dishonest_info'],
+    ['restrictions', /\u9650\u9ad8|\u9650\u5236\u9ad8\u6d88\u8d39|restriction/iu, 'get_high_consumption_restriction'],
+] as const;
+
+export function claimsExternalLegalPlatformResult(text: string, taskText = ''): boolean {
+  const goal = withoutNegatedLookupClauses(taskText);
   return affirmativeActionInstructionClauses(String(text || '')).some(({ probe }) => {
     const value = probe.replace(/\s+/gu, ' ');
     // i18n-allow: Past-tense negative reports, unlike imperative prohibition.
@@ -117,6 +128,10 @@ export function claimsExternalLegalPlatformResult(text: string): boolean {
     // assertion. Quoted, hypothetical and negated clauses are data, not claims.
     const explicitResult = /\u5df2(?:\u7ecf)?(?:\u5728[^。！？!?;\n]{0,24})?(?:\u67e5\u5230|\u68c0\u7d22\u5230|\u627e\u5230|\u67e5\u8be2\u5230|\u4e0b\u8f7d\u5230|\u6293\u53d6\u5230)/u.test(value);
     if (describesAuthorizedLegalExternalHandoff(value) && !explicitResult) return false;
+    // A completed query may name only its requested field, not repeat the platform
+    // or company. Reuse the source owner's ranges; this never resolves a subject
+    // or grants execution. The current canonical source still has to prove it.
+    if (explicitResult && COMPANY_LOOKUP_KINDS.some(([, pattern]) => pattern.test(goal) && pattern.test(value))) return true;
     return /(?:(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u67e5\u5230|\u68c0\u7d22\u5230|\u627e\u5230|\u67e5\u8be2\u5230|\u4e0b\u8f7d\u5230|\u6293\u53d6\u5230).{0,36}(?:\u6cd5\u8749|\bAlpha\b|\u4f01\u67e5\u67e5|\u88c1\u5224\u6587\u4e66|\u6848\u4f8b\u5e93|\u516c\u53f8|\u88ab\u6267\u884c|\u6cd5\u9662|\u7ed3\u679c))|(?:(?:\u6cd5\u8749|\bAlpha\b|\u4f01\u67e5\u67e5|\u88c1\u5224\u6587\u4e66\u7f51|\u4eba\u6c11\u6cd5\u9662\u6848\u4f8b\u5e93).{0,36}(?:\u67e5\u5230|\u68c0\u7d22\u5230|\u627e\u5230|\u7ed3\u679c|result))/iu.test(value);
   });
 }
@@ -143,15 +158,7 @@ export function hasVerifiedCompanyLookupEvidence(records: ToolExecutionRecord[],
   if (!current?.requestId || !current.taskId || !current.taskText) return false;
   const goal = withoutNegatedLookupClauses(current.taskText);
   const qccRequested = /(?:\u4f01\u67e5\u67e5|qichacha|\bqcc\b)/iu.test(goal);
-  const kinds = [
-    ['registration', /\u5de5\u5546|\u767b\u8bb0|registration/iu, 'get_company_registration_info'],
-    ['shareholders', /\u80a1\u4e1c|shareholder/iu, 'get_shareholder_info'],
-    ['controller', /\u5b9e\u63a7|\u5b9e\u9645\u63a7\u5236|controller/iu, 'get_actual_controller'],
-    ['risk', /\u98ce\u9669|risk/iu, 'get_company_risk_scan'],
-    ['enforcement', /\u88ab\u6267\u884c|enforcement/iu, 'get_judgment_debtor_info'],
-    ['dishonesty', /\u5931\u4fe1|dishonesty/iu, 'get_dishonest_info'],
-    ['restrictions', /\u9650\u9ad8|\u9650\u5236\u9ad8\u6d88\u8d39|restriction/iu, 'get_high_consumption_restriction'],
-  ] as const;
+  const kinds = COMPANY_LOOKUP_KINDS;
   const requestedKinds = kinds.filter(([,pattern]) => pattern.test(goal)).map(([kind]) => kind);
   if (persistedAtomic && (hasRequestedArtifactMutation(current.taskText) || genericExternalCommit(current.taskText)
     || /\u5929\u773c\u67e5|\u6cd5\u8749|\u88c1\u5224\u6587\u4e66\u7f51|\b(?:alpha|tianyancha|fachan)\b/iu.test(goal))) return false;

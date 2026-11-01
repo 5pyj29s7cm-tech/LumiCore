@@ -7,6 +7,7 @@ import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 
 const GIT = 'git';
+const METADATA_PATH = '.lumi/variant.json';
 const RESERVED_VARIANT_IDS = new Set(['main', 'master', 'origin', 'upstream']);
 const REQUIRED_GATES = Object.freeze(['lint', 'test', 'build']);
 
@@ -165,11 +166,28 @@ function parseWorktrees(raw) {
   });
 }
 
-function resolveCoreRoot(start = process.cwd()) {
+export function resolveCoreRoot(start = process.cwd(), configuredRoot = process.env.LUMI_CORE_ROOT) {
   const probe = path.resolve(start);
   const worktrees = parseWorktrees(git(probe, ['worktree', 'list', '--porcelain']).stdout);
+  if (configuredRoot !== undefined && configuredRoot !== '') {
+    if (typeof configuredRoot !== 'string' || !path.isAbsolute(configuredRoot)) {
+      throw new Error('The configured core worktree must be an absolute path.');
+    }
+    const candidate = fs.realpathSync.native(configuredRoot);
+    const registered = worktrees.find(item => fs.existsSync(item.worktree) && samePath(fs.realpathSync.native(item.worktree), candidate));
+    if (!registered) throw new Error('The configured core must be a registered worktree of this repository.');
+    const commonRoot = cwd => fs.realpathSync.native(path.resolve(cwd, git(cwd, ['rev-parse', '--git-common-dir']).stdout));
+    if (!samePath(commonRoot(probe), commonRoot(candidate))) throw new Error('The configured core belongs to another Git repository.');
+    if (fs.existsSync(path.join(candidate, METADATA_PATH))) throw new Error('A variant worktree cannot be used as the core.');
+    const identity = JSON.parse(fs.readFileSync(path.join(candidate, 'src-tauri', 'tauri.conf.json'), 'utf8'));
+    if (identity.productName !== 'LumiCore' || identity.identifier !== 'com.lumiai.os') {
+      throw new Error('The configured worktree does not have the trusted LumiCore product identity.');
+    }
+    return candidate;
+  }
   const main = worktrees.find(item => item.branch === 'main');
-  if (!main) throw new Error('The Lumi main worktree was not found.');
+  if (!main) throw new Error('The Lumi main worktree was not found. Use --core-root <absolute-main-product-worktree> for inspection; release operations still require main.');
+  if (fs.existsSync(path.join(main.worktree, METADATA_PATH))) throw new Error('A variant worktree cannot be used as the core.');
   return path.resolve(main.worktree);
 }
 
@@ -692,6 +710,7 @@ export function inspectVariantStatus(coreRootInput, record, options = {}) {
   const coreRoot = path.resolve(coreRootInput);
   const blockers = [];
   const warnings = [];
+  if (git(coreRoot, ['branch', '--show-current']).stdout !== 'main') blockers.push('core_worktree_not_on_main');
   const remote = findVariantRemote(coreRoot, record, false);
   if (!remote) blockers.push('repository_remote_missing');
   const originRepository = coreRepository(coreRoot);
@@ -934,7 +953,7 @@ async function createVariant(rawOptions) {
     { key: 'id', label: '英文代号' },
     { key: 'repo', label: 'GitHub 私有空仓库地址' },
   ]);
-  const coreRoot = resolveCoreRoot(options.root || process.cwd());
+  const coreRoot = resolveCoreRoot(options.root || process.cwd(), options['core-root']);
   const id = normalizeVariantId(options.id);
   const displayName = validateDisplayName(options.name);
   const parsedRepository = parseRepositoryUrl(options.repo);
@@ -1050,7 +1069,7 @@ function retiredVariant(coreRoot, id) {
 }
 
 async function statusVariants(rawOptions) {
-  const coreRoot = resolveCoreRoot(rawOptions.root || process.cwd());
+  const coreRoot = resolveCoreRoot(rawOptions.root || process.cwd(), rawOptions['core-root']);
   const records = rawOptions.id ? [findVariantWorktree(coreRoot, rawOptions.id)] : discoverVariants(coreRoot).filter(record => !retiredVariant(coreRoot, record.id));
   const liveRemote = Boolean(rawOptions.fetch || rawOptions.verify || rawOptions.strict);
   if (liveRemote) {
@@ -1109,6 +1128,7 @@ function syncPlan(coreRoot, record) {
     warnings: [...inspected.warnings],
   };
   const previewBlockers = new Set([
+    'core_worktree_not_on_main',
     'core_branch_missing',
     'core_worktree_dirty',
     'variant_worktree_dirty',
@@ -1221,7 +1241,7 @@ async function syncVariants(rawOptions) {
   if (rawOptions['skip-verify']) {
     throw new Error('Release verification cannot be skipped. Use --dry-run to inspect the plan without changing repositories.');
   }
-  const coreRoot = resolveCoreRoot(rawOptions.root || process.cwd());
+  const coreRoot = resolveCoreRoot(rawOptions.root || process.cwd(), rawOptions['core-root']);
   const options = rawOptions.all || rawOptions.id
     ? rawOptions
     : await promptFor(rawOptions, [{ key: 'id', label: '英文代号' }]);
@@ -1473,7 +1493,8 @@ async function publishDefaultBranch(rawOptions) {
   const options = rawOptions.id
     ? rawOptions
     : await promptFor(rawOptions, [{ key: 'id', label: '英文代号' }]);
-  const coreRoot = resolveCoreRoot(options.root || process.cwd());
+  const coreRoot = resolveCoreRoot(options.root || process.cwd(), options['core-root']);
+  if (git(coreRoot, ['branch', '--show-current']).stdout !== 'main') throw new Error('The primary Lumi worktree must be on main.');
   const record = findVariantWorktree(coreRoot, options.id);
   assertReleaseReady(coreRoot, record);
   const currentCoreCommit = resolveOptionalCommit(coreRoot, record.metadata.upstream.branch);
@@ -1663,14 +1684,14 @@ async function promoteVariant(rawOptions) {
     { key: 'id', label: '英文代号' },
     { key: 'commits', label: '要反哺的提交号（多个用逗号分隔）' },
   ]);
-  const coreRoot = resolveCoreRoot(options.root || process.cwd());
+  const coreRoot = resolveCoreRoot(options.root || process.cwd(), options['core-root']);
+  if (git(coreRoot, ['branch', '--show-current']).stdout !== 'main') throw new Error('The primary Lumi worktree must be on main.');
+  assertClean(coreRoot, 'Lumi main worktree');
   const record = findVariantWorktree(coreRoot, options.id);
   const remote = findVariantRemote(coreRoot, record, true);
   const remoteBranch = record.metadata.delivery.remoteBranch;
   const commits = parseCommits(options);
 
-  if (git(coreRoot, ['branch', '--show-current']).stdout !== 'main') throw new Error('The primary Lumi worktree must be on main.');
-  assertClean(coreRoot, 'Lumi main worktree');
   git(coreRoot, ['pull', '--ff-only', 'origin', 'main'], { label: 'Fast-forward Lumi main' });
   git(coreRoot, ['fetch', remote, remoteBranch], { label: `Fetch ${record.id} delivery branch` });
   const resolved = commits.map(commit => git(coreRoot, ['rev-parse', `${commit}^{commit}`]).stdout);
@@ -1715,7 +1736,7 @@ export async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
   const options = parseOptions(rest);
   if (options.id && ['new', 'sync', 'publish-default', 'promote'].includes(command)) {
-    const retired = retiredVariant(resolveCoreRoot(options.root || process.cwd()), normalizeVariantId(options.id));
+    const retired = retiredVariant(resolveCoreRoot(options.root || process.cwd(), options['core-root']), normalizeVariantId(options.id));
     if (retired) throw new Error(`Variant ${options.id} is consolidated into ${retired.successor} (${retired.workspace}); independent releases are retired.`);
   }
   if (command === 'new') return createVariant(options);

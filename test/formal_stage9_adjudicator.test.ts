@@ -27,12 +27,29 @@ import { restartEvidenceCliExitCode } from '../scripts/formal-client-restart-rec
 import { failoverEvidenceCliExitCode } from '../scripts/formal-model-failover-recovery.mjs';
 import { formalWpsBatchEvidenceCliExitCode } from '../scripts/formal-wps-batch-acceptance.mjs';
 import { formalVariantEvidenceCliExitCode } from '../scripts/formal-variant-acceptance.mjs';
+import { normalizeFormalClientTopology, currentFormalLocationDigest } from '../scripts/lib/formal-client-topology.mjs';
 
 const CREATED_AT = '2026-08-27T08:00:00.000Z';
 const RECORDED_AT = '2026-08-27T09:00:00.000Z';
 const COMPLETED_AT = '2026-08-27T10:00:00.000Z';
 const BUILD_ID = 'a'.repeat(40);
 const SOURCE_FINGERPRINT = 'b'.repeat(64);
+
+function currentTopologyPayload() {
+  const topology = normalizeFormalClientTopology({
+    clients: ['main', 'designer-client', 'legal-client'].map((clientId, i) => ({ clientId,
+      appIdentifier: ['com.lumiai.os', 'com.lumiai.designer', 'com.lumiai.legal'][i],
+      coreSha: BUILD_ID, sourceSha: BUILD_ID, sourceFingerprint: SOURCE_FINGERPRINT, nativeIdentityFingerprint: i ? String(i+1).repeat(64) : binding().nativeClient.identityFingerprint,
+      dataRoot: i ? `D:/formal/${clientId}/data` : 'D:\\formal-data-root', webviewProfile: i ? `D:/formal/${clientId}/profile` : 'D:\\formal-webview-root\\Default' })),
+    businessScopes: ['ecommerce', 'finance'].map(productLine => ({ clientId: 'main', productLine, userId: 'fixture-user', domain: 'personal', orgId: '', workspaceId: productLine+'-workspace' })),
+  });
+  return { topologySchemaVersion: 2, clientTopology: topology,
+    completedClients: topology.clients.map((c: any) => ({ clientId: c.clientId, fingerprint: c.fingerprint, nativeClient: {
+      ...binding().nativeClient, appIdentifier: c.appIdentifier, identityFingerprint: c.nativeIdentityFingerprint,
+      sourceFingerprint: c.sourceFingerprint, buildId: c.sourceSha,
+      dataRootSha256: currentFormalLocationDigest(c.dataRoot), webviewProfileSha256: currentFormalLocationDigest(c.webviewProfile),
+    } })), completedBusinessScopes: structuredClone(topology.businessScopes), completedBusinessLoops: ['design', 'ecommerce', 'finance', 'legal'] };
+}
 
 function hash(value: string | Buffer) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -492,6 +509,22 @@ function cleanup(fixture: Fixture) {
 }
 
 describe('unique formal Stage 9 adjudicator trust boundary', () => {
+  it.each(['none', 'scope', 'main-device'])('validates current topology without relaxing signed trust; mismatch=%s', mismatch => {
+    const fixture = makeFixture('integrity_only');
+    try {
+      const payload = fixture.bundle.producers.variants.payload;
+      Object.assign(payload, currentTopologyPayload());
+      delete payload.completedVariants;
+      if (mismatch === 'scope') payload.completedBusinessScopes.pop();
+      if (mismatch === 'main-device') payload.completedClients[0].nativeClient.deviceId = 'another-native-client';
+      resealProducerAndBundle(fixture, 'variants');
+      const result = adjudicate(fixture);
+      expect(result.acceptancePassed).toBe(false);
+      if (mismatch === 'scope') expect(result.errors).toContain('variants:current_business_scopes_not_proven');
+      else if (mismatch === 'main-device') expect(result.errors).toContain('variants:current_main_runtime_mismatch');
+      else expect(result).toMatchObject({status:'integrity_verified',acceptanceDecision:'not_adjudicated',errors:[]});
+    } finally { cleanup(fixture); }
+  });
   it('rejects an old self-declared synthetic bundle even when structurally complete', () => {
     const fixture = makeFixture('dual_attestation', { fileBacked: false });
     try {

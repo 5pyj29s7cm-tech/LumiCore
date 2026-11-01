@@ -1,4 +1,4 @@
-import { affirmativeActionClauses, negatedActionInstructions } from './action_instruction_clauses';
+import { affirmativeActionClauses, affirmativeActionInstructionClauses, negatedActionInstructions } from './action_instruction_clauses';
 import { withoutLocationLiterals } from './location_literals';
 
 type MediaGenerator = 'generate_video' | 'generate_image' | 'ai_edit_image';
@@ -37,10 +37,15 @@ function mediaActionProhibited(text: string, instruction: string, tool: string, 
 
 /** Inspect authoritative action clauses, never creative data or a separate preservation fence. */
 export function mediaCreationInstruction(text: string): string | null {
-  for (const part of affirmativeActionClauses(text)) {
-    const clause = withoutLocationLiterals(part);
+  for (const part of affirmativeActionInstructionClauses(text)) {
+    const clause = withoutLocationLiterals(part.probe);
+    // A coordinator does not turn a how-to explanation into authorization.
+    // Retain the enclosing sentence's explanatory prefix across clause splits.
+    const prefix = text.slice(0, part.start).split(/[。！？!?；;\n]|\.\s/u).at(-1)?.trim() || '';
+    // i18n-allow: explanatory input grammar, not visible copy.
+    if (/^(?:(?:please|can you|could you)\s+)?(?:explain|describe|how|why)\b|^(?:请\s*)?(?:解释|介绍|说明|如何|怎么|为什么)/iu.test(prefix)) continue;
     // i18n-allow: explanatory questions and planning text do not authorize paid media generation.
-    if (/^(?:为什么|怎么|如何|是否|能否|介绍|说明|解释)|\b(?:why|how|explain|describe)\b/iu.test(clause.trim())) continue;
+    if (/^(?:请\s*)?(?:为什么|怎么|如何|是否|能否|介绍|说明|解释)|\b(?:why|how|explain|describe)\b/iu.test(clause.trim())) continue;
     // i18n-allow: media generation input recognition, kept on the existing media owner.
     const action = '(?:生成|创建|制作|产出|绘制|画|做(?:成)?|合成|转成|转换为|变成)';
     // i18n-allow: media artifact kinds, not a new tool or routing category.
@@ -61,9 +66,21 @@ export function mediaCreationInstruction(text: string): string | null {
       const instruction=objectFirst[2]+objectFirst[1]+'：'+clause;
       if(!mediaActionProhibited(text,instruction,mediaGenerator(instruction)))return instruction;
     }
+    // A planning deliverable followed by an explicit generation command has
+    // two predicates. Inspect the later affirmative command independently;
+    // quotation, hypothetical and negative scopes remain owned by the shared
+    // clause projection above and the per-object prohibition below.
+    const coordinated = clause.split(/\b(?:and\s+then|then|and)\s+(?=(?:generate|create|make|draw|render|edit|modify|redraw)\b)/iu);
+    for (const candidate of coordinated.slice(1)) {
+      if (/^(?:generate|create|make|draw|render|edit|modify|redraw)\b[^.!?;\n]{0,100}\b(?:image|images|picture|photo|poster|video|clip)\b/iu.test(candidate)
+        && !/\b(?:prompt|script|copy|plan|outline|caption|code|component|webpage)\b/iu.test(candidate)
+        && !mediaActionProhibited(text, candidate, mediaGenerator(candidate))) return candidate.trim();
+    }
     // i18n-allow: English affirmative media instructions use the same projection and boundary.
     const english=clause.match(/^(?:please\s+)?(?:generate|create|make|draw|render|edit|modify|redraw)\b[^.!?;\n]{0,100}\b(?:image|images|picture|photo|poster|video|clip)\b/iu);
-    if(english&&!/\b(?:prompt|script|copy|plan|outline|caption|code|component|webpage)\b/iu.test(english[0])&&!mediaActionProhibited(text,clause,mediaGenerator(clause))) return clause;
+    if(english&&!/\b(?:prompt|script|copy|plan|outline|caption|code|component|webpage)\b/iu.test(english[0])
+      && !/^\s+(?:prompt|script|copy|plan|outline|caption|code|component|webpage)\b/iu.test(clause.slice(english[0].length))
+      && !mediaActionProhibited(text,clause,mediaGenerator(clause))) return clause;
   }
   return null;
 }

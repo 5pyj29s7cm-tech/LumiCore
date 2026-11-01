@@ -1,5 +1,6 @@
 import './helpers';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { executeToolCall } from '../server/tools/execution_engine';
 import { buildLumiExecutionPipeline } from '../server/cognition/execution_pipeline';
 import { registerAllTools } from '../server/tools/definitions';
 import { ToolRegistry } from '../server/tools/registry';
@@ -17,6 +18,21 @@ function run(text: string, channel: 'chat' | 'voice', mode: string) {
 }
 
 describe('one Lumi core across legacy inputs', () => {
+  it.each(['chat', 'voice'] as const)('denies a proposed web search at the executor for a %s recall-only turn', async channel => {
+    const text = '你还记得项目标记吗？不要搜索聊天记录。';
+    const pipeline = run(text, channel, 'assistant');
+    const localRegistry = new ToolRegistry();
+    const handler = vi.fn(async () => JSON.stringify({ results: [] }));
+    localRegistry.register({ ...registry.get('web_search')!, handler });
+    const record = await executeToolCall({ registry: localRegistry, name: 'web_search',
+      arguments: { query: 'project marker' }, context: { userId: 'single-core-test',
+        requestId: pipeline.resolution.requestId, actionIntent: text, toolPolicy: pipeline.authorizationPolicy } });
+    expect(handler).not.toHaveBeenCalled();
+    expect(record.adapterStarted).not.toBe(true);
+    expect(record.error).toBeTruthy();
+    expect(record.envelope?.status).not.toBe('verified_success');
+  });
+
   it.each(['chat', 'voice'] as const)('keeps %s file execution and no-tool boundaries independent of persisted posture', channel => {
     const executions = postures.map(mode => run('读取 C:/Users/Administrator/Documents/orders.csv，计算每项金额和总额。', channel, mode));
     for (const pipeline of executions) {
@@ -30,8 +46,21 @@ describe('one Lumi core across legacy inputs', () => {
     for (const mode of postures) {
       const answer = run('不要调用工具，也不要执行任务。陪我聊聊今天的心情。', channel, mode);
       expect(answer.executionRequested).toBe(false);
-      const recall = run('你还记得项目标记吗？不要搜索聊天记录。', channel, mode);
-      expect(recall.executionRequested).toBe(false);
+      for (const text of [
+        '你还记得项目标记吗？不要搜索聊天记录。',
+        'Do you remember the project marker? Do not search chat history.',
+      ]) {
+        const recall = run(text, channel, mode);
+        expect(recall.executionRequested, text).toBe(false);
+        expect(recall.modelToolProjection.toolNames, text).toEqual([]);
+        expect(recall.authorizationPolicy.allowedTools, text).toEqual([]);
+        expect(recall.authorizationPolicy.forbiddenTools, text).toContain('*');
+        expect(recall.trustedActionContinuation, text).toBe(false);
+      }
+      const mixed = run('你还记得项目标记吗？搜索官网公开资料。不要读取聊天记录。', channel, mode);
+      expect(mixed.executionRequested).toBe(true);
+      expect(mixed.modelToolProjection.toolNames).toContain('web_search');
+      expect(mixed.modelToolProjection.toolNames).not.toContain('external_ai_history_query');
     }
   });
 

@@ -21,7 +21,7 @@ import type { useDesktopSurfaceState } from './use_desktop_surface_state';
 import type { SurfaceReturnTarget } from './shared';
 
 export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof useDesktopSurfaceState>) {
-  const { memoryAvatarOwnerScope, memoryAvatarOwnerRef, memoryAvatarListOwnerRef, setMemoryAvatars, memoryAvatars, memoryAvatarOpenGenerationRef, memoryAvatarSurfaceGeneration, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryLoaded, setSanctuaryOpen, inferSurfaceReturnTarget, surfaceReturnTargetRef, dismissUtilitySurfaces, setIsSearchOpen, setViewMode, setActiveTab, restoreSurfaceReturnTarget, isTauri, openCommandCenter, setIsNotificationPanelOpen, setChatPrefill, lang, workDomain, orgConnection, setChatAttachmentRequest, setKnowledgeOpen, desktopIconLayout, desktopIconColumns, canUseExternalCapabilities, externalCapabilities, setWallpaperUrl, setWallpaper, setIsCompactWindowMode, setIsDesktopWidgetMode, meetingStorageKeys, meetingPreferenceScopeKey, operationMode, knowledgeOpen, setKnowledgeLoaded, chatOpen, setChatLoaded, user, selectedVoiceId, volume, setOperationMode } = previousBindings;
+  const { memoryAvatarOwnerScope, memoryAvatarOwnerRef, memoryAvatarListOwnerRef, setMemoryAvatars, memoryAvatars, memoryAvatarOpenGenerationRef, memoryAvatarSurfaceGeneration, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryLoaded, setSanctuaryOpen, inferSurfaceReturnTarget, surfaceReturnTargetRef, dismissUtilitySurfaces, setIsSearchOpen, setViewMode, setActiveTab, restoreSurfaceReturnTarget, isTauri, openCommandCenter, setIsNotificationPanelOpen, setChatPrefill, lang, workDomain, orgConnection, setChatAttachmentRequest, setKnowledgeOpen, desktopIconLayout, desktopIconColumns, canUseExternalCapabilities, externalCapabilities, setIsCompactWindowMode, setIsDesktopWidgetMode, meetingStorageKeys, meetingPreferenceScopeKey, operationMode, knowledgeOpen, setKnowledgeLoaded, chatOpen, setChatLoaded, user, selectedVoiceId, volume, setOperationMode } = previousBindings;
 
 
   // Memory Avatars are private, tool-free surfaces. Keep the list in the
@@ -187,20 +187,6 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
     desktopIconLayout.compact ? 300 : 400,
     Math.ceil(desktopIcons.length / desktopIconColumns) * desktopIconLayout.cellHeight + desktopIconLayout.startY + 24,
   );
-
-  const handleWallpaperUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const url = reader.result as string;
-      setWallpaperUrl(url);
-      setWallpaper('custom');
-      localStorage.setItem('lumi_wallpaper_type', 'custom');
-      localStorage.setItem('lumi_wallpaper_url', url);
-    };
-    reader.readAsDataURL(file);
-  };
 
   const handleWindowMinimize = async () => {
     try {
@@ -482,7 +468,7 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
     meetingStartAttemptRef, meetingPaused, renewMeetingIdentity, setMeetingNotes, setMeetingSpeakerCount, setMeetingStartedAt, lastMeetingTranscriptRef,
     setPendingOperationMode, pendingOperationMode, setMcpActivities, setAgentStatus, seenWorkflowToolEvents, callStateRef,
     startStandardVoiceCall, closeMemoryAvatar, meetingModeRef, startCall, getVoiceScopeOptions, isSpacebarRecording, openMemoryAvatar, meetingNotesOpen,
-    meetingReportGenerating, agentStatus, mcpActivities, desktopIcons, audioLevel, transcript, handleWallpaperUpload, handleTopbarPointerDown,
+    meetingReportGenerating, agentStatus, mcpActivities, desktopIcons, audioLevel, transcript, handleTopbarPointerDown,
     setShowOnboarding, toggleMute, handleWindowMinimize, handleWindowMaximize, handleWindowClose, openProactiveChat, desktopIconAreaHeight,
     getDefaultDesktopIconPosition, meetingSpeakerCount, meetingNoteHasSpeakerInfo, meetingSpeakerLabel, meetingHistory, meetingRecordId, meetingHistoryReadOnly, meetingCaseId, meetingArchiveReceipt, recordMeetingArchive, bindMeetingCase, createMeetingRecord, selectMeetingRecord, importMeetingRecords, finishSensorPrimer, showOnboarding, isTrainingOpen,
     setIsTrainingOpen, openMemoryAvatarLab, enterCreatedMemoryAvatar

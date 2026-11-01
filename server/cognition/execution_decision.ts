@@ -2,7 +2,7 @@ import { structuredMediaToolCall } from '../../shared/media_generation';
 import { TurnAnalysis } from './turn_analysis';
 import type { ToolPolicy } from '../personality/types';
 import type { ToolRegistry } from '../tools/registry';
-import { buildOperationModeToolPolicy } from './operation_modes';
+import { buildOperationModeToolPolicy, isRetiredOperationModeRequest } from './operation_modes';
 import { buildClientDiagnosticPlan } from './client_diagnostic_result';
 import { skillAuthoringTools } from '../skills/authoring_intent';
 import {
@@ -237,6 +237,8 @@ function shouldRouteTools(flow: LumiTurnFlow, isSanctuary?: boolean): boolean {
   if (isSanctuary) return false;
   if (!flow.allowToolUseForTurn) return false;
   if (flow.clientActionOnlyTurn) return false;
+  // A classified missing-capability request belongs to the existing reuse-first learning route.
+  if (flow.executionGovernance.capabilityLearningIntent === 'learn_missing') return true;
   if (flow.selfRepairTurn) return buildClientDiagnosticPlan(flow.routeText || '').length > 0;
   return true;
 }
@@ -568,8 +570,11 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     { limit: 6, context: input.visibilityContext },
   ).filter(tool => tool.name.startsWith('external_capability_action_')) || [];
   const allowToolUse = input.flow.allowToolUseForTurn
+    && !isRetiredOperationModeRequest(input.userText || input.text)
     && !unboundTerseContinuation && !input.isSanctuary;
-  const selfRepairToolPolicy = input.flow.selfRepairTurn && !buildClientDiagnosticPlan(input.flow.routeText || input.text).length && !statusOnlyContinuation
+  const selfRepairToolPolicy = input.flow.selfRepairTurn
+    && input.flow.executionGovernance.capabilityLearningIntent !== 'learn_missing'
+    && !buildClientDiagnosticPlan(input.flow.routeText || input.text).length && !statusOnlyContinuation
     ? buildSelfRepairToolPolicy(input.flow.routeText || input.text, input.toolRegistry, input.visibilityContext)
     : null;
   const clientActionToolPolicy = input.flow.clientActionOnlyTurn

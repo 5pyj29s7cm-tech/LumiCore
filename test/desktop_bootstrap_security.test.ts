@@ -6,7 +6,6 @@ import { readDB, writeDB } from '../db_layer';
 import { mountAuthRoutes } from '../server/routes/auth';
 import {
   getDesktopBootstrapProofPath,
-  getDesktopSessionNativeClientIdentity,
   initializeDesktopBootstrapProof,
   issueDesktopSessionProof,
   resetDesktopBootstrapStateForTests,
@@ -208,7 +207,7 @@ describe.sequential('native desktop bootstrap security', () => {
     expect(accepted.body.desktopSessionProof).toMatch(/^[A-Za-z0-9_-]{32,256}$/);
     expect(verifyDesktopSessionProof(accepted.body.desktopSessionProof, adminUid)).toBe(true);
     expect(verifyDesktopSessionProof(accepted.body.desktopSessionProof, 'another-user')).toBe(false);
-    expect(getDesktopSessionNativeClientIdentity(accepted.body.desktopSessionProof, adminUid))
+    expect(resolveDesktopSession(accepted.body.desktopSessionProof, adminUid)?.nativeClientIdentity)
       .toMatchObject(nativeClientIdentity);
     expect(accepted.body.nativeClientIdentity).toMatchObject(nativeClientIdentity);
     expect(accepted.body.nativeClientIdentity).toMatchObject({

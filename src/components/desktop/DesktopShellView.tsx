@@ -62,8 +62,6 @@ handleShellContextMenu: (e: React.MouseEvent) => void;
 isWallpaperDesktopControl: boolean;
 wallpaper: string;
 wallpaperUrl: string;
-wallpaperInputRef: React.RefObject<HTMLInputElement>;
-handleWallpaperUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
 isWallpaperWorkbench: boolean;
 applyWallpaperMode: (enabled: boolean, options?: { silent?: boolean; timeoutMs?: number; presentation?: WallpaperPresentation; workspace?: WallpaperWorkspace; }) => Promise<{ enabled: boolean; presentation: WallpaperPresentation; workspace: WallpaperWorkspace; }>;
 lang: "en" | "zh";
@@ -217,7 +215,7 @@ setMemoryAvatars: React.Dispatch<React.SetStateAction<any[]>>;
 enterCreatedMemoryAvatar: (avatar: any) => void;
 };
 export function DesktopShellView(input: DesktopShellViewInput) {
-  const { resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, desktopExecutionPreference, setDesktopExecutionPreference, lang, personalScale, personalOpacity, syncRate, t, setSyncRate, openSurface, closeSurface, workDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, user, startStandardVoiceCall, endVoiceCallFromUI, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar, callState, audioLevel } = input;
+  const { resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, isWallpaperWorkbench, applyWallpaperMode, desktopExecutionPreference, setDesktopExecutionPreference, lang, personalScale, personalOpacity, syncRate, t, setSyncRate, openSurface, closeSurface, workDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, user, startStandardVoiceCall, endVoiceCallFromUI, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar, callState, audioLevel } = input;
 
   const handleRealmWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     if ((input.activeTab !== 'home' && !input.minimizedWindows.includes(input.activeTab)) || input.isWallpaperMode
@@ -263,7 +261,6 @@ export function DesktopShellView(input: DesktopShellViewInput) {
         ...(!isWallpaperMode && viewMode === 'personal' && activeTab !== 'org' ? { backgroundColor: resolvedAppearanceMode === 'light' ? '#fff' : '#000', backgroundImage: 'none' } : {}),
       }}
     >
-      <input ref={wallpaperInputRef} type="file" accept="image/*" onChange={handleWallpaperUpload} className="hidden" />
       {isWallpaperWorkbench && (
         <motion.button
           data-wallpaper-exit

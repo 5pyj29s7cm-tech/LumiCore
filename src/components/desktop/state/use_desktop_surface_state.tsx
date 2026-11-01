@@ -236,9 +236,8 @@ export function useDesktopSurfaceState({
     workspace: WallpaperWorkspace;
   } | null>(null);
   const viewport = useViewportSize();
-  const [wallpaper, setWallpaper] = useState<string>(() => localStorage.getItem('lumi_wallpaper_type') || 'celestial');
-  const [wallpaperUrl, setWallpaperUrl] = useState<string>(() => localStorage.getItem('lumi_wallpaper_url') || '');
-  const wallpaperInputRef = React.useRef<HTMLInputElement>(null);
+  const [wallpaper] = useState<string>(() => localStorage.getItem('lumi_wallpaper_type') || 'celestial');
+  const [wallpaperUrl] = useState<string>(() => localStorage.getItem('lumi_wallpaper_url') || '');
   const desktopChrome = useMemo(() => getDesktopChromeMetrics(viewport), [viewport]);
   const desktopIconLayout = useMemo(() => getDesktopIconLayout(viewport), [viewport]);
   const isCompactDesktopLayout = useMemo(() => shouldUseCompactDesktopLayout(viewport), [viewport]);
@@ -436,7 +435,7 @@ export function useDesktopSurfaceState({
     setIsSearchOpen, setViewMode, setActiveTab, restoreSurfaceReturnTarget, isTauri, openCommandCenter,
     setIsNotificationPanelOpen, setChatPrefill, lang, workDomain, orgConnection, setChatAttachmentRequest,
     setKnowledgeOpen, desktopIconLayout, desktopIconColumns, canUseExternalCapabilities, externalCapabilities,
-    setWallpaperUrl, setWallpaper, setIsCompactWindowMode, setIsDesktopWidgetMode, meetingStorageKeys,
+    setIsCompactWindowMode, setIsDesktopWidgetMode, meetingStorageKeys,
     meetingPreferenceScopeKey, operationMode, knowledgeOpen, setKnowledgeLoaded, chatOpen, setChatLoaded, user,
     selectedVoiceId, volume, setOperationMode, setClientPermissions, setClientRuntime, closeToBackgroundSyncRef,
     aiConfig, knowledgeRefreshSequenceRef, setKnowledgeRuntimeState, setOrganizationWorkspaceView, windowCommand,
@@ -450,7 +449,7 @@ export function useDesktopSurfaceState({
     clientRuntime, viewMode, focusedWindow, settingsSection, commandCenterView, isNotificationPanelOpen,
     organizationWorkspaceView, clientPermissions, availableOrganizationWorkspaceViews, reportedKnowledgeRuntimeState,
     minimizedWindows, wallpaperPresentation, wallpaperWorkspace, selectedPet, petReaction, resolvedAppearanceMode,
-    desktopChrome, isCompactDesktopLayout, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef,
+    desktopChrome, isCompactDesktopLayout, isWallpaperDesktopControl, wallpaper, wallpaperUrl,
     personalScale, personalOpacity, syncRate, setSyncRate, unreadCount, time, isCompactWindowMode,
     dockPositionClassName, onLogin, launchExternalCapability, notifications, askComputerProfileQuestion, setCreationRequestId, setLang, personalizationSection, petPreferenceScopeKey,
     renderTabContent, knowledgeLoaded, chatLoaded, setCommandCenterView, chatPrefill, creationRequestId,

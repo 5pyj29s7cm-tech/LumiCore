@@ -884,8 +884,18 @@ function clientNavigation(text: string): NormalizedActionIntent | null {
   const clauses = affirmativeActionInstructionClauses(text);
   // i18n-allow: A client surface is the direct navigation operand, with only client/determiner qualifiers between them.
   const directPrefix = new RegExp('^(?:(?:请你?|帮我|麻烦你?|现在|直接|先|再|然后|接着|也|并|只|仅)\\s*|(?:please|now|directly|first|then|next|also|just)\\s+)*(?:' + CLIENT_NAVIGATION_VERB_RE.source + ')\\s*(?:(?:到|(?:Lumi|露米|当前客户端)(?:的)?|当前|我的)\\s*|\\b(?:to|the|current|my|personal|lumi|client)(?:\\s+|$))*$', 'iu');
-  const surface = CLIENT_SURFACE_RULES.find(candidate => clauses.some(({ text: clauseText, probe }) => {
-    if (!CLIENT_NAVIGATION_VERB_RE.test(probe)) return false;
+  // Only a named test/navigation step heading can precede a fresh polite command.
+  // Quotation, prohibition and hypothetical filtering still applies to the entire clause.
+  // i18n-allow: Bounded Chinese instruction-header grammar, not display text.
+  const stepHeading = /^(?:(?:主程序|客户端|本次|当前|Lumi)\s*)?(?:实机)?(?:验收|测试|操作|导航)[\p{L}\p{N}· _-]{0,32}第[一二三四五六七八九十百0-9]+步[：:]\s*(?=请(?:你)?(?:返回|回到|打开|进入))/iu;
+  // i18n-allow: Direct browse verb for a registered Lumi surface only.
+  const browsePrefix = /^(?:(?:请你?|帮我|麻烦你?|现在|直接|先|再|然后|接着|也|并|只|仅)\s*)*去\s*(?:(?:Lumi|露米|当前客户端)(?:的)?\s*)?$/iu;
+  const surface = CLIENT_SURFACE_RULES.find(candidate => clauses.some(({ text: originalClause, probe: originalProbe }) => {
+    const hasStepHeading = stepHeading.test(originalClause) && stepHeading.test(originalProbe);
+    if (hasStepHeading && /[？?]/u.test(originalClause)) return false; // i18n-allow: Question punctuation is not an imperative heading.
+    const clauseText = hasStepHeading ? originalClause.replace(stepHeading, '') : originalClause;
+    const probe = hasStepHeading ? originalProbe.replace(stepHeading, '') : originalProbe;
+    if (!CLIENT_NAVIGATION_VERB_RE.test(probe) && !/去/u.test(probe)) return false; // i18n-allow: Local browse grammar.
     const match = clauseText.match(candidate.pattern);
     if (!match || match.index == null) return false;
     // A registered English surface name must be a complete UI target, not a segment of another identifier.
@@ -895,6 +905,11 @@ function clientNavigation(text: string): NormalizedActionIntent | null {
     if (/^(?:\.[\p{L}\p{N}]|[\\/])/u.test(clauseText.slice(match.index + match[0].length))) return false;
     const prefix = clauseText.slice(0, match.index).replace(/[“”‘’「」『』"'\x60]/gu, '').trim();
     const suffix = clauseText.slice(match.index + match[0].length).replace(/^[”’」』"'\x60]+/u, '').trim();
+    // Browsing opens a visible surface; it never toggles capture or wallpaper state.
+    // i18n-allow: Bounded Chinese browse suffix and sentence terminators.
+    const browseOnly = browsePrefix.test(prefix) && !['meeting', 'wallpaper'].includes(candidate.target)
+      && /^(?:页面|界面|面板|窗口)?\s*(?:看看|看一下)\s*[，,。.!！；;]?$/u.test(suffix);
+    if (browseOnly) return true;
     // i18n-allow: The operand ends at its UI noun/command boundary, not an external page's owner or location.
     return directPrefix.test(prefix)
       && /^(?:(?:页面|界面|面板|窗口)|(?:page|screen|panel|window)\b)?\s*(?:(?:一下|吧|即可)\s*)?(?:[，,。.!?！？；;\n]|$|(?:后|之后|然后|并|并且)|\b(?:and|then|afterwards)\b)/iu.test(suffix);

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { validateCurrentTopologyCompletion } from './lib/formal-client-topology.mjs';
 
 export const FORMAL_STAGE9_ADJUDICATOR_SCHEMA_VERSION = 2;
 export const FORMAL_STAGE9_BUNDLE_KIND = 'lumi.formal-stage9-evidence-bundle';
@@ -723,6 +724,21 @@ function validateVariantsPayload(payload, binding, errors) {
     addError(errors, 'variants:native_identity_mismatch');
   }
   const variants = Array.isArray(payload?.completedVariants) ? payload.completedVariants.map(text) : [];
+  if (payload?.topologySchemaVersion === 2) {
+    try { validateCurrentTopologyCompletion(payload); }
+    catch (error) { addError(errors, `variants:${error.message}`); }
+    const main = Array.isArray(payload.completedClients) ? payload.completedClients.find(item => item?.clientId === 'main') : null;
+    if (!nativeIdentityMatches(main?.nativeClient, binding)
+      || main?.nativeClient?.dataRootSha256 !== binding.locations.dataRootSha256
+      || main?.nativeClient?.webviewProfileSha256 !== binding.locations.webview2ProfileDirSha256) {
+      addError(errors, 'variants:current_main_runtime_mismatch');
+    }
+    return;
+  }
+  if (payload?.topologySchemaVersion !== undefined && payload.topologySchemaVersion !== 1) {
+    addError(errors, 'variants:topology_schema_invalid');
+    return;
+  }
   const required = ['designer-client', 'ecommerce-client', 'finance-client', 'legal-client'];
   if (variants.length !== required.length || required.some(id => !variants.includes(id))) {
     addError(errors, 'variants:four_business_loops_not_proven');

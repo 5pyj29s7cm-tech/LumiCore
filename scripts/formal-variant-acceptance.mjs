@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { normalizeFormalClientTopology, currentFormalScenarioBinding, validateCurrentClientRuntime, topologyJson } from './lib/formal-client-topology.mjs';
 import {
   createFormalStage9FileBackedProducerEvidence,
   formalStage9ProducerEvidenceExitCode,
@@ -426,9 +427,30 @@ export function buildFormalVariantAcceptanceManifest(input) {
   return { ...manifest, manifestDigest: manifestDigest(manifest) };
 }
 
+// Schema 1 remains the immutable historical four-independent-client contract.
+export function buildCurrentFormalVariantAcceptanceManifest(input) {
+  const topology = normalizeFormalClientTopology(input);
+  const generatedAt = text(input?.generatedAt || new Date().toISOString());
+  assertCondition(!Number.isNaN(Date.parse(generatedAt)), 'manifest_generated_at_invalid');
+  const manifest = {
+    schemaVersion: 2, kind: FORMAL_VARIANT_ACCEPTANCE_KIND, generatedAt,
+    ...topology,
+    executionPolicy: { mode: 'orchestration_and_validation_only', launchClient: false,
+      synthesizeBusinessResults: false, allClientsRequired: true, allBusinessScopesRequired: true, defaultOutcome: 'unverified' },
+    scenarios: DEFINITIONS.map(definition => scenarioFromDefinition(definition, currentFormalScenarioBinding(topology, definition.productLine))),
+  };
+  return { ...manifest, manifestDigest: manifestDigest(manifest) };
+}
+
 function validateManifestStructure(manifest) {
   const errors = [];
   if (!isPlainObject(manifest)) return ['manifest_invalid'];
+  if (manifest.schemaVersion === 2) {
+    try {
+      const expected = buildCurrentFormalVariantAcceptanceManifest(manifest);
+      return stableManifestJson(manifest) === stableManifestJson(expected) ? [] : ['current_manifest_changed'];
+    } catch (error) { return [error.code || error.message || 'current_manifest_invalid']; }
+  }
   if (manifest.schemaVersion !== FORMAL_VARIANT_ACCEPTANCE_SCHEMA_VERSION) errors.push('manifest_schema_invalid');
   if (manifest.kind !== FORMAL_VARIANT_ACCEPTANCE_KIND) errors.push('manifest_kind_invalid');
   if (!SHA256_RE.test(text(manifest.manifestDigest))) errors.push('manifest_digest_missing');
@@ -551,14 +573,24 @@ function verifyBoundFile(record, dataRoot) {
 }
 
 function validateScenarioEvidence(scenario, evidence, options = {}) {
-  const prefix = scenario.binding.variantId;
+  const prefix = scenario.binding.variantId || `${scenario.binding.clientId}/${scenario.workflow.productLine}`;
   const errors = [];
   if (!isPlainObject(evidence)) return [`${prefix}:evidence_missing`];
   if (text(evidence.bindingFingerprint) !== scenario.binding.fingerprint) errors.push(`${prefix}:binding_fingerprint_mismatch`);
-  for (const key of ['variantId', 'coreSha', 'variantSha', 'dataRoot', 'webviewProfile']) {
+  const bindingKeys = scenario.binding.clientId
+    ? ['clientId', 'appIdentifier', 'nativeIdentityFingerprint', 'sourceFingerprint', 'coreSha', 'sourceSha', 'dataRoot', 'webviewProfile']
+    : ['variantId', 'coreSha', 'variantSha', 'dataRoot', 'webviewProfile'];
+  for (const key of bindingKeys) {
     if (text(evidence.runtimeBinding?.[key]) !== text(scenario.binding[key])) {
       errors.push(`${prefix}:runtime_binding_${key}_mismatch`);
     }
+  }
+  if (scenario.binding.clientId && topologyJson(evidence.runtimeBinding?.businessScope) !== topologyJson(scenario.binding.businessScope)) {
+    errors.push(`${prefix}:runtime_business_scope_mismatch`);
+  }
+  if (scenario.binding.clientId) {
+    try { validateCurrentClientRuntime(scenario.binding, evidence.nativeClient); }
+    catch (error) { errors.push(`${prefix}:${error.message}`); }
   }
   if (!validIsoDate(evidence.completedAt)) errors.push(`${prefix}:completed_at_invalid`);
 
@@ -594,6 +626,9 @@ function validateScenarioEvidence(scenario, evidence, options = {}) {
   const stepRequestIds = new Set(stepEvidence.map(item => text(item?.requestId)).filter(Boolean));
 
   const receipts = Array.isArray(evidence.toolReceipts) ? evidence.toolReceipts : [];
+  if (scenario.binding.businessScope && receipts.some(receipt => topologyJson(receipt?.businessScope) !== topologyJson(scenario.binding.businessScope))) {
+    errors.push(`${prefix}:receipt_business_scope_mismatch`);
+  }
   const allowedTools = new Set(scenario.allowedTools);
   if (receipts.some(receipt => !allowedTools.has(text(receipt?.toolName)))) errors.push(`${prefix}:unexpected_tool_receipt`);
   if (receipts.some(receipt => (
@@ -681,7 +716,7 @@ export function validateFormalVariantAcceptanceEvidence(manifest, evidence, opti
   }
   const errors = [];
   if (!isPlainObject(evidence)
-    || evidence.schemaVersion !== FORMAL_VARIANT_ACCEPTANCE_SCHEMA_VERSION
+    || evidence.schemaVersion !== manifest.schemaVersion
     || evidence.kind !== FORMAL_VARIANT_EVIDENCE_KIND) {
     return evidenceValidationResult(['evidence_envelope_invalid'], options.verifyFilesystem);
   }
@@ -691,6 +726,14 @@ export function validateFormalVariantAcceptanceEvidence(manifest, evidence, opti
   for (const scenario of manifest.scenarios) {
     const actual = scenarios.find(item => item?.scenarioId === scenario.scenarioId);
     errors.push(...validateScenarioEvidence(scenario, actual, options));
+  }
+  if (manifest.schemaVersion === 2) {
+    const taskOwners = new Map();
+    for (const scenario of scenarios) for (const step of Array.isArray(scenario?.steps) ? scenario.steps : []) {
+      const taskId = text(step?.taskId);
+      if (taskOwners.has(taskId) && taskOwners.get(taskId) !== scenario.scenarioId) errors.push('current_scope_task_reused');
+      taskOwners.set(taskId, scenario.scenarioId);
+    }
   }
   return evidenceValidationResult(errors, options.verifyFilesystem);
 }
@@ -741,9 +784,9 @@ export async function createVariantFormalStage9ProducerEvidence(options = {}) {
 
 export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv);
-  if (command === 'manifest') {
+  if (command === 'manifest' || command === 'manifest-current') {
     const raw = readJsonFile(options.bindings, 'bindings_file_invalid');
-    const manifest = buildFormalVariantAcceptanceManifest({
+    const manifest = command === 'manifest-current' ? buildCurrentFormalVariantAcceptanceManifest(raw) : buildFormalVariantAcceptanceManifest({
       bindings: Array.isArray(raw) ? raw : raw.bindings,
       generatedAt: raw.generatedAt,
     });
@@ -758,11 +801,11 @@ export async function main(argv = process.argv.slice(2)) {
     const result = validateFormalVariantAcceptanceEvidence(manifest, evidence, { verifyFilesystem: true });
     emitJson(result, options.output);
     // This command validates an evidence package; it deliberately cannot
-    // adjudicate four real client sessions from caller-supplied JSON alone.
+    // adjudicate real client sessions from caller-supplied JSON alone.
     process.exitCode = formalVariantEvidenceCliExitCode(result);
     return;
   }
-  throw new FormalVariantAcceptanceError('usage: manifest --bindings <absolute-json> [--output <new-json>] | validate --manifest <absolute-json> --evidence <absolute-json> [--output <new-json>]');
+  throw new FormalVariantAcceptanceError('usage: manifest-current (schema 2) or manifest (historical schema 1) --bindings <absolute-json> [--output <new-json>] | validate --manifest <absolute-json> --evidence <absolute-json> [--output <new-json>]');
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : '';

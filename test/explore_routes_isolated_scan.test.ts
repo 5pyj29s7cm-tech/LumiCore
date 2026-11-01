@@ -53,10 +53,6 @@ vi.mock('../server/autonomy/professions', () => ({
   detectProfession: () => [],
   saveProfessionProfile: vi.fn(),
 }));
-vi.mock('../server/autonomy/profession_templates', () => ({
-  installProfessionAgents: () => 0,
-  getProfessionTemplates: () => [],
-}));
 vi.mock('../server/autonomy/planner', () => ({
   createPlan: vi.fn(),
   updatePlan: vi.fn(),

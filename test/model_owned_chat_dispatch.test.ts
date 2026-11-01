@@ -1,7 +1,5 @@
 import { readImplementationSource } from './implementation_source';
 import './helpers';
-import { enCatalog } from '../src/i18n/locales/catalog_en';
-import { zhCatalog } from '../src/i18n/locales/catalog_zh';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -142,21 +140,7 @@ describe('model-owned main chat architecture', () => {
     expect(buildModelCapabilityPolicy(execution).maxIterations).toBeGreaterThanOrEqual(3);
   });
 
-  it('describes Chat foreground escalation consistently with the hard runtime policy', () => {
-    const adapterRegistrySource = readImplementationSource(path.resolve(process.cwd(), 'server/adapters/registry.ts'), 'utf8');
-    const generatedMessages = JSON.parse(readImplementationSource(
-      path.resolve(process.cwd(), 'src/i18n/locales/ui.generated.json'),
-      'utf8',
-    ));
-
-    expect(enCatalog.modeChatDesc).toContain("Clear action requests may use Assistant's foreground tools for that turn");
-    expect(zhCatalog.modeChatDesc).toContain('明确要求执行时，该回合可调用助手模式的前台工具');
-    expect(generatedMessages['desktop-onboarding.chat-answer-only-no-proactive.fb6dff28d4'].en)
-      .toContain('explicit action requests may use Assistant tools');
-    expect(generatedMessages['desktop-ui.pure-conversation-answers-and-discussion.10bb20f365'].en)
-      .not.toContain('no tools');
-    expect(adapterRegistrySource).not.toContain('Chat is pure conversation');
-
+  it('keeps explicit actions available through the unified core for a legacy chat ID', () => {
     const trace = traceToolIntentDecision(
       'Open Notepad and write the requested note.',
       'chat',

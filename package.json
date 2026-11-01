@@ -22,7 +22,7 @@
     "build:desktop": "npm run build && npm run check:compact-layout-build && npm run build:server && npm run prepare:node && npm run prepare:desktop",
     "start": "tsx launcher.ts",
     "preview": "vite preview",
-    "clean": "rm -rf dist dist-electron",
+    "clean": "node scripts/clean-build-output.mjs",
     "check:architecture": "node scripts/check-architecture-boundaries.mjs",
     "lint": "npm run check:architecture && npm run lint:i18n && npm run lint:hooks && npm run lint:hooks:critical && tsc --noEmit",
     "lint:hooks": "eslint \"src/**/*.{ts,tsx}\" --quiet",

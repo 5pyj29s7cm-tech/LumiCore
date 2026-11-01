@@ -2147,10 +2147,6 @@
     "en": "Autonomy",
     "zh": "自主"
   },
-  "desktop-onboarding.chat-answer-only-no-proactive.fb6dff28d4": {
-    "en": "Chat: conversation first; explicit action requests may use Assistant tools for that turn",
-    "zh": "聊天：以对话为主；明确要求执行时，该回合可以使用助手工具"
-  },
   "desktop-onboarding.chat.1594b2f45c": {
     "en": "Chat",
     "zh": "聊天"
@@ -2750,10 +2746,6 @@
   "desktop-ui.preparing.47ac61c0ae": {
     "en": "Preparing",
     "zh": "整理中"
-  },
-  "desktop-ui.pure-conversation-answers-and-discussion.10bb20f365": {
-    "en": "Conversation-first. Clear action requests may use Assistant's foreground tools for that turn without changing modes; sensitive actions still require confirmation.",
-    "zh": "以对话为主。明确要求执行时，该回合可调用助手模式的前台工具且界面仍保持聊天；敏感操作仍会确认。"
   },
   "desktop-ui.queue.9b6d779554": {
     "en": "Queue",

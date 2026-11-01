@@ -181,14 +181,6 @@ export function resolveDesktopSession(
     : null;
 }
 
-/** @deprecated Prefer resolveDesktopSession when establishing trust. */
-export function getDesktopSessionNativeClientIdentity(
-  value: unknown,
-  expectedUid: string,
-): NativeClientIdentity | null {
-  return resolveDesktopSession(value, expectedUid)?.nativeClientIdentity || null;
-}
-
 export function resetDesktopBootstrapStateForTests(options: { removeFile?: boolean } = {}): void {
   bootstrapProofState = null;
   desktopSessions = [];

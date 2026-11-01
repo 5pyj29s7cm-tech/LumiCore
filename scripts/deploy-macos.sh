@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# LumiCore macOS Deployment
+# Development-only unbundled macOS copy; not a signed .app installer.
 # Usage: ./scripts/deploy-macos.sh [install_dir]
-# Default: /Applications/LumiCore.app
+# Default: /usr/local/lib/lumi-core-dev
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-INSTALL_DIR="${1:-/Applications/LumiCore.app}"
+INSTALL_DIR="${1:-/usr/local/lib/lumi-core-dev}"
+# Never create a flat directory that looks like a valid macOS application bundle.
+if [[ "$INSTALL_DIR" =~ \.[aA][pP][pP](/|$) ]]; then
+  printf 'Development copy refuses .app paths. Use tauri:build and the signed installer gates for an application bundle.\n' >&2
+  exit 1
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -82,11 +87,9 @@ sudo cp "$BINARY" "$INSTALL_DIR/lumi-core"
 sudo chmod +x "$INSTALL_DIR/lumi-core"
 echo -e "${GRAY}  lumi-core${NC}"
 
-# Copy dist-server (Node.js backend)
-DIST_SERVER="$PROJECT_DIR/desktop-resources/dist-server"
-if [ -d "$DIST_SERVER" ]; then
-  sudo cp -R "$DIST_SERVER"/* "$INSTALL_DIR/dist-server/"
-fi
+# Copy and verify the backend; any missing file or copy failure stops deployment.
+source "$SCRIPT_DIR/lib/deploy-backend.sh"
+install_backend_resources "$PROJECT_DIR/desktop-resources/dist-server" "$INSTALL_DIR/dist-server"
 echo -e "${GRAY}  dist-server/${NC}"
 
 # Copy GPT-SoVITS (optional)
@@ -96,14 +99,14 @@ if [ -d "$TTS_DIR" ] && ls "$TTS_DIR"/*.py &>/dev/null 2>&1; then
   echo -e "${GRAY}  gpt-sovits-src/ (local TTS)${NC}"
 fi
 
-echo -e "${GREEN}  Installed.${NC}"
+echo -e "${GREEN}  Development files copied; not a signed application bundle.${NC}"
 
 # ── Desktop shortcut ──────────────────────────────────────────────────
 echo -e "${YELLOW}[6/6] Creating desktop shortcut...${NC}"
 
-# Create a .app-like launcher in /Applications that the user can pin to Dock
+# Create an explicit development command launcher, not a Finder application bundle.
 DESKTOP_DIR="$HOME/Desktop"
-LAUNCHER="$DESKTOP_DIR/LumiCore.command"
+LAUNCHER="$DESKTOP_DIR/LumiCore-dev.command"
 cat > "$LAUNCHER" << LAUNCHEREOF
 #!/usr/bin/env bash
 exec "$INSTALL_DIR/lumi-core" &
@@ -113,8 +116,8 @@ echo -e "${GREEN}  Desktop launcher: ${LAUNCHER}${NC}"
 
 echo ""
 echo -e "${CYAN}============================================"
-echo -e "  Deployment complete!"
+echo -e "  Development copy complete; formal installer checks have not run."
 echo -e "  Data: ~/LumiCore/data/"
-echo -e "  App:  ${INSTALL_DIR}/"
+echo -e "  Development files:  ${INSTALL_DIR}/"
 echo -e "  Desktop launcher ready."
 echo -e "============================================${NC}"

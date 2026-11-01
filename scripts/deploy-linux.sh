@@ -89,11 +89,9 @@ sudo cp "$BINARY" "$INSTALL_DIR/lumi-core"
 sudo chmod +x "$INSTALL_DIR/lumi-core"
 echo -e "${GRAY}  lumi-core${NC}"
 
-# Copy dist-server (Node.js backend)
-DIST_SERVER="$PROJECT_DIR/desktop-resources/dist-server"
-sudo cp -R "$DIST_SERVER"/* "$INSTALL_DIR/dist-server/" 2>/dev/null || true
-# Ensure node binary is executable
-sudo chmod -R +x "$INSTALL_DIR/dist-server/"
+# Copy and verify the backend; any missing file or copy failure stops deployment.
+source "$SCRIPT_DIR/lib/deploy-backend.sh"
+install_backend_resources "$PROJECT_DIR/desktop-resources/dist-server" "$INSTALL_DIR/dist-server"
 echo -e "${GRAY}  dist-server/${NC}"
 
 # Copy GPT-SoVITS (optional)

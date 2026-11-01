@@ -426,6 +426,9 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
   if (categories.includes('image_generation')) priorities.push('generate_image');
   if (categories.includes('image_editing')) priorities.push('ai_edit_image');
   if (categories.includes('video_generation')) priorities.push('generate_video');
+  // Preserve the requested lookup before broad document helpers fill the
+  // bounded manifest (for example, a recall question followed by web search).
+  if (categories.includes('web_research')) priorities.push('web_search', 'url_fetch');
   const instructionText = withoutLocationLiterals(primaryRoutingInstruction(text), true);
   if (requestsBlankAutoCadDocument(instructionText)) {
     priorities.push('mcp_cad-drafting_autocad_new_document');
@@ -1275,7 +1278,7 @@ export function routeToolsForTurn(
   const truncated = ordered.length > maxTools;
   return {
     toolNames: ordered.slice(0, maxTools),
-    requiredTools: unique([...externalLookupTools, ...(categories.includes('legal') ? ['legal_search_external_authorities', 'web_search', 'url_fetch'] : [])])
+    requiredTools: unique([...externalLookupTools, ...(categories.includes('web_research') ? ['web_search', 'url_fetch'] : []), ...(categories.includes('legal') ? ['legal_search_external_authorities', 'web_search', 'url_fetch'] : [])])
       .filter(name => ordered.slice(0, maxTools).includes(name)),
     categories: unique(categories),
     reasons: unique(reasons),

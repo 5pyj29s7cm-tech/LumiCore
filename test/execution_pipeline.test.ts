@@ -231,12 +231,15 @@ describe('unified execution pipeline', () => {
     expect(blocked.authorizationPolicy.forbiddenTools).toContain('write_file');
     expect(blocked.authorizationPolicy.forbiddenTools).toContain('capture_recent_workflow');
   });
-  it.each(['chat', 'voice'] as const)('keeps saved-memory recall available without turning a forbidden history lookup into an action for %s', channel => {
+  it.each(['chat', 'voice'] as const)('answers saved-memory recall from context without a fresh tool lookup for %s', channel => {
     const text = '你还记得岚桥记忆复核项目的专用标记和资料盒位置吗？如果没有已保存的记忆，请直接说不知道，不要猜测或搜索聊天记录。';
     const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'memory-lookup-only', channel,
       source: 'local_acceptance_harness', operationMode: 'assistant', text, targetIsLumi: true }, registry: createRegistry(),
       personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 } });
-    expect(pipeline.turnIntent.flow.allowToolUseForTurn).toBe(true);
+    expect(pipeline.turnIntent.flow.allowToolUseForTurn).toBe(false);
+    expect(pipeline.executionRequested).toBe(false);
+    expect(pipeline.modelToolProjection.toolNames).toEqual([]);
+    expect(pipeline.authorizationPolicy.forbiddenTools).toContain('*');
     expect(pipeline.capabilityPlan.taskLedgerRequired).toBe(false);
     expect(pipeline.trustedActionContinuation).toBe(false);
     expect(pipeline.resolution.userText).toBe(text);

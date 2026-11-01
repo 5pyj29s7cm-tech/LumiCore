@@ -1032,9 +1032,12 @@ describe('Lumi execution decision', () => {
     };
 
     const autonomousMode = decide('\u5f00\u59cb\u81ea\u4e3b\u6267\u884c\u6a21\u5f0f', 'chat');
-    expect(autonomousMode.dispatch.boundary).toBe('client_action');
+    // Retired selector wording is an explanation, not a navigation or execution grant.
+    expect(autonomousMode.dispatch.boundary).toBe('conversation');
     expect(autonomousMode.dispatch.flow.effectiveOperationMode).toBe('assistant');
-    expect(autonomousMode.decision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
+    expect(autonomousMode.dispatch.flow.requestedMode).toBeNull();
+    expect(autonomousMode.decision.allowToolUse).toBe(false);
+    expect(autonomousMode.decision.toolPolicy.allowedTools).toEqual([]);
     expect(autonomousMode.decision.promptOverlay).toContain('Lumi Execution Decision');
 
     const deliveryReport = decide('\u7ed9\u6211\u505a\u4e00\u4e2a\u5ba2\u6237\u4ea4\u4ed8\u62a5\u544a\u5e76\u5bfc\u51fa');
@@ -1050,12 +1053,18 @@ describe('Lumi execution decision', () => {
     expect(stockNews.decision.toolRoute?.categories).toEqual(expect.arrayContaining(['market_finance', 'web_research']));
 
     const taobaoBackend = decide('\u5e2e\u6211\u7528\u6d4f\u89c8\u5668\u6253\u5f00\u6dd8\u5b9d\u540e\u53f0');
+    expect((await import('../server/cognition/normalized_action_intent')).normalizeActionIntent('\u5e2e\u6211\u7528\u6d4f\u89c8\u5668\u6253\u5f00\u6dd8\u5b9d\u540e\u53f0')).toMatchObject({
+      kind: 'desktop_operation', operation: 'navigate', target: '\u6dd8\u5b9d\u540e\u53f0',
+    });
     expect(taobaoBackend.decision.allowToolUse).toBe(true);
-    expect(taobaoBackend.decision.toolRoute?.categories).toContain('authenticated_web');
+    // Opening the requested target does not authorize logging in or reading session data.
+    expect(taobaoBackend.decision.toolRoute?.categories).toContain('desktop_launch');
     expect(taobaoBackend.decision.toolRoute?.toolNames).toEqual(expect.arrayContaining([
-      'web_login_run',
-      'url_fetch_logged_in',
+      'desktop_open',
+      'desktop_active_window',
     ]));
+    expect(taobaoBackend.decision.toolRoute?.toolNames).not.toContain('web_login_run');
+    expect(taobaoBackend.decision.toolRoute?.toolNames).not.toContain('url_fetch_logged_in');
 
     const legalFolder = decide('\u6839\u636e\u6848\u4ef6\u6587\u4ef6\u5939\u6574\u7406\u4ee3\u7406\u8bcd');
     expect(legalFolder.decision.allowToolUse).toBe(true);

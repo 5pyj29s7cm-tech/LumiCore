@@ -401,7 +401,8 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const clientActionIntent = rawClientActionIntent && !continuationNamesExternalTarget;
   // i18n-allow: A standalone Chinese completed-action acknowledgement has no new instruction.
   const completedActionAcknowledgement = /^(?:已经|已)?(?:打开|关闭|保存|发送|完成)(?:好)?了[。.!！\s]*$/u.test(input.text);
-  const readOnlyConversationTurn = completedActionAcknowledgement || isStoredMemoryRecallQuestion(input.text)
+  const storedMemoryRecall = isStoredMemoryRecallQuestion(input.text);
+  const readOnlyConversationTurn = completedActionAcknowledgement || storedMemoryRecall
     || currentActionIntent.kind === 'none' && isInformationOnlyQuestion(input.text, analysis)
     || !statusOnlyContinuation && currentActionIntent.kind === 'status_query' && currentActionIntent.target === 'previous_action'
     || isConversationalProductFeedback(input.text, analysis)
@@ -426,6 +427,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const selfRepairTurn = !immediateAssistantRestatement
     && !conceptualCapabilityQuestion
     && !explicitNoToolInstruction
+    && !storedMemoryRecall
     && !statusOnlyContinuation
     && !explicitCapabilityMaintenance
     // A concrete work contract stays the primary boundary even when the user
@@ -440,8 +442,12 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const matchedWorkflow = immediateAssistantRestatement || conceptualCapabilityQuestion || recoveredCurrentAppEdit || explicitNoToolInstruction
     ? null
     : matchSkillWorkflow(routingText, { targetIsLumi: input.targetIsLumi });
+  // A pure recall question uses the channel's existing context; it must not
+  // turn a negated lookup into a fresh tool action. Chat retains native history
+  // without automatic cross-session memory retrieval; voice owns its prefetch.
+  // Mixed requests with an affirmative follow-up are excluded by the parser.
   const allowToolUseForTurn = Boolean(input.text.trim())
-    && !immediateAssistantRestatement && !explicitNoToolInstruction;
+    && !immediateAssistantRestatement && !explicitNoToolInstruction && !storedMemoryRecall;
   const desktopExecutionPreference = getStoredDesktopExecutionPreference(input.userId);
   const workSurfaceRoute = resolveWorkSurfaceRoute(routingText, currentAppEditTarget,
     allowToolUseForTurn && !clientActionOnlyTurn && !selfRepairTurn ? desktopExecutionPreference : 'internal');

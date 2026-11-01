@@ -36,7 +36,8 @@ import { CN_EXTERNAL_CLI_MESSAGES } from "../regions/messages/external_cli_messa
 import { buildOperationModeMetaResponse } from './capability_meta';
 import { formatGroundedKnowledgeObservation } from './knowledge_result';
 import { buildMediaArtifactReceipt } from '../socket/media_artifact_receipt';
-import { sanitizeUserFacingExecutionOutput } from './user_output_protection';
+import { inspectPublicExecutionReferences, sanitizeUserFacingExecutionOutput } from './user_output_protection';
+import { projectExecutionReferenceText } from '../../shared/public_execution_language';
 import { guardCompletionClaims, omitObservedSourceBlocks } from '../work_product/completion_guard';
 
 import { formatClientDiagnosticResult, hasCompleteClientDiagnosticReceipts } from './client_diagnostic_result';
@@ -792,7 +793,16 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const goalSpecificDesktopResult = formatGoalSpecificDesktopResult(input);
   if (goalSpecificDesktopResult) return goalSpecificDesktopResult;
   const verifiedDocumentObservation = groundedVerifiedDocumentObservation(input);
-  if (verifiedDocumentObservation) return formatRequestedDocumentObservation(input, verifiedDocumentObservation);
+  if (verifiedDocumentObservation) {
+    const observation = formatRequestedDocumentObservation(input, verifiedDocumentObservation);
+    const references = inspectPublicExecutionReferences({ task: actionText, toolCalls: input.toolRecords || [],
+      requestId: input.requestId, taskId: input.taskId, source: input.source }, observation.text);
+    if (!references.privateReference) return observation;
+    // A verified source does not authorize appended internal identities. Keep exact
+    // source blocks, including identical literals supplied in the source/request.
+    return { ...observation, text: projectExecutionReferenceText(observation.text,
+      references.privateReferences, references.verifiedText), blocked: true, reason: 'private_execution_reference' };
+  }
   const currentVerifiedRecords = (input.toolRecords || []).filter(record => isVerifiedCurrentTurnRecord(input, record));
   const verifiedInputReads = currentVerifiedRecords.filter(record => (
     VERIFIED_DOCUMENT_OBSERVATION_TOOL_RE.test(String(record.name || ''))
@@ -867,7 +877,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   }
   if (
     hasLegalExternalPlatformSignal(actionText) &&
-    claimsExternalLegalPlatformResult(input.responseText || '') &&
+    claimsExternalLegalPlatformResult(input.responseText || '', actionText) &&
     !hasLegalExternalPlatformResultEvidence(input.toolRecords || [], { requestId: input.requestId, taskId: input.taskId, taskText: actionText })
   ) {
     return blockedCompletionClaim(input, 'Missing external legal platform result evidence.');
@@ -1067,7 +1077,7 @@ function finalizeActionCompletionClaims(
     hasLegalExternalPlatformSignal(actionText) &&
     describesAuthorizedLegalExternalHandoff(input.responseText || '') &&
     !claimsExternalLegalPlatformFinalAction(input.responseText || '') &&
-    !claimsExternalLegalPlatformResult(input.responseText || '');
+    !claimsExternalLegalPlatformResult(input.responseText || '', actionText);
   if (
     actionContract.kind === 'desktop_operation'
     && currentAppMutationTask
