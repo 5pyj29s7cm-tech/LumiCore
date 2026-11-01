@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-10-30T08:44:41.283884+00:00",
-  "localDate": "2026-10-30",
+  "updatedAt": "2026-11-01T09:54:20.948524+00:00",
+  "localDate": "2026-11-01",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "主程序46项未完善点处理与63分区复核",
-    "status": "46-gaps-locally-remediated-8-local-workflows-added-loaded-native-ui-paused",
-    "instruction": "36项本地问题已修、8项本地业务流程已补、2项外部服务依赖待验；已按核验提交加载主后端，真人测试继续暂停。软件复测不等于全应用验收。"
+    "title": "律师版、设计师版与主程序只读对照检查",
+    "status": "audit-complete-with-open-findings",
+    "instruction": "源码、Git、当前静态及离线反例检查已记录；未修改产品代码，已知失败保留；不恢复已封存业务或真人验收。"
   },
   "acceptedWholeItems": [
     3,
@@ -63,10 +63,10 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030",
-    "manifest": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030/evidence-seal.json",
-    "sha256": "d393c3a4df9c63a0c36e2fe0d06b3a5142fdb92377ee6925d0c5f76955af6d5c",
-    "files": 772,
+    "directory": "D:/Lumi-Audit-Temp/edition-comparison-20261101",
+    "manifest": "D:/Lumi-Audit-Temp/edition-comparison-20261101/evidence-seal.json",
+    "sha256": "4938b94a68fbe893a815fab7bb73e9017a940155cdc1561143a402a1ff47abc0",
+    "files": 959,
     "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
   },
@@ -9358,5 +9358,501 @@
     },
     "report": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030/final-report.json",
     "readableReport": "D:/Lumi-Audit-Temp/main-completeness-remediation-20261030/最终未完善项处理报告.txt"
+  },
+  "latestEditionComparison": {
+    "auditClientDate": "2026-11-01",
+    "atUTC": "2026-11-01T09:54:20.948524+00:00",
+    "status": "audit-complete-with-open-findings",
+    "scope": "Read-only product audit; current static/isolated probes and main comparison. No repairs or whole-item acceptance.",
+    "sourceHeads": {
+      "main": "99837288aec7cedadf92773993ebe31b7a875f6a",
+      "legal": "b3ba9f35c9d381374b0c644c5de136f41df48204",
+      "designer": "7225192f730fc65b5b189b94fddd9e90c9056f65"
+    },
+    "versions": {
+      "main": "3.1.1",
+      "legal": "3.1.1",
+      "designer": "3.1.0"
+    },
+    "summaryZh": [
+      "律师版3.1.1、设计师版3.1.0、主程序3.1.1；两分版都有未完整进入主程序的独有能力，应保留其源码和历史证据。",
+      "律师版与主后端存在来源字段和两个工具注册的具体兼容缺口；共享后端协议1不能替代业务接口兼容检查。",
+      "律师分支仍有主程序已修的两类共享底层问题；设计师分支有技能安装身份不一致、取消和状态/加载恢复缺口。",
+      "三版类型检查均通过，但离线反例确有失败，不能把编译通过写成业务可用或整体验收通过。",
+      "主已审计HEAD领先实时同名功能分支11笔；律师/设计同名远端分支匹配，但不等于它们远端main均已更新。审计记录提交将在此后额外增加一笔本地提交。"
+    ],
+    "currentVerification": {
+      "typecheck": {
+        "main": "passed",
+        "legal": "passed",
+        "designer": "passed"
+      },
+      "mainArchitecture": "passed",
+      "mainI18n": {
+        "status": "failed",
+        "distinctFindings": 38,
+        "literalOccurrences": 57,
+        "scope": "existing legal files"
+      },
+      "legalOfflineOwnerProbes": {
+        "legal": {
+          "passed": 2,
+          "failed": 5
+        },
+        "main": {
+          "passed": 7,
+          "failed": 0
+        }
+      },
+      "legalShareholderContract": {
+        "legalRows": 1,
+        "mainRows": 0,
+        "businessCalls": 0
+      },
+      "designerNormalContractTests": {
+        "files": 6,
+        "passed": 23,
+        "failed": 0
+      },
+      "designerDiagnosticGapsReproduced": 2,
+      "historicalMain707Tests": "not rerun; prior 772-file immutable seal verified",
+      "wholeApplicationAccepted": false
+    },
+    "knownIssues": [
+      {
+        "edition": "legal",
+        "id": "LEGAL-COMPAT-01",
+        "priority": "P1",
+        "status": "current-contract-counterexample",
+        "summaryZh": "律师直股东界面接主后端时缺少结构化来源正文，表格无法按原流程生成。",
+        "anchors": [
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/src/components/org/LegalCompanyShareholders.tsx",
+            "relativePath": "src/components/org/LegalCompanyShareholders.tsx",
+            "line": 72,
+            "source": "      const originalText = typeof source?.sourceText === 'string' ? source.sourceText : '';",
+            "sha256": "4a7920b0d876b326f4cc2181f92446309e0e65132e6ded05328f81f719937d32",
+            "matchCount": 1
+          },
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/src/components/org/LegalCompanyShareholders.tsx",
+            "relativePath": "src/components/org/LegalCompanyShareholders.tsx",
+            "line": 77,
+            "source": "        rows = mapQichachaShareholders(record);",
+            "sha256": "4a7920b0d876b326f4cc2181f92446309e0e65132e6ded05328f81f719937d32",
+            "matchCount": 1
+          },
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/server/regions/packs/cn/legal_tools/company_research.ts",
+            "relativePath": "server/regions/packs/cn/legal_tools/company_research.ts",
+            "line": 325,
+            "source": "    sourceResults: sourceOriginals.map(({ text, ...source }) => ({ ...source, subject: name, queryType, status: 'observed', sourceText: text, sourceTextSha256: createHash('sha256').update(text).digest('hex') })),",
+            "sha256": "2020a37c3ca0f80985921567050c017f8372e46d650ba2af1a90849afd4b94d8",
+            "matchCount": 1
+          },
+          {
+            "edition": "main",
+            "path": "D:/lumiOS/server/regions/packs/cn/legal_tools/company_research.ts",
+            "relativePath": "server/regions/packs/cn/legal_tools/company_research.ts",
+            "line": 377,
+            "source": "    sourceResults: sourceOriginals.map(({ text, ...source }) => ({ ...source, subject: name, queryType, status: 'observed', sourceTextSha256: createHash('sha256').update(text).digest('hex') })),",
+            "sha256": "7cc82eb671e05033e42810ddd49ee3c69cf50ffd68262098f7af2d7fcbfd2242",
+            "matchCount": 1
+          }
+        ],
+        "detailReport": "D:/Lumi-Audit-Temp/edition-comparison-20261101/legal/result.json",
+        "fixedThisRound": false
+      },
+      {
+        "edition": "legal",
+        "id": "LEGAL-COMPAT-02",
+        "priority": "P1",
+        "status": "current-static-route-contract",
+        "summaryZh": "律师资产深查的两个工具在主后端没有注册，不能因共享协议号相同就视作兼容。",
+        "anchors": [
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/src/lib/legalAssetTraceWorkflow.ts",
+            "relativePath": "src/lib/legalAssetTraceWorkflow.ts",
+            "line": 46,
+            "source": "  { id: 'enterprise-judicial-cases', stage: 'deep', order: 2, executionMode: 'automatic', tool: 'legal_search_subject_cases' },",
+            "sha256": "e7e8c636d7dde63fa87ae59a289fdbe71770306d08abbc3b85c94b45ac5dab51",
+            "matchCount": 2
+          },
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/src/lib/legalAssetTraceWorkflow.ts",
+            "relativePath": "src/lib/legalAssetTraceWorkflow.ts",
+            "line": 47,
+            "source": "  { id: 'enterprise-web-footprint', stage: 'deep', order: 3, executionMode: 'automatic', tool: 'legal_search_public_footprint' },",
+            "sha256": "e7e8c636d7dde63fa87ae59a289fdbe71770306d08abbc3b85c94b45ac5dab51",
+            "matchCount": 2
+          },
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/src/components/org/LegalAssetTrace.tsx",
+            "relativePath": "src/components/org/LegalAssetTrace.tsx",
+            "line": 274,
+            "source": "        const execution = await runLegalToolExecution(",
+            "sha256": "0c0eb57ab128f3f5bfd3c01128430a4f645de517b40ec2ebb292af7091baa219",
+            "matchCount": 1
+          },
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/server/regions/packs/cn/legal_tools/definitions_external_research.ts",
+            "relativePath": "server/regions/packs/cn/legal_tools/definitions_external_research.ts",
+            "line": 115,
+            "source": "name: 'legal_search_subject_cases',",
+            "sha256": "c8d31102eff6853f68292cdb0bc28ed2dc53c8d5d90a7b117e9610bbde19b5b9",
+            "matchCount": 1
+          },
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/server/regions/packs/cn/legal_tools/definitions_external_research.ts",
+            "relativePath": "server/regions/packs/cn/legal_tools/definitions_external_research.ts",
+            "line": 132,
+            "source": "name: 'legal_search_public_footprint',",
+            "sha256": "c8d31102eff6853f68292cdb0bc28ed2dc53c8d5d90a7b117e9610bbde19b5b9",
+            "matchCount": 1
+          },
+          {
+            "edition": "main",
+            "path": "D:/lumiOS/server/routes/chat_routes.ts",
+            "relativePath": "server/routes/chat_routes.ts",
+            "line": 458,
+            "source": "    if (!DIRECT_LEGAL_TOOL_ALLOWLIST.has(toolName)) {",
+            "sha256": "614756a0b103a59045ca9098794b094fe68b84ac8efb2e1b31f9276250b215f2",
+            "matchCount": 1
+          },
+          {
+            "edition": "main",
+            "path": "D:/lumiOS/server/routes/chat_routes.ts",
+            "relativePath": "server/routes/chat_routes.ts",
+            "line": 459,
+            "source": "      return res.status(404).json({ error: 'Unknown or unavailable legal tool' });",
+            "sha256": "614756a0b103a59045ca9098794b094fe68b84ac8efb2e1b31f9276250b215f2",
+            "matchCount": 1
+          }
+        ],
+        "detailReport": "D:/Lumi-Audit-Temp/edition-comparison-20261101/legal/result.json",
+        "fixedThisRound": false
+      },
+      {
+        "edition": "legal",
+        "id": "LEGAL-RUNTIME-01",
+        "priority": "P1",
+        "status": "current-synthetic-control-flow-counterexample",
+        "summaryZh": "律师版显式技能修复仍可接受改变或新增的私有依赖并重新绑定身份，主程序已拒绝该情况。",
+        "anchors": [
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/server/mcp/client/skill_runtime.ts",
+            "relativePath": "server/mcp/client/skill_runtime.ts",
+            "line": 131,
+            "source": "      return this.bindManagedSkillRuntime(directory, expectedIdentity);",
+            "sha256": "01ea56fa89446a403f96633142e6f1e257dcdf11c128ec42cb37e0c35ba04ff2",
+            "matchCount": 1
+          },
+          {
+            "edition": "main",
+            "path": "D:/lumiOS/server/mcp/client/skill_runtime.ts",
+            "relativePath": "server/mcp/client/skill_runtime.ts",
+            "line": 154,
+            "source": "        if (!isHostDependency && !hostFiles.has(resolved)) return undefined;",
+            "sha256": "3d6e99e7442f94229174471a2ac202e29143efb9c0b83a61e96208e071b0688c",
+            "matchCount": 1
+          }
+        ],
+        "detailReport": "D:/Lumi-Audit-Temp/edition-comparison-20261101/legal/result.json",
+        "fixedThisRound": false
+      },
+      {
+        "edition": "legal",
+        "id": "LEGAL-TERMINAL-01",
+        "priority": "P2",
+        "status": "current-synthetic-event-counterexample",
+        "summaryZh": "律师版旧终端进程的迟到事件会破坏同一socket的新会话。",
+        "anchors": [
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/server/socket/terminal.ts",
+            "relativePath": "server/socket/terminal.ts",
+            "line": 75,
+            "source": "    proc.on('exit', (code: number | null) => {",
+            "sha256": "64cefc5176f9345878728da0b7e0e78993595fc609b38d092a6c9163b17ac1a1",
+            "matchCount": 1
+          },
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/server/socket/terminal.ts",
+            "relativePath": "server/socket/terminal.ts",
+            "line": 80,
+            "source": "    proc.on('error', (err: Error) => {",
+            "sha256": "64cefc5176f9345878728da0b7e0e78993595fc609b38d092a6c9163b17ac1a1",
+            "matchCount": 1
+          },
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/server/socket/terminal.ts",
+            "relativePath": "server/socket/terminal.ts",
+            "line": 67,
+            "source": "    proc.stdout?.on('data', (data: Buffer) => {",
+            "sha256": "64cefc5176f9345878728da0b7e0e78993595fc609b38d092a6c9163b17ac1a1",
+            "matchCount": 1
+          },
+          {
+            "edition": "main",
+            "path": "D:/lumiOS/server/socket/terminal.ts",
+            "relativePath": "server/socket/terminal.ts",
+            "line": 73,
+            "source": "      if (sessions.get(sessionId) !== session) return;",
+            "sha256": "5e0e6cd7257c8ebfeaa6ffd13e22ceb8f7f3a8b2fb3e024cb69631837f31fbcd",
+            "matchCount": 4
+          }
+        ],
+        "detailReport": "D:/Lumi-Audit-Temp/edition-comparison-20261101/legal/result.json",
+        "fixedThisRound": false
+      },
+      {
+        "edition": "legal",
+        "id": "LEGAL-LOAD-01",
+        "priority": "P2",
+        "status": "current-static-recovery-gap",
+        "summaryZh": "法律数据源设置的加载/保存没有请求期限；持续pending时刷新和编辑会一直禁用。",
+        "anchors": [
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/src/components/org/LegalDataSourcesSettings.tsx",
+            "relativePath": "src/components/org/LegalDataSourcesSettings.tsx",
+            "line": 54,
+            "source": "    const signal = request.current.owner?.signal, revision = ++request.current.revision;",
+            "sha256": "89a8db5c256b0aaa69c7dc5649aefba839355b9c2f061072d9d2233d9988275e",
+            "matchCount": 2
+          },
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/src/components/org/LegalDataSourcesSettings.tsx",
+            "relativePath": "src/components/org/LegalDataSourcesSettings.tsx",
+            "line": 59,
+            "source": "      const next = await getSavedKeyStatus(signal);",
+            "sha256": "89a8db5c256b0aaa69c7dc5649aefba839355b9c2f061072d9d2233d9988275e",
+            "matchCount": 1
+          },
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/src/components/org/LegalDataSourcesSettings.tsx",
+            "relativePath": "src/components/org/LegalDataSourcesSettings.tsx",
+            "line": 178,
+            "source": "          disabled={loading || Boolean(busyKey)}",
+            "sha256": "89a8db5c256b0aaa69c7dc5649aefba839355b9c2f061072d9d2233d9988275e",
+            "matchCount": 1
+          },
+          {
+            "edition": "legal",
+            "path": "D:/lumiOS-variants/lumi-legal-client/src/services/apiClient.ts",
+            "relativePath": "src/services/apiClient.ts",
+            "line": 77,
+            "source": "      return await fetch(url, request);",
+            "sha256": "a49c3d9b25a753bc29a5e6b5a76d1c7b51817a03a40e8bba0735448c670ec4e4",
+            "matchCount": 1
+          }
+        ],
+        "detailReport": "D:/Lumi-Audit-Temp/edition-comparison-20261101/legal/result.json",
+        "fixedThisRound": false
+      },
+      {
+        "edition": "designer",
+        "id": "D-SKILL-IDENTITY",
+        "priority": "P1-readiness",
+        "status": "confirmed-current-profile-mismatch-not-live-launch-tested",
+        "summaryZh": "设计师当前配置启用两项专属技能，但仍使用未签名的旧共享包；profile目录没有受管理安装。当前官方身份投影判conflict。",
+        "anchors": [
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\server\\mcp\\skill_paths.ts",
+            "line": 7,
+            "source": "export const SKILLS_DIR = process.env.VITEST",
+            "sha256": "e017a6fc0a1f4ffce1f7bb652ea202398320d01ca03bf83da03e8a2a910f7dc4"
+          },
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\server\\mcp\\skill_profile_migration.ts",
+            "line": 44,
+            "source": "      if (!identity || !verifyManagedSkillIdentitySignature(identity, options.secret)",
+            "sha256": "ae730ece5bb212bb0eaa61e01313e132c73d5e22d380ff39aa3821fb6553aab9"
+          },
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\server\\mcp\\skill_profile_migration.ts",
+            "line": 47,
+            "source": "        throw new Error('Legacy package has no approved identity for this profile; reinstall its official entry or review its draft');",
+            "sha256": "ae730ece5bb212bb0eaa61e01313e132c73d5e22d380ff39aa3821fb6553aab9"
+          },
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\server\\mcp\\client.ts",
+            "line": 1579,
+            "source": "  async repairSkill(name: string): Promise<SkillRepairResult> {",
+            "sha256": "24acfb0c0dda8e20a6a726a99b2d96a76fe4e000c7ea17f28792014f7dbee6e2"
+          },
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\server\\marketplace\\official_identity.ts",
+            "line": 332,
+            "source": "export function projectOfficialBundledIdentity(input: {",
+            "sha256": "41063b6799f678379c1515ed8b4d9220aa14f81330174a1411c8675c0054fc74"
+          }
+        ],
+        "detailReport": "D:/Lumi-Audit-Temp/edition-comparison-20261101/designer/result.json",
+        "fixedThisRound": false
+      },
+      {
+        "edition": "designer",
+        "id": "D-CREATE-STOP",
+        "priority": "P2",
+        "status": "confirmed-by-offline-original-hook-projection",
+        "summaryZh": "创建行业任务阶段没有传递取消信号/期限，点击停止仍等待创建回执，随后旧hook把状态设为in_progress；中止的chat fetch被AbortError忽略，状态不呈现已停止。",
+        "anchors": [
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\src\\components\\org\\DesignHub.tsx",
+            "line": 352,
+            "source": "  const stop = () => abortRef.current?.abort();",
+            "sha256": "42c44202955fdb3b864a2be7974d40574b5d76e9913c24edfd16bf5d7e0259af"
+          },
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\src\\components\\org\\DesignHub.tsx",
+            "line": 367,
+            "source": "      const started = await startIndustryWorkflow({",
+            "sha256": "42c44202955fdb3b864a2be7974d40574b5d76e9913c24edfd16bf5d7e0259af"
+          },
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\src\\lib\\industryWorkflowClient.ts",
+            "line": 28,
+            "source": "  const response = await fetch('/api/industry/workflows', {",
+            "sha256": "6b4553f8d36cc9b3ff2c94542fd244051d2f4f761a970e670561e817af6cd279"
+          },
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\src\\components\\org\\DesignHub.tsx",
+            "line": 376,
+            "source": "      setWorkflowStatus('in_progress');",
+            "sha256": "42c44202955fdb3b864a2be7974d40574b5d76e9913c24edfd16bf5d7e0259af"
+          },
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\src\\components\\org\\DesignHub.tsx",
+            "line": 433,
+            "source": "      if (err?.name !== 'AbortError') {",
+            "sha256": "42c44202955fdb3b864a2be7974d40574b5d76e9913c24edfd16bf5d7e0259af"
+          }
+        ],
+        "detailReport": "D:/Lumi-Audit-Temp/edition-comparison-20261101/designer/result.json",
+        "fixedThisRound": false
+      },
+      {
+        "edition": "designer",
+        "id": "D-BRIEF-RESULT-DISTINCTION",
+        "priority": "P2-UX",
+        "status": "confirmed-retention-observed-interpretation-scoped",
+        "summaryZh": "编辑Brief仅更新input，旧结果和旧taskId/status继续显示；界面缺少明确的旧输入/历史结果标注，可能将旧交付理解成当前草稿状态。",
+        "anchors": [
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\src\\components\\org\\DesignHub.tsx",
+            "line": 604,
+            "source": "          task {workflowTaskId} · {workflowStatus || 'in_progress'}",
+            "sha256": "42c44202955fdb3b864a2be7974d40574b5d76e9913c24edfd16bf5d7e0259af"
+          },
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\src\\components\\org\\DesignHub.tsx",
+            "line": 612,
+            "source": "            onChange={event => setInput(event.target.value)}",
+            "sha256": "42c44202955fdb3b864a2be7974d40574b5d76e9913c24edfd16bf5d7e0259af"
+          },
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\src\\components\\org\\DesignHub.tsx",
+            "line": 663,
+            "source": "      {result && (",
+            "sha256": "42c44202955fdb3b864a2be7974d40574b5d76e9913c24edfd16bf5d7e0259af"
+          }
+        ],
+        "detailReport": "D:/Lumi-Audit-Temp/edition-comparison-20261101/designer/result.json",
+        "fixedThisRound": false
+      },
+      {
+        "edition": "designer",
+        "id": "D-LOAD-ERROR-VISIBILITY",
+        "priority": "P2",
+        "status": "static-current-source-gap",
+        "summaryZh": "项目资料/流程联合读取失败时清空项目资料和流程显示，没有保留失败原因；暂不能区分加载失败和没有资料。",
+        "anchors": [
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\src\\components\\org\\DesignHub.tsx",
+            "line": 145,
+            "source": "      listInteriorProjectAssets(workDomain, activeProject.id),",
+            "sha256": "42c44202955fdb3b864a2be7974d40574b5d76e9913c24edfd16bf5d7e0259af"
+          },
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\src\\components\\org\\DesignHub.tsx",
+            "line": 154,
+            "source": "      .catch(() => {",
+            "sha256": "42c44202955fdb3b864a2be7974d40574b5d76e9913c24edfd16bf5d7e0259af"
+          }
+        ],
+        "detailReport": "D:/Lumi-Audit-Temp/edition-comparison-20261101/designer/result.json",
+        "fixedThisRound": false
+      },
+      {
+        "edition": "designer",
+        "id": "D-E2B",
+        "priority": "external-unverified",
+        "status": "optional-connector-not-configured-in-this-profile",
+        "summaryZh": "E2B云沙箱仍要求外部凭据；设计师profile未注册code-sandbox，存储的E2B凭据存在性为false。",
+        "anchors": [
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\server\\skills\\bundled\\code-sandbox\\package.json",
+            "line": 15,
+            "source": "    \"requiresApiKey\": true,",
+            "sha256": "321f30cd465b427856ae3184434303beb400e9a5ed9d72a59db716314e52d12b"
+          },
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\server\\skills\\bundled\\code-sandbox\\package.json",
+            "line": 16,
+            "source": "    \"apiKeyEnv\": \"E2B_API_KEY\",",
+            "sha256": "321f30cd465b427856ae3184434303beb400e9a5ed9d72a59db716314e52d12b"
+          },
+          {
+            "path": "D:\\lumiOS-variants\\lumi-designer-client\\server\\skills\\bundled\\design-studio-pack\\package.json",
+            "line": 15,
+            "source": "    \"requiresSetup\": false,",
+            "sha256": "31523c10ca3eed8703e25968469a7c762788c1c643a1814f438821d55fed0f6e"
+          }
+        ],
+        "detailReport": "D:/Lumi-Audit-Temp/edition-comparison-20261101/designer/result.json",
+        "fixedThisRound": false
+      }
+    ],
+    "limitations": [
+      "本轮只读检查产品源码、Git与少量配置/运行元数据，运行限定隔离静态与合成fixture；未修改产品代码、安装技能、迁移数据、重启或操作原生窗口。",
+      "未发送真实法律/设计业务、查询个人主体、付费生成、模型或外部服务请求；Git远端只读查询与本地主程序元数据GET除外。",
+      "律师既有27项验收仍3通过、18部分、4阻断、1失败、1延期，3/15/16保持封存；本轮发现不重开旧业务或变更held状态。",
+      "设计师23项是静态/纯函数契约通过；另2项诊断用例复现缺口，不能合并写成25项功能通过。",
+      "股东字段fixture使用当前源映射和纯解析，两个工具缺失为静态路由契约；没有实际连接律师前端进行业务HTTP或供应商端到端验证。",
+      "设计师旧结果问题仅指新Brief与旧task/status的区分不足，旧taskID确实可见；不证明后端把新Brief完成或写错数据库。",
+      "设计profile无E2B存储凭据仅是可选连接状态，不代表全部设计功能需要E2B，也未验证进程环境或云端可用性。",
+      "法律共享数据根及启动迁移是条件性源代码行为；未读取/改变生产迁移flag，不断言当前profile已经被改变。",
+      "主后端健康仍degraded，保留5个暂停任务；本轮未恢复这些任务。",
+      "本报告记录截至2026-11-01的观测。代码行号与SHA用于精确定位，非全量动态行覆盖；Git提交差和不同文件数不能视作功能缺失数。"
+    ],
+    "sourceChanged": false,
+    "nativeUITested": false,
+    "wholeApplicationAccepted": false,
+    "remotePushPerformed": false,
+    "report": "D:/Lumi-Audit-Temp/edition-comparison-20261101/report.json",
+    "readableReport": "D:/Lumi-Audit-Temp/edition-comparison-20261101/三版本检查与主程序对照.txt",
+    "evidence": {
+      "directory": "D:/Lumi-Audit-Temp/edition-comparison-20261101",
+      "manifest": "D:/Lumi-Audit-Temp/edition-comparison-20261101/evidence-seal.json",
+      "sha256": "4938b94a68fbe893a815fab7bb73e9017a940155cdc1561143a402a1ff47abc0",
+      "files": 959,
+      "canonicalLedger": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/joint-acceptance-20261023.json",
+      "canonicalCheckpoint": "C:/Users/Administrator/Documents/Codex/2026-10-03/new-chat/work/customer-installation-closure-20261020/active-closure-checkpoint.json"
+    },
+    "archiveAcceptanceResumed": false
   }
 }
