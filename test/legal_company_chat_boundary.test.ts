@@ -13,6 +13,9 @@ import { hasLegalExternalPlatformResultEvidence } from '../server/cognition/resu
 import { mcpManager } from '../server/mcp/client';
 import * as SourceAdapters from '../server/legal/sources';
 import * as Cases from '../server/org/legal_cases';
+import { addMessageIdempotent, getOrCreateActiveConversation, prepareConversationActionExecution } from '../server/conversation/manager';
+import { createConversationReceiptObserver } from '../server/conversation/execution_receipt_archive';
+import { persistModelRoutingReceipt } from '../server/llm/model_routing_receipts';
 let app: Awaited<ReturnType<typeof makeApp>>;
 const registry = new ToolRegistry();
 const text = '请通过我已配置的企查查官方数据源，查询“企查查科技股份有限公司”的工商登记信息。只查询企查查的工商登记这一项，不查询其他平台、不查询股东或风险，不入案、不写入知识库、不发送任何消息。请清楚列出实际查询到的企业名称、登记状态、成立日期和注册资本，并说明来源和查询时间；如果调用失败或未拿到真实回执，请直接说明失败，不要凭记忆补写。';
@@ -27,13 +30,27 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 function fixture(sourceText = text) {
-  const userId = 'qcc-chat-boundary-' + randomUUID(), requestId = randomUUID(), taskId = 'task_' + randomUUID();
+  const userId = 'qcc-chat-boundary-' + randomUUID(), requestId = randomUUID();
   const taskText = sourceText.replaceAll('企查查科技股份有限公司', '虚构企业查询样本有限公司');
   const pipeline = buildLumiExecutionPipeline({ dispatch: { userId, text:taskText, channel: 'chat', source: 'command-center-chat', operationMode: 'assistant', targetIsLumi: true, domain: 'personal' }, registry, executionBoundary: 'trusted_local' });
-  const context = { userId, requestId, taskId, turnId:requestId, domain:'personal', authenticated:true, authRole:'user', localExecution:true, executionBoundary:'trusted_local', source:'command-center-chat', toolPolicy:pipeline.authorizationPolicy, acceptedActionContract:pipeline.turnIntent.flow.acceptedActionContract } as any;
-  return { userId, requestId, taskId, taskText, pipeline, context };
+  const conversationId = getOrCreateActiveConversation(userId, 'lumi', 'personal', '').id;
+  const userMessageId = addMessageIdempotent({ userId, conversationId, requestId, source:'command-center-chat', domain:'personal', orgId:'', agentId:'lumi', role:'user', content:taskText, deferActionPreparation:true });
+  const prepared = prepareConversationActionExecution({ userId, conversationId, requestId, userText:taskText, userMessageId, forceTask:true, toolPolicy:pipeline.authorizationPolicy });
+  if ('bindingFailure' in prepared || !prepared.state?.taskId) throw Error('Synthetic company query did not acquire its accepted task');
+  const taskId = prepared.state.taskId;
+  const scope = { userId, conversationId, requestId, taskId, domain:'personal', orgId:'' };
+  const context = { ...scope, turnId:requestId, turnRowId:prepared.turnRowId, authenticated:true, authRole:'user', localExecution:true, executionBoundary:'trusted_local', source:'command-center-chat', toolPolicy:pipeline.authorizationPolicy, acceptedActionContract:pipeline.turnIntent.flow.acceptedActionContract } as any;
+  return { userId, requestId, taskId, taskText, pipeline, context, scope };
 }
-const run = (f: ReturnType<typeof fixture>, args: Record<string,unknown> = {}) => executeToolCall({id:'qcc-fixture-'+randomUUID(),registry,name:'legal_company_database_lookup',arguments:{name:'虚构企业查询样本有限公司',sourceIds:['qichacha'],persistCase:false,...args},context:f.context});
+async function run(f: ReturnType<typeof fixture>, args: Record<string,unknown> = {}) {
+  const now = new Date().toISOString();
+  // Synthetic model-selection metadata only: no provider is invoked by this fixture.
+  const route = persistModelRoutingReceipt({ ...f.scope, interactionId:'', source:'command-center-chat', status:'succeeded', startedAt:now, completedAt:now, durationMs:0,
+    requestedProvider:'deepseek', requestedModel:'fixture', selectionMode:'pinned', selectedProvider:'deepseek', selectedModel:'fixture', fallbackReason:'', attempts:[{provider:'deepseek',model:'fixture',status:'succeeded'}] });
+  const record = await executeToolCall({id:'qcc-fixture-'+randomUUID(),registry,name:'legal_company_database_lookup',arguments:{name:'虚构企业查询样本有限公司',sourceIds:['qichacha'],persistCase:false,...args},context:f.context,executionOrigin:'model_selected',modelRoutingReceiptId:route.id});
+  await createConversationReceiptObserver({...f.scope,turnRowId:f.context.turnRowId},()=>true).onToolRecord(record);
+  return record;
+}
 const evidence = (record: Awaited<ReturnType<typeof run>>, f: ReturnType<typeof fixture>) => hasLegalExternalPlatformResultEvidence([record], {requestId:f.requestId,taskId:f.taskId,taskText:f.taskText});
 describe('company lookup current-turn read boundary', () => {
   it('projects the actual source instead of client state, messaging, or document production', () => {
@@ -56,11 +73,25 @@ describe('company lookup current-turn read boundary', () => {
   });
   it('keeps the fresh source query as execution when its failure clause only asks for truthful reporting', () => {
     expect(classifyExecutionGuardIntent(text)).toBe('action_execution');
-    for (const followup of ['刚才查询的结果是什么？', '请查询刚才任务的回执。', '请查找上次任务的执行结果。']) expect(classifyExecutionGuardIntent(followup)).toBe('status_query');
+  });
+  it.each(['刚才查询的结果是什么？', '请查询刚才任务的回执。', '请查找上次任务的执行结果。'])('reads the recorded outcome without starting a new company lookup: %s', followup => {
+    expect(classifyExecutionGuardIntent(followup)).toBe('status_query');
+  });
+  it.each(['请查询另一家公司的工商登记。', '请解释“刚才查询的结果是什么”这句话。', '假设刚才查询的结果是什么？'])('does not reinterpret a fresh, quoted or hypothetical query as saved receipt status: %s', taskText => {
+    expect(classifyExecutionGuardIntent(taskText)).not.toBe('status_query');
   });
   it('allows a current verified atomic source query to finish without requiring document production', async () => {
     const f=fixture(),record=await run(f);
-    expect(taskCompletionFromReceipts(f.taskText,recordsToTaskReceipts([record]),undefined,{requestId:f.requestId,taskId:f.taskId}).complete).toBe(true);
+    expect(taskCompletionFromReceipts(f.taskText,recordsToTaskReceipts([record]),undefined,f.scope).complete).toBe(true);
+  });
+  it('does not substitute a live canonical tool call for missing durable ownership or model-selection provenance', async () => {
+    const f=fixture(),record=await run(f),receipts=recordsToTaskReceipts([record]);
+    for (const current of [undefined, {requestId:f.requestId,taskId:f.taskId}, {...f.scope,userId:'foreign'}, {...f.scope,conversationId:'foreign'}]) {
+      expect(taskCompletionFromReceipts(f.taskText,receipts,undefined,current).complete).toBe(false);
+    }
+    for (const changed of [{executionOrigin:'deterministic_route' as const}, {modelRoutingReceiptId:''}, {adapterStarted:false}]) {
+      expect(taskCompletionFromReceipts(f.taskText,recordsToTaskReceipts([{...record,...changed}]),undefined,f.scope).complete).toBe(false);
+    }
   });
   it('projects the same observed query as clear public content and completed feedback', async () => {
     const f=fixture(),record=await run(f),candidate='已通过企查查查询虚构企业查询样本有限公司。登记状态：存续；成立日期：2020-01-02；注册资本：10万元。来源为企查查官方 MCP，本次查询时间见当前回执。';
@@ -69,10 +100,10 @@ describe('company lookup current-turn read boundary', () => {
     const publicResult=sanitizeExecutionResponseForDelivery(result.finalization,{task:f.taskText,toolRecords:[record],requestId:f.requestId,taskId:f.taskId});
     expect(publicResult.blocked).toBe(false);expect(publicResult.text).toContain('2020-01-02');expect(publicResult.text).toContain('10万元');
     const feedback=buildForegroundTaskCompletionFeedback({taskId:f.taskId,taskLabel:f.taskText,toolRecords:[record],finalization:publicResult});
-    expect(feedback?.status).toBe('completed');expect(taskCompletionFromReceipts(f.taskText,recordsToTaskReceipts([record]),undefined,{requestId:f.requestId,taskId:f.taskId}).complete).toBe(true);
+    expect(feedback?.status).toBe('completed');expect(taskCompletionFromReceipts(f.taskText,recordsToTaskReceipts([record]),undefined,f.scope).complete).toBe(true);
   });
   it('does not complete a missing, stale, cross-task, wrong-subject, compound, or mismatched source query', async () => {
-    const f=fixture(),record=await run(f),receipts=recordsToTaskReceipts([record]),current={requestId:f.requestId,taskId:f.taskId};
+    const f=fixture(),record=await run(f),receipts=recordsToTaskReceipts([record]),current=f.scope;
     for(const [goal,rows,turn] of [
       [f.taskText,[],current],
       [f.taskText,receipts,{...current,requestId:'stale-turn'}],
@@ -90,7 +121,7 @@ describe('company lookup current-turn read boundary', () => {
   });
   it('requires every requested query range before completing a same-company multi-range lookup', async () => {
     const f=fixture('请通过企查查查询“企查查科技股份有限公司”的工商登记和股东信息，不入案、不写入知识库、不发送。'),registration=await run(f);
-    const current={requestId:f.requestId,taskId:f.taskId};
+    const current=f.scope;
     expect(taskCompletionFromReceipts(f.taskText,recordsToTaskReceipts([registration]),undefined,current).complete).toBe(false);
     expect(hasLegalExternalPlatformResultEvidence([registration],{...current,taskText:f.taskText})).toBe(false);
     vi.mocked(mcpManager.callToolForServer).mockResolvedValueOnce(JSON.stringify([{股东名称:'虚构股东',持股比例:'100%'}]));
@@ -100,11 +131,14 @@ describe('company lookup current-turn read boundary', () => {
     expect(hasLegalExternalPlatformResultEvidence([registration,shareholders],{...current,taskText:f.taskText})).toBe(true);
     expect(mcpManager.callToolForServer).toHaveBeenCalledTimes(2);expect(fetch).not.toHaveBeenCalled();
   });
-  it('retains the existing non-QCC HTTPS source contract when its actual source receipt is present', async () => {
+  it.each(['', '不要查询企查查。'])('retains the existing non-QCC HTTPS source contract when its actual source receipt is present: %s', excludedSource => {
+    return (async () => {
     vi.spyOn(SourceAdapters,'searchCompanySources').mockResolvedValueOnce([{name:'虚构企业查询样本有限公司',sourceName:'Synthetic authorized HTTPS provider',sourceText:JSON.stringify({name:'虚构企业查询样本有限公司',creditCode:'SYNTHETIC-TYC'}),sourceEndpoint:'https://authorized-provider.invalid/company',queriedAt:'2026-01-02T03:04:05Z'}] as any);
-    const f=fixture('请通过天眼查查询“企查查科技股份有限公司”的工商登记，不入案、不写入知识库、不发送。'),record=await run(f,{sourceIds:['tianyancha']});
+    const f=fixture('请通过天眼查查询“企查查科技股份有限公司”的工商登记，不入案、不写入知识库、不发送。'+excludedSource),record=await run(f,{sourceIds:['tianyancha']});
     expect(record.receipt).toMatchObject({ok:true,status:'observed',sourceResults:[{sourceEndpoint:'https://authorized-provider.invalid/company'}]});expect(evidence(record,f)).toBe(true);
     expect(mcpManager.callToolForServer).not.toHaveBeenCalled();expect(fetch).not.toHaveBeenCalled();
+    expect(taskCompletionFromReceipts(f.taskText,recordsToTaskReceipts([record]),undefined,f.scope).complete).toBe(true);
+    })();
   });
   it('binds prohibited persistence off before canonical execution even if the model requests it', async () => {
     const f=fixture(), orgId=Cases.legalWorkspaceNamespace(f.userId), item=Cases.createCase(orgId,f.userId,{title:'Synthetic source-only case'});

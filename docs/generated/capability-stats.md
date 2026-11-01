@@ -4,11 +4,11 @@
 
 - Registered tool capabilities: **317**
 - Bundled maintained skill packages: **48**
-- Material side-effect capabilities: **168**
-- Material side-effect capabilities with a materialized evidence contract: **168/168**
-- Material side-effect capabilities with materialized non-none risk: **168/168**
-- Material side-effect capabilities with tool-specific evidence metadata: **168/168**
-- Material side-effect capabilities with tool-specific risk metadata: **168/168**
+- Material side-effect capabilities: **169**
+- Material side-effect capabilities with a materialized evidence contract: **169/169**
+- Material side-effect capabilities with materialized non-none risk: **169/169**
+- Material side-effect capabilities with tool-specific evidence metadata: **169/169**
+- Material side-effect capabilities with tool-specific risk metadata: **169/169**
 
 > Read-only local/network access is excluded from the material side-effect gate. Materialized policy metadata is conservative fallback, not proof that the tool owner supplied an exact contract. Release readiness requires the tool-specific counts to reach 100%.
 

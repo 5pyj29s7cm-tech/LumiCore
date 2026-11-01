@@ -3,7 +3,9 @@ import jwt from 'jsonwebtoken';
 import { makeApp, JWT_SECRET } from './helpers';
 import { mountChatRoutes } from '../server/routes/chat_routes';
 import { toolRegistry } from '../server/tools/registry';
-import { addMember, createOrg } from '../server/org/db';
+import { addMember, createOrg, removeMember } from '../server/org/db';
+import { legalToolDefinitions } from '../server/regions/packs/cn/legal_tools';
+import { listCases } from '../server/org/legal_cases';
 
 let url: string;
 let cleanup: () => void;
@@ -181,14 +183,21 @@ describe('direct legal tool route security', () => {
     const response = await fetch(`${url}/api/legal/contract-review`, {
       method: 'POST',
       headers: bearer(viewerToken),
-      body: JSON.stringify({ contract: 'read-only contract', persistCase: false }),
+      body: JSON.stringify({ contract: 'read-only contract', persistCase: false,
+        userId: 'forged-user', orgId: 'forged-org', domain: 'personal' }),
       signal: AbortSignal.timeout(5000),
     });
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ text: 'legal_review_contract:ok', degraded: false });
+    // The legacy URL shares the canonical direct-tool receipt, not a separate
+    // model fallback with a degraded flag.
+    const payload = await response.json();
+    expect(payload).toMatchObject({ text: 'legal_review_contract:ok', toolName: 'legal_review_contract',
+      requestId: expect.any(String), receipt: expect.any(Object), verification: expect.any(Object), caseUpdates: [], artifacts: [] });
+    expect(payload.requestId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(payload).not.toHaveProperty('degraded');
     expect(observedCalls.at(-1)).toMatchObject({
       name: 'legal_review_contract',
-      args: { userId: viewerId, orgId, persistCase: false },
+      args: { userId: viewerId, orgId, domain: 'work', persistCase: false },
       context: {
         userId: viewerId,
         domain: 'work',
@@ -210,7 +219,7 @@ describe('direct legal tool route security', () => {
     });
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({
-      error: 'Organization viewers may only run contract review without case persistence.',
+      error: 'Organization viewers may only use read-only legal tools.',
     });
     expect(observedCalls).toHaveLength(callCount);
   });
@@ -241,6 +250,7 @@ describe('direct legal tool route security', () => {
     expect(directPayload).toEqual({
       error: 'Legal tool execution failed',
       code: 'LEGAL_TOOL_EXECUTION_FAILED',
+      requestId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
     });
 
     const contract = await fetch(`${url}/api/legal/contract-review`, {
@@ -252,12 +262,56 @@ describe('direct legal tool route security', () => {
     expect(contract.status).toBe(500);
     const contractPayload = await contract.json();
     expect(contractPayload).toEqual({
-      error: 'Contract review failed',
-      code: 'LEGAL_CONTRACT_REVIEW_FAILED',
+      error: 'Legal tool execution failed',
+      code: 'LEGAL_TOOL_EXECUTION_FAILED',
+      requestId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
     });
+    expect(contractPayload.requestId).not.toBe(directPayload.requestId);
 
     const payload = JSON.stringify({ directPayload, contractPayload });
     expect(payload).not.toContain('sk-legal-private-secret');
     expect(payload).not.toContain('C:\\private\\legal');
+  });
+
+  it('keeps the actual source-only contract review partial and non-persistent through both public URLs', async () => {
+    const stub = toolRegistry.get('legal_review_contract')!;
+    const actual = legalToolDefinitions().find(tool => tool.name === 'legal_review_contract')!;
+    const before = JSON.stringify(listCases(orgId, '', null, viewerId));
+    toolRegistry.unregister(actual.name);
+    expect(toolRegistry.register(actual)).toBe(true);
+    try {
+      for (const direct of [false, true]) {
+        const args = { contract: 'Synthetic contract: Party A supplies ten desks to Party B.', sourceOnly: true, persistCase: false };
+        const response = await fetch(`${url}/api/legal/${direct ? 'tool/legal_review_contract' : 'contract-review'}`, {
+          method: 'POST', headers: bearer(viewerToken), body: JSON.stringify(direct ? { args } : args),
+          signal: AbortSignal.timeout(5000),
+        });
+        expect(response.status).toBe(200);
+        const payload = await response.json();
+        expect(payload).toMatchObject({ toolName: actual.name, caseUpdates: [], artifacts: [],
+          receipt: { ok: false, status: 'partial', persisted: false, changedCaseIds: [], articleIds: [], artifacts: [] } });
+        expect(payload.text).not.toBe('');
+        expect(payload.verification.status).not.toBe('verified');
+        expect(JSON.stringify(listCases(orgId, '', null, viewerId))).toBe(before);
+      }
+    } finally {
+      toolRegistry.unregister(actual.name);
+      expect(toolRegistry.register(stub)).toBe(true);
+    }
+  });
+
+  it('denies a revoked membership before invoking the contract-review tool despite an old owner role token', async () => {
+    const revokedId = `revoked-legal-${Date.now()}`;
+    addMember(orgId, revokedId, 'member');
+    const token = jwt.sign({ uid: revokedId, username: revokedId, role: 'user', orgId, orgRole: 'owner' }, JWT_SECRET);
+    removeMember(orgId, revokedId);
+    const count = observedCalls.length;
+    const response = await fetch(`${url}/api/legal/contract-review`, {
+      method: 'POST', headers: bearer(token), body: JSON.stringify({ contract: 'Synthetic contract', persistCase: false }),
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'Active organization membership required.' });
+    expect(observedCalls).toHaveLength(count);
   });
 });

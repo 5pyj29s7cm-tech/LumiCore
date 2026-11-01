@@ -2,12 +2,13 @@ import type { ActionIntentAnalysis } from "../normalized_action_intent";
 import { findLatestRepeatableAssistantReply } from "../../conversation/assistant_restatement";
 import { buildTaskCapsuleV1, formatTaskCapsuleForPrompt } from "../../conversation/task_capsule";
 import type { ActionContinuationHistoryItem, ConversationActionContinuationState } from './contracts';
-import { compact, REFERENTIAL_CONTEXT_MAX_AGE_MS, recordTimestamp, recordRole, recordText } from './history_values';
+import { compact, REFERENTIAL_CONTEXT_MAX_AGE_MS, recordTimestamp, recordRole, recordText, parseToolCalls } from './history_values';
 import { normalizeConversationActionState } from './state_normalization';
 import { classifyConversationActionFollowupIntent, needsRecentActionContinuationContext, isActionBearingGoal } from './followup';
 import { explicitDurableTaskReference } from './recognition';
 import { findTaskAnchorIndex, extractRecentActionContinuationState } from './history_projection';
-import { summarizeToolCalls } from './tool_receipts';
+import { classifyToolRecordTaskDurability, summarizeToolCalls, toolCallSucceeded } from './tool_receipts';
+import { toolRecordHasTerminalPayload } from '../../tools/receipt_payload';
 
 export function buildRecentActionContinuationBridge(
   userText: string,
@@ -98,7 +99,28 @@ export function buildRecentActionContinuationBridge(
   // history-only bridge is allowed only when its actual user goal carries an
   // external-action contract. Durable state remains safe because it can only
   // be created from terminal tool evidence.
-  if (!durableState && !isActionBearingGoal(state.goal, analysis)) return '';
+  if (!durableState && !isActionBearingGoal(state.goal, analysis)) {
+    const observations = executionTail
+      .filter(item => ['assistant', 'agent'].includes(recordRole(item)))
+      .flatMap(parseToolCalls);
+    if (followupIntent !== 'status' || !state.goal || observations.length === 0
+      || !observations.every(call => classifyToolRecordTaskDurability(call) === 'observation_only'
+        && call.terminalVerification?.status === 'verified'
+        && toolCallSucceeded(call) && toolRecordHasTerminalPayload(call))) return '';
+    // A recorded read result may answer a status follow-up without becoming
+    // an executable task or inheriting any older task's permission envelope.
+    return [
+      '## Recent observation result context',
+      '- followupIntent: status',
+      `- originalGoal: ${state.goal}`,
+      'Recorded tool observations:',
+      ...toolSummaries.map(summary => `- ${summary}`),
+      'Rules:',
+      '- Explain only the recorded observation shown here. It is historical evidence, not a fresh observation of the current environment.',
+      '- Do not call tools, retry an operation, resume an older task, or derive execution permission from this context.',
+      '- Do not claim any unobserved work completed. If the saved observation does not answer the question, state that limit.',
+    ].join('\n');
+  }
 
   if (
     userTurns.length === 0

@@ -1,4 +1,6 @@
 import { classifyToolRecordTaskDurability } from './continuation/tool_receipts';
+import { hasVerifiedCompanyLookupEvidence } from './result_policy_evidence';
+import { withoutNegatedLookupClauses } from './normalized_action_intent';
 import { getConversationCompletionSnapshot } from '../conversation/conversation_lifecycle';
 import { listModelRoutingReceipts } from '../llm/model_routing_receipts';
 import { toolRecordSucceeded } from '../tools/receipt_payload';
@@ -566,6 +568,11 @@ type ReadCompletionScope = { requestId?: string; taskId?: string; userId?: strin
 function hasVerifiedReadObservation(records: ToolExecutionRecord[], goal: string, current?: ReadCompletionScope): boolean {
   if (!current?.requestId || !current.taskId || !current.userId || !current.conversationId || !goal.trim()) return false;
   const scoped = records.filter(record => record.requestId === current.requestId && record.taskId === current.taskId);
+  // Persistence proves that the read occurred, not that it covered the exact
+  // requested official-company source and all its requested query ranges.
+  // i18n-allow: Official source identifier recognition, not user-visible copy.
+  if (/企查查|qichacha|\bqcc\b/iu.test(withoutNegatedLookupClauses(goal)) && scoped.some(record => record.name === 'legal_company_database_lookup')
+    && !hasVerifiedCompanyLookupEvidence(scoped, { ...current, taskText: goal }, true)) return false;
   const substantive = (value: unknown): boolean => {
     if (typeof value === 'string') return Boolean(value.trim());
     if (typeof value === 'number') return Number.isFinite(value);

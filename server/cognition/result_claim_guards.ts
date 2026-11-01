@@ -6,11 +6,20 @@ import { hasRequestedArtifactMutation } from './tool_intent';
 import { formatVerifiedTaskResultForReadability } from './reply_style';
 import { CN_RESULT_GROUNDING_MESSAGES } from "../regions/messages/voice_fast_path_messages";
 import { containsCompactToolEvidenceMarker } from '../conversation/summary_grounding';
+import { guardCompletionClaims } from '../work_product/completion_guard';
 
 import { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from "./result_finalizer_types";
 import { resultTaskText, isVerifiedCurrentTurnRecord, taskActionContract, hasResultCoreActionEvidence, isChineseText, isInternalRuntimeWorkNarration } from "./result_finalizer_support";
 
 export const VERIFIED_DOCUMENT_OBSERVATION_TOOL_RE = /^(?:read_file|read_files_batch|read_pdf|read_docx|read_xlsx|pdf_to_text|extract_document_text|ocr_image_file)$/iu;
+
+function matchingVerifiedDocumentReads(input: LumiResultFinalizerInput) {
+  return (input.toolRecords || []).filter(candidate => (
+    isVerifiedCurrentTurnRecord(input, candidate)
+    && isSuccessfulExactDocumentRead(candidate)
+    && documentReadMatchesRequestedTarget(candidate, resultTaskText(input), input.flow?.acceptedTaskTarget, input.flow?.currentAttachmentPaths)
+  ));
+}
 
 export function groundedVerifiedDocumentObservation(
   input: LumiResultFinalizerInput,
@@ -24,11 +33,7 @@ export function groundedVerifiedDocumentObservation(
   if (hasRequestedArtifactMutation(task)) {
     return null;
   }
-  const record = [...(input.toolRecords || [])].reverse().find(candidate => (
-    isVerifiedCurrentTurnRecord(input, candidate)
-    && isSuccessfulExactDocumentRead(candidate)
-    && documentReadMatchesRequestedTarget(candidate, task, input.flow?.acceptedTaskTarget, input.flow?.currentAttachmentPaths)
-  ));
+  const record = matchingVerifiedDocumentReads(input).at(-1);
   if (!record) return null;
   // A successful read cannot erase a downstream delivery/claim failure.
   // In particular, preserve a blocked shared-loop verdict instead of saving
@@ -38,6 +43,16 @@ export function groundedVerifiedDocumentObservation(
   if (contract.applies && !hasResultCoreActionEvidence(input, contract, input.toolRecords || [], task)) return null;
   const response = String(input.responseText || '').trim();
   const rawReadOnly = response.replace(/\s+/gu, '') === actualDocumentReadContent(record).replace(/\s+/gu, '');
+  // Source text is data, including any execution claims it quotes. The model's
+  // own surrounding prose still needs the shared current-turn claim checks;
+  // a finished read cannot prove that another action was sent, saved or started.
+  if (!rawReadOnly) {
+    const claimGuard = guardCompletionClaims({ task, response, toolCalls: input.toolRecords,
+      source: input.source, requestId: input.requestId, taskId: input.taskId,
+      acceptedTaskTarget: input.flow?.acceptedTaskTarget, acceptedActionContract: input.flow?.acceptedActionContract,
+      claimsOnly: true });
+    if (claimGuard.blocked) return claimGuard;
+  }
   const unusableNarration = !response
     || !rawReadOnly && (isInternalRuntimeWorkNarration(response)
     // i18n-allow: Chinese stale/internal blocked-result recognition; not user-visible copy.
@@ -69,6 +84,11 @@ export function groundedVerifiedDocumentObservation(
 
 export function leakedLegacyToolProtocol(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
   const raw = String(input.responseText || '').trim();
+  // Exact, target-bound source contents are a literal read result, not a new
+  // model tool request. Do not grant this exception to generated output or to
+  // surrounding model prose merely because some read receipt exists.
+  if (!hasRequestedArtifactMutation(resultTaskText(input))
+    && matchingVerifiedDocumentReads(input).some(record => raw === actualDocumentReadContent(record).trim())) return null;
   // A marker in model prose is not an execution receipt. With actual records,
   // their existing current-turn/target validators own the result instead.
   if (!(input.toolRecords || []).length && containsCompactToolEvidenceMarker(raw)) {
@@ -80,12 +100,12 @@ export function leakedLegacyToolProtocol(input: LumiResultFinalizerInput): LumiR
       reason: 'Model output contained a reserved server receipt marker without any tool records.',
     };
   }
-  const hasXmlProtocol = /<(?:function_calls|tool_calls|invoke)\b/i.test(raw);
+  const hasXmlProtocol = /<(?:[|｜]{1,2}DSML[|｜]{1,2})?(?:function_calls|tool_calls|invoke)\b/iu.test(raw);
   const hasFencedToolProtocol = /```\s*(?:tool|tools|tool_call|tool_calls|function_call|function_calls)\b/i.test(raw);
   // i18n-allow: Chinese internal tool-protocol recognition; not user-visible copy.
   const hasBracketProtocol = /\[(?:[^\]\r\n]{1,48})\]\s*[A-Za-z][A-Za-z0-9_.:-]{1,127}\s*\([^\r\n)]*\)|\[(?:调用|call(?:ing)?|tool)\s+[A-Za-z][A-Za-z0-9_.:-]{1,127}\s*\](?:\s*\{)?/iu.test(raw);
   if (!hasXmlProtocol && !hasFencedToolProtocol && !hasBracketProtocol) return null;
-  const names = Array.from(raw.matchAll(/<invoke\s+name=["']([^"']+)["']/gi), match => match[1]);
+  const names = Array.from(raw.matchAll(/<(?:[|｜]{1,2}DSML[|｜]{1,2})?invoke\s+name=["']([^"']+)["']/giu), match => match[1]);
   const clientStateRequested = names.includes('client_get_state');
   const chinese = isChineseText(resultTaskText(input));
   const text = chinese

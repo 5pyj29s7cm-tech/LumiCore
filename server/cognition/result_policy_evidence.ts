@@ -4,6 +4,7 @@ import { isCanonicalToolExecutionRecord } from '../tools/canonical_execution_rec
 import { withoutNegatedLookupClauses, genericExternalCommit } from './normalized_action_intent';
 import { hasRequestedArtifactMutation } from './tool_intent';
 import { inspectPersistedToolExecutionReceipt } from '../tools/persisted_execution_receipt';
+import { affirmativeActionInstructionClauses } from './action_instruction_clauses';
 
 export function hasContinuousStockWatchIntent(text: string): boolean {
   return /(?:\u6301\u7eed|\u4e00\u76f4|\u5b9e\u65f6|\u76d8\u4e2d|\u5f00\u59cb|\u6b63\u5728)?.{0,12}(?:\u76ef\u76d8|\u76d1\u63a7|\u9884\u8b66|\u63d0\u9192)|(?:watch|monitor|track|alert|watchlist|price\s*alert|market\s*alert)/iu
@@ -108,10 +109,16 @@ export function claimsExternalLegalPlatformFinalAction(text: string): boolean {
 }
 
 export function claimsExternalLegalPlatformResult(text: string): boolean {
-  const value = String(text || '').replace(/\s+/gu, ' ');
-  if (describesAuthorizedLegalExternalHandoff(value)) return false;
-  return /(?:(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u67e5\u5230|\u68c0\u7d22\u5230|\u627e\u5230|\u67e5\u8be2\u5230|\u4e0b\u8f7d\u5230|\u6293\u53d6\u5230).{0,36}(?:\u6cd5\u8749|\bAlpha\b|\u4f01\u67e5\u67e5|\u88c1\u5224\u6587\u4e66|\u6848\u4f8b\u5e93|\u516c\u53f8|\u88ab\u6267\u884c|\u6cd5\u9662|\u7ed3\u679c))|(?:(?:\u6cd5\u8749|\bAlpha\b|\u4f01\u67e5\u67e5|\u88c1\u5224\u6587\u4e66\u7f51|\u4eba\u6c11\u6cd5\u9662\u6848\u4f8b\u5e93).{0,36}(?:\u67e5\u5230|\u68c0\u7d22\u5230|\u627e\u5230|\u7ed3\u679c|result))/iu
-    .test(value);
+  return affirmativeActionInstructionClauses(String(text || '')).some(({ probe }) => {
+    const value = probe.replace(/\s+/gu, ' ');
+    // i18n-allow: Past-tense negative reports, unlike imperative prohibition.
+    if (/^\s*(?:(?:我|我们|本轮|当前)\s*)*(?:没有|并未|尚未|未|不曾)|^\s*(?:(?:I|we)\s+)?(?:have\s+not|haven't|did\s+not|didn't)\b/iu.test(value)) return false;
+    // A plan or pending-login clause cannot erase a separate completed-query
+    // assertion. Quoted, hypothetical and negated clauses are data, not claims.
+    const explicitResult = /\u5df2(?:\u7ecf)?(?:\u5728[^。！？!?;\n]{0,24})?(?:\u67e5\u5230|\u68c0\u7d22\u5230|\u627e\u5230|\u67e5\u8be2\u5230|\u4e0b\u8f7d\u5230|\u6293\u53d6\u5230)/u.test(value);
+    if (describesAuthorizedLegalExternalHandoff(value) && !explicitResult) return false;
+    return /(?:(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u67e5\u5230|\u68c0\u7d22\u5230|\u627e\u5230|\u67e5\u8be2\u5230|\u4e0b\u8f7d\u5230|\u6293\u53d6\u5230).{0,36}(?:\u6cd5\u8749|\bAlpha\b|\u4f01\u67e5\u67e5|\u88c1\u5224\u6587\u4e66|\u6848\u4f8b\u5e93|\u516c\u53f8|\u88ab\u6267\u884c|\u6cd5\u9662|\u7ed3\u679c))|(?:(?:\u6cd5\u8749|\bAlpha\b|\u4f01\u67e5\u67e5|\u88c1\u5224\u6587\u4e66\u7f51|\u4eba\u6c11\u6cd5\u9662\u6848\u4f8b\u5e93).{0,36}(?:\u67e5\u5230|\u68c0\u7d22\u5230|\u627e\u5230|\u7ed3\u679c|result))/iu.test(value);
+  });
 }
 
 export function hasLegalExternalPlatformResultEvidence(records: ToolExecutionRecord[], current?: { requestId?: string; taskId?: string; taskText?: string }): boolean {

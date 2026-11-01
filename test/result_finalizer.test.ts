@@ -114,7 +114,7 @@ describe('Lumi result finalizer', () => {
     expect(result.text).not.toContain('client.modes');
   });
 
-  it('naturally corrects an unsupported live-client verification claim', async () => {
+  it('blocks an unsupported live-client verification claim without exposing fabricated state', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const result = finalizeLumiResponse({
       taskText: '\u8bf4\u660e\u4f60\u5bf9\u5ba2\u6237\u7aef\u8fd0\u884c\u72b6\u6001\u7684\u4e86\u89e3',
@@ -123,10 +123,11 @@ describe('Lumi result finalizer', () => {
       source: 'chat',
     });
 
-    expect(result.blocked).toBe(false);
-    expect(result.reason).toBe('unsupported_client_state_verification_claim_corrected');
-    expect(result.text).toContain('\u6ca1\u6709\u8bfb\u53d6\u5230\u53ef\u6838\u9a8c');
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing core evidence for desktop_operation.');
+    expect(result.text).toMatch(/还没完成|没有完成/);
     expect(result.text).not.toContain('client.modes');
+    expect(result.text).not.toContain('已验证存在');
   });
 
   it('grounds receipt-only runtime cancellation after nested JSON normalization', async () => {
@@ -546,7 +547,7 @@ describe('Lumi result finalizer', () => {
     expect(result.text).not.toBe(responseText);
   });
 
-  it('reports a successful but irrelevant client_get_state receipt instead of claiming zero tool execution', async () => {
+  it('does not let an irrelevant client_get_state receipt complete desktop observations', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const result = finalizeLumiResponse({
       taskText: '\u5148\u67e5\u770b\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff0c\u518d\u5217\u51fa\u684c\u9762\u6587\u4ef6\uff0c\u6700\u540e\u544a\u8bc9\u6211\u7a97\u53e3\u6807\u9898\u548c\u6587\u4ef6\u6570\u91cf\u3002',
@@ -574,8 +575,12 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.reason).toContain('\u6210\u529f\u6267\u884c\u4e86\u67e5\u8be2\u6216\u68c0\u67e5\u5de5\u5177');
-    expect(result.text).toBe('\u8fd9\u9879\u64cd\u4f5c\u8fd8\u6ca1\u5b8c\u6210\u3002\u5df2\u7ecf\u5b8c\u6210\u7684\u90e8\u5206\u4f1a\u4fdd\u7559\uff0c\u53ef\u4ee5\u4ece\u8fd9\u91cc\u91cd\u8bd5\u3002');
+    expect(result.reason).toContain('Missing desktop evidence');
+    expect(result.reason).toContain('desktop_active_window');
+    expect(result.reason).toContain('desktop_list_files');
+    expect(result.text).toMatch(/还没完成|没有完成/);
+    expect(result.text).not.toContain('已完成查看');
+    expect(result.text).not.toContain('没有成功执行任何工具');
     expect(result.text).not.toContain('client_get_state');
     expect(result.text).not.toMatch(/\u72b6\u6001\s*[:\uff1a]|\u8bc1\u636e\s*[:\uff1a]|\u56de\u6267|target_mismatch|undefined/iu);
   });
@@ -756,7 +761,8 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.reason).toContain('\u8fd9\u4e00\u8f6e\u6ca1\u6709\u6210\u529f\u6267\u884c\u4efb\u4f55\u5de5\u5177');
+    expect(result.reason).toBe('Missing current-turn evidence for reported artifact completion.');
+    expect(result.text).not.toContain('已新建并写好了');
     expect(result.notification?.type).toBe('work_product_guard');
   });
 
@@ -771,8 +777,9 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.reason).toContain('current-turn tool execution');
-    expect(result.text).toBe('\u8fd9\u9879\u64cd\u4f5c\u8fd8\u6ca1\u6709\u5f00\u59cb\u3002\u53ef\u4ee5\u4ece\u8fd9\u91cc\u91cd\u8bd5\u3002');
+    expect(result.reason).toBe('Terminal reply claimed ongoing execution without current action evidence.');
+    expect(result.text).toContain('没有证据');
+    expect(result.text).not.toBe('正在执行。');
     expect(result.text).not.toContain('No successful current-turn tool execution');
   });
 
@@ -1108,7 +1115,7 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.reason).toBe('Missing core evidence for desktop_operation.');
+    expect(result.reason).toMatch(/Missing (?:core evidence for desktop_operation|current-turn evidence for reported open completion)\./);
     expect(result.text).not.toBe('\u5df2\u6253\u5f00 AutoCAD\u3002');
   });
 
@@ -1605,7 +1612,8 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toMatch(/could not (?:start|complete)/i);
+    expect(result.text).toMatch(/could not (?:start|complete)|action is not complete/i);
+    expect(result.text).not.toContain('Let me first read');
   });
 
   it('blocks a runtime-repair plan when no tool actually started', async () => {
@@ -1634,7 +1642,8 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toBe('这次操作没有完成，请重试。');
+    expect(result.text).toMatch(/还没完成|没有完成/);
+    expect(result.text).not.toContain('我先读取');
     expect(result.text).not.toMatch(/\u72b6\u6001\s*[:\uff1a]|\u8bc1\u636e\s*[:\uff1a]|\u56de\u6267|target_mismatch|undefined/iu);
   });
 
@@ -1653,8 +1662,9 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toMatch(/could not (?:start|complete)/i);
-    expect(result.reason).toContain('content-read/open/review');
+    expect(result.text).toMatch(/could not (?:start|complete)|action is not complete/i);
+    expect(result.reason).toMatch(/Missing (?:core evidence for desktop_operation|current-turn evidence for reported generic execution promise)/);
+    expect(result.text).not.toContain('Let me first read');
   });
 
   it('keeps blocked autonomous task results compact', async () => {
@@ -1717,7 +1727,9 @@ describe('Lumi result finalizer', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.text).toContain('\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210');
-    expect(result.text).toContain('\u5fae\u4fe1\u53d1\u9001');
+    expect(result.text).toContain('打开或聚焦目标窗口');
+    expect(result.text).toContain('等待结果超时');
+    expect(result.text).not.toContain('Completed successfully');
     expect(result.text).not.toContain('\u8bfb\u53d6\u6216\u5ba1\u67e5');
     expect(result.text).not.toContain('\u53ef\u8bfb\u53d6\u7684\u6587\u4ef6');
   });
@@ -2259,21 +2271,44 @@ describe('Lumi result finalizer', () => {
 
   it('allows authorized external legal research handoffs without pretending results are fetched', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const { initDatabase } = await import('../db_layer');
+    const { external_researchTools } = await import('../server/regions/packs/cn/legal_tools/definitions_external_research');
+    const { ToolRegistry } = await import('../server/tools/registry');
+    const { executeToolCall } = await import('../server/tools/execution_engine');
+    const { encodeToolResult } = await import('../server/tools/result_envelope');
+    const { isCanonicalToolExecutionRecord } = await import('../server/tools/canonical_execution_record');
+    await initDatabase();
+
+    const scope = { taskId: 'finalizer-plan-task', requestId: 'finalizer-plan-request' };
+    const content = '\u5916\u90e8\u68c0\u7d22\u884c\u52a8\u5355\n\u6388\u6743\u7f51\u9875\u767b\u5f55\u534f\u4f5c\n\u6765\u6e90\u767b\u8bb0\u8868';
+    const definition = external_researchTools().find(tool => tool.name === 'legal_external_research_plan')!;
+    const registry = new ToolRegistry();
+    // Exercise the real canonical execution boundary with a local fixture body.
+    // No platform query, case persistence, provider or actual research runs here.
+    registry.register({ ...definition, handler: async () => encodeToolResult(content, {
+      ok: true, status: 'planned', persisted: false, changedCaseIds: [], materialSources: [], articleIds: [], artifacts: [], content,
+    }) });
+    const record = await executeToolCall({ registry, name: definition.name,
+      arguments: { caseName: '\u5916\u90e8\u68c0\u7d22\u6d4b\u8bd5\u6848', persistCase: false },
+      context: { ...scope, turnId: scope.requestId, userId: 'finalizer-plan-fixture-user', authenticated: true,
+        authRole: 'user', domain: 'personal', orgId: '', localExecution: true, executionBoundary: 'trusted_local' } });
+    expect(record.error).toBeUndefined();
+    expect(isCanonicalToolExecutionRecord(record)).toBe(true);
+    expect(record.terminalVerification?.status).toBe('verified');
+    expect(record.receipt).toMatchObject({ status: 'planned', persisted: false, artifacts: [] });
 
     const responseText = '\u5df2\u751f\u6210\u6388\u6743\u534f\u4f5c\u68c0\u7d22\u884c\u52a8\u5355\uff0c\u5f85\u5f8b\u5e08\u767b\u5f55\u6cd5\u8749\u3001Alpha \u548c\u88c1\u5224\u6587\u4e66\u7f51\u6838\u9a8c\u5e76\u5f52\u6863\u6765\u6e90\u3002';
-    const result = finalizeLumiResponse({
+    const input = {
       taskText: '\u751f\u6210\u6cd5\u8749\u3001Alpha \u548c\u88c1\u5224\u6587\u4e66\u7f51\u68c0\u7d22\u8ba1\u5212',
       responseText,
-      toolRecords: [{
-        name: 'legal_external_research_plan',
-        arguments: { caseName: '\u5916\u90e8\u68c0\u7d22\u6d4b\u8bd5\u6848' },
-        result: '\u5916\u90e8\u68c0\u7d22\u884c\u52a8\u5355\n\u6388\u6743\u7f51\u9875\u767b\u5f55\u534f\u4f5c\n\u6765\u6e90\u767b\u8bb0\u8868',
-      }],
-      source: 'chat',
-    });
+      toolRecords: [record], source: 'chat', ...scope,
+    };
+    const result = finalizeLumiResponse(input);
 
     expect(result.blocked).toBe(false);
     expect(result.text).toBe(responseText);
+    expect(finalizeLumiResponse({ ...input, requestId: 'other-plan-request' }).blocked).toBe(true);
+    expect(finalizeLumiResponse({ ...input, responseText: responseText + '\n已在法蝉查到裁判结果。' }).blocked).toBe(true);
   });
 
   it('blocks legacy customer packages from claiming customer work completed', async () => {
@@ -3049,7 +3084,9 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain('没有确认目标已经打开');
+    expect(result.reason).toBe('Missing core evidence for desktop_operation.');
+    expect(result.text).toMatch(/还没完成|没有完成/);
+    expect(result.text).not.toContain('记事本已打开');
   });
 
   it('does not let a generic computer-use receipt masquerade as verified playback', async () => {
@@ -3109,9 +3146,11 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(sent.blocked).toBe(true);
-    expect(sent.text).toContain('没有取得发送成功的确认');
+    expect(sent.text).toMatch(/没有(?:取得|收到).*发送.*确认/);
+    expect(sent.text).not.toContain('消息已发送成功');
     expect(switched.blocked).toBe(true);
-    expect(switched.text).toContain('还没有读取当前语音或模型配置');
+    expect(switched.text).not.toContain('已切换到');
+    expect(switched.reason).toMatch(/configuration|switch|voice|model/i);
   });
 
   it('keeps a verified same-turn PDF observation usable instead of relabeling it blocked', async () => {
@@ -3491,7 +3530,14 @@ describe('bounded artifact completion after an unrequested actual readback', () 
     await withFixture(({ input, outputPath, desktop }: any) => {
       const second = path.join(desktop, '另份交付.docx');
       const taskText = '创建 ' + outputPath + '，保存完后回读；创建 ' + second + '，保存完后回读。';
-      expect(buildActionEvidenceContract(taskText).components).toHaveLength(2);
+      const components = buildActionEvidenceContract(taskText).components || [];
+      // Both output obligations and both explicitly requested readbacks survive
+      // the shared clause projection; its flat array length is not a public API.
+      for (const target of [outputPath, second]) {
+        expect(components.some(component => component.text.includes(target)
+          && component.contract.kind === 'artifact_work' && component.contract.applies)).toBe(true);
+      }
+      expect(components.filter(component => component.text.includes('回读') && component.contract.applies)).toHaveLength(2);
       expect(tryFinalizeVerifiedBoundedAction({ ...input, taskText })).toBeNull();
     });
   });

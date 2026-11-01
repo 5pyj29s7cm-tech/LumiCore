@@ -1,4 +1,6 @@
-import { actualDocumentReadContent } from './action_desktop_evidence';
+import { actualDocumentReadContent, documentReadMatchesRequestedTarget, isSuccessfulExactDocumentRead } from './action_desktop_evidence';
+import { affirmativeActionClauses, negatedActionInstructions } from './action_instruction_clauses';
+import { withoutLocationLiterals } from './location_literals';
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
 import { artifactRecordMatchesTurn, artifactPathFromRecord, isArtifactProducerRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
@@ -108,6 +110,48 @@ export function formatGroundedSkillDraft(input: LumiResultFinalizerInput): LumiR
   return null;
 }
 
+function requestedDocumentDetails(text: string, contentOnly = false): boolean {
+  const instruction = withoutLocationLiterals(text);
+  // i18n-allow: Explicit content-display fields, not authorization to modify a document.
+  const contentFields = /(?:全文|全部正文)|\b(?:full|exact|complete)\s+(?:text|content|body)\b/iu;
+  // i18n-allow: An explicit content-display prohibition overrides an earlier display request.
+  if (contentOnly && negatedActionInstructions(instruction).some(({ instruction: negative }) =>
+    /(?:报告|汇报|返回|显示|列出|告诉|给出|展示|读出|回读)|\b(?:report|show|return|provide|display)\b/iu.test(negative)
+    && contentFields.test(negative))) return false;
+  return affirmativeActionClauses(instruction).some(clause => (
+    // i18n-allow: Grammar for an explicit request to display document details, not quoted data.
+    /(?:报告|汇报|返回|显示|列出|告诉|给出|展示|读取|读出|回读|核验|核对)|\b(?:report|show|return|provide|read|verify|check)\b/iu.test(clause)
+    // i18n-allow: Requested document fields; this does not authorize a file mutation.
+    && /(?:编码|总行数|行数|全文|全部正文)|\b(?:encoding|line\s*count|(?:full|exact|complete)\s+(?:text|content|body))\b/iu.test(clause)
+    && (!contentOnly || contentFields.test(clause))
+  ));
+}
+
+/** Enrich an already guarded observation; never change its completion verdict or grant a write. */
+export function formatRequestedDocumentObservation(
+  input: LumiResultFinalizerInput,
+  observation: LumiResultFinalizerResult,
+): LumiResultFinalizerResult {
+  const actionText = resultTaskText(input);
+  if (observation.blocked || !requestedDocumentDetails(actionText, true)) return observation;
+  const record = [...(input.toolRecords || [])].reverse().find(item => (
+    isVerifiedCurrentTurnRecord(input, item) && isSuccessfulExactDocumentRead(item)
+    && documentReadMatchesRequestedTarget(item, actionText, input.flow?.acceptedTaskTarget, input.flow?.currentAttachmentPaths)
+  ));
+  const content = record && actualDocumentReadContent(record);
+  const path = record && artifactPathFromRecord(record);
+  if (!path || !content) return observation;
+  // Read receipts prove content and target, not a filesystem encoding or a new creation.
+  // i18n-allow: Bilingual receipt-grounded read result, with no mutation claim.
+  const details = isChineseText(actionText)
+    ? `已读取文件：${path}\n回读正文：\n${content}`
+    : `Read file: ${path}\nReadback content:\n${content}`;
+  // A guarded answer may also contain the requested analysis. Enrich it with
+  // receipt facts instead of discarding that independently checked answer.
+  return { ...observation, text: observation.text.trim() && observation.text.trim() !== content.trim()
+    ? `${observation.text}\n\n${details}` : details };
+}
+
 export function formatGroundedArtifactResult(
   input: LumiResultFinalizerInput,
 ): LumiResultFinalizerResult | null {
@@ -136,7 +180,13 @@ export function formatGroundedArtifactResult(
   const calculationEvidence = Array.isArray(calculatedCells) ? calculatedCells.slice(0, 80).filter(cell => (
     cell && typeof cell.sheet === 'string' && /^[A-Z]+\d+$/u.test(cell.cell) && typeof cell.value === 'number' && Number.isFinite(cell.value)
   )).map(cell => `${typeof cell.label === 'string' && cell.label ? cell.label : `${cell.sheet}!${cell.cell}`}: ${cell.value}`).join('\n') : '';
-  const readbackRequired = requiresArtifactPostWriteReadback(actionText) || (requestsComputedAnswer && !calculationEvidence);
+  // A composite artifact leaf retains the root's requested display fields only
+  // when an exact current-turn post-write readback already exists. No root text
+  // becomes a new mutation or completion authorization.
+  const inheritedReadbackDetails = Boolean(readback && input.flow?.rootTaskText
+    && requiresArtifactPostWriteReadback(input.flow.rootTaskText)
+    && requestedDocumentDetails(input.flow.rootTaskText));
+  const readbackRequired = requiresArtifactPostWriteReadback(actionText) || inheritedReadbackDetails || (requestsComputedAnswer && !calculationEvidence);
   const asksToOpen = requiresArtifactOpen(actionText);
   const openRecord = [...records].reverse().find(record => /^(?:desktop_open|browser_open_task)$/i.test(String(record.name || '')));
   const verified = records.some(record => (
@@ -255,9 +305,14 @@ export function formatGroundedArtifactResult(
               reason: 'Post-write readback differs from the current artifact.',
             };
           }
-          if (/(?:\u7f16\u7801|\u603b\u884c\u6570|\u884c\u6570|\u5168\u6587|encoding|line\s*count|full\s*text)/iu.test(actionText)) {
+          if (requestedDocumentDetails(actionText) || inheritedReadbackDetails) {
+            // Reading with the UTF-8 codec alone can silently replace invalid
+            // bytes. Claim that encoding only after a strict byte decode.
+            const utf8Text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(fs.readFileSync(path));
+            if (utf8Text.replace(/\r\n/g, '\n') !== actualText) return null;
             const normalizedText = actualText.replace(/\n$/, '');
             const lineCount = normalizedText ? normalizedText.split('\n').length : 0;
+            const fullTextRequested = requestedDocumentDetails(input.flow?.rootTaskText || actionText, true);
             return {
               text: zh
                 ? [
@@ -265,16 +320,14 @@ export function formatGroundedArtifactResult(
                     `\u8def\u5f84\uff1a${path}`,
                     '\u7f16\u7801\uff1aUTF-8',
                     `\u603b\u884c\u6570\uff1a${lineCount}`,
-                    '\u5168\u6587\uff1a',
-                    normalizedText,
+                    ...(fullTextRequested ? ['\u5168\u6587\uff1a', normalizedText] : []),
                   ].join('\n')
                 : [
                     'Completed the local file and verified it by reading it back.',
                     `Path: ${path}`,
                     'Encoding: UTF-8',
                     `Line count: ${lineCount}`,
-                    'Full text:',
-                    normalizedText,
+                    ...(fullTextRequested ? ['Full text:', normalizedText] : []),
                   ].join('\n'),
               blocked: false,
               reason: 'Grounded artifact completion with exact same-path post-write readback.',
@@ -584,6 +637,9 @@ export function formatGroundedCadRunResult(input: LumiResultFinalizerInput): Lum
     && String(item.result || '').trim()
   ));
   if (!record) return null;
+  // Payload completion flags cannot override an explicit host failure or an
+  // unresolved adapter outcome. Let the normal guard retain the blocker.
+  if (!artifactRecordMatchesTurn(record, input)) return null;
 
   let parsed: any;
   try {
@@ -591,6 +647,12 @@ export function formatGroundedCadRunResult(input: LumiResultFinalizerInput): Lum
   } catch {
     return null;
   }
+  // Preserve specific blocked workflow diagnostics. The host veto applies to
+  // a success presentation, not to honest failure/progress information.
+  if (parsed?.status === 'completed' && (!toolRecordSucceeded(record)
+    || record.terminalVerification && record.terminalVerification.status !== 'verified'
+    || record.envelope && (record.envelope.status !== 'verified_success'
+      || record.envelope.verification.status !== 'verified'))) return null;
 
   const actionText = resultTaskText(input);
   const zh = isChineseText(actionText);

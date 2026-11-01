@@ -1,6 +1,6 @@
 import './helpers';
 import {beforeAll,describe,expect,it} from 'vitest';
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {initDatabase,readDB} from '../db_layer';
@@ -8,12 +8,13 @@ import {addMessageIdempotent,getOrCreateActiveConversation,prepareConversationAc
 import {createConversationReceiptObserver} from '../server/conversation/execution_receipt_archive';
 import {ToolRegistry} from '../server/tools/registry';
 import {executeToolCall} from '../server/tools/execution_engine';
+import {encodeToolResult} from '../server/tools/result_envelope';
 import {persistModelRoutingReceipt} from '../server/llm/model_routing_receipts';
 import {buildActionEvidenceContract} from '../server/cognition/action_contract';
 import {mergeTaskReceipts,recordsToTaskReceipts,taskCompletionFromReceipts,taskReceiptsToRecords} from '../server/cognition/task_execution_ledger';
 import type {ToolExecutionRecord} from '../server/tools/types';
 beforeAll(()=>initDatabase());
-async function observed(name='web_search',payload:unknown={ok:true,results:[{title:'Synthetic source',url:'https://example.invalid/source'}]},options:{routeOwner?:string;noRoute?:boolean;mutation?:boolean}={}){
+async function observed(name='web_search',payload?:unknown,options:{routeOwner?:string;noRoute?:boolean;mutation?:boolean}={}){
  const userId='observation-'+randomUUID(),conversationId=getOrCreateActiveConversation(userId,'lumi','personal','').id,requestId=randomUUID();
  const goal=name==='web_search'?'Search the public web for synthetic examples.':'通过企查查查询虚构测试公司的工商登记信息。';
  const userMessageId=addMessageIdempotent({userId,conversationId,requestId,source:'mcp_chat',domain:'personal',orgId:'',agentId:'lumi',role:'user',content:goal,deferActionPreparation:true});
@@ -21,9 +22,14 @@ async function observed(name='web_search',payload:unknown={ok:true,results:[{tit
  if('bindingFailure'in prepared||!prepared.state?.taskId)throw Error('fixture owner missing');
  const scope={userId,conversationId,requestId,taskId:prepared.state.taskId,domain:'personal',orgId:''};
  const now=new Date().toISOString();
+ const sourceText=JSON.stringify({name:'虚构测试公司',registration:'Synthetic fixture'});
+ const response=payload ?? (name==='legal_company_database_lookup' ? {ok:true,status:'observed',persisted:false,sourceResults:[{
+  status:'observed',subject:'虚构测试公司',queryType:'registration',sourceTool:'get_company_registration_info',sourceEndpoint:'https://agent.qcc.com/mcp/company/stream',
+  queriedAt:now,sourceText,sourceTextSha256:createHash('sha256').update(sourceText).digest('hex'),
+ }]} : {ok:true,results:[{title:'Synthetic source',url:'https://example.invalid/source'}]});
  const route=options.noRoute?undefined:persistModelRoutingReceipt({...scope,userId:options.routeOwner||userId,interactionId:'',source:'mcp_chat',status:'succeeded',startedAt:now,completedAt:now,durationMs:0,requestedProvider:'deepseek',requestedModel:'fixture',selectionMode:'pinned',selectedProvider:'deepseek',selectedModel:'fixture',fallbackReason:'',attempts:[{provider:'deepseek',model:'fixture',status:'succeeded'}]});
- const registry=new ToolRegistry();registry.register({name,description:'Isolated source fixture',permission:'public',securityLevel:'safe',parameters:{type:'object',properties:{query:{type:'string'}}},capability:{operation:options.mutation?'mutate':'observe',sideEffects:options.mutation?[{type:'local_write',scope:'isolated fixture only',reversible:true}]:[],verification:{strategy:'terminal_receipt',required:true,requiredFields:[],successSignals:['source returned'],limitations:['Only this query is observed.']}},handler:async()=>JSON.stringify(payload)});
- const record=await executeToolCall({registry,id:'call-'+randomUUID(),name,arguments:{query:'synthetic'},context:{...scope,turnId:requestId,turnRowId:prepared.turnRowId},executionOrigin:'model_selected',modelRoutingReceiptId:route?.id});
+ const registry=new ToolRegistry();registry.register({name,description:'Isolated source fixture',permission:'public',securityLevel:'safe',parameters:{type:'object',properties:{query:{type:'string'},name:{type:'string'}}},capability:{operation:options.mutation?'mutate':'observe',sideEffects:options.mutation?[{type:'local_write',scope:'isolated fixture only',reversible:true}]:[],verification:{strategy:'terminal_receipt',required:true,requiredFields:[],successSignals:['source returned'],limitations:['Only this query is observed.']}},handler:async()=>name==='legal_company_database_lookup'?encodeToolResult(JSON.stringify(response),response):JSON.stringify(response)});
+ const record=await executeToolCall({registry,id:'call-'+randomUUID(),name,arguments:{query:'synthetic',...(name==='legal_company_database_lookup'?{name:'虚构测试公司'}:{})},context:{...scope,turnId:requestId,turnRowId:prepared.turnRowId},executionOrigin:'model_selected',modelRoutingReceiptId:route?.id});
  if(!options.mutation)expect(record.error).toBeUndefined();await createConversationReceiptObserver({...scope,turnRowId:prepared.turnRowId},()=>true).onToolRecord(record);return{goal,scope,record,registry,complete:(records:ToolExecutionRecord[]=[record],changedScope=scope,changedGoal=goal)=>taskCompletionFromReceipts(changedGoal,recordsToTaskReceipts(records),undefined,changedScope).complete};
 }
 describe('durable completion of model selected read observations',()=>{

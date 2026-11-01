@@ -432,6 +432,13 @@ export function isExternalCommitConfirmationOnlyRequest(text: string): boolean {
 }
 
 function correctionOrExplanation(text: string): NormalizedActionIntent | null {
+  // A no-tool correction repairs the assistant's answer, not a file or task.
+  // i18n-allow: Multilingual answer-completeness input grammar; never rendered.
+  const answerCorrection = /^(?:你(?:的(?:回答|答复|回复))?(?:漏(?:掉)?了?[^。！？!?\n]{0,16}(?:句|点|项)|(?:回答|答复|回复)(?:得)?不完整)|你的(?:回答|答复|回复)不完整)|^(?:you\s+(?:missed|omitted)\s+(?:the\s+)?(?:\w+\s+){0,2}(?:sentence|point|item)|your\s+(?:answer|reply|response)\s+is\s+incomplete)\b/iu;
+  if (hasExplicitNoToolInstruction(text) && affirmativeActionInstructionClauses(text).some(clause => answerCorrection.test(clause.probe.trim()))) {
+    return { kind: 'correction_explanation', operation: 'explain', subject: 'lumi', target: 'previous_action',
+      payload: text, sideEffectClass: 'none', relation: 'correction', confidence: 0.99, rule: 'answer-completeness-correction' };
+  }
   // A time-bounded activity question is a status lookup, even though phrases
   // such as "做了什么" are superficially similar to an action complaint. i18n-allow: Reviewed input recognition.
   if (/(?:昨天|今天|这两天|最近|从.{0,12}到.{0,12}|到现在|截至现在).{0,40}(?:做了|干了|执行了|处理了|完成了).{0,20}(?:什么|哪些|多少)/u.test(text)) return null;
@@ -548,7 +555,10 @@ export function isPriorWorkDeliveryFactQuestion(text: string): boolean {
 
 export function isRecentActionReceiptQuery(text: string): boolean {
   const value = withoutLocationLiterals(currentTurnText(String(text || ''))).replace(/\s+/gu, ' ').trim();
-  return isTerseExecutionStatusQuestion(value)
+  // i18n-allow: An exact retrospective lookup names a saved operation result, not a new source query.
+  const savedLookup = /^(?:请\s*)?(?:(?:查询|查看|查找|检索|列出|报告)\s*)?(?:刚才|刚刚|上一轮|上次|之前)(?:的)?(?:查询|任务|操作|执行)(?:的)?(?:执行)?(?:结果|回执|状态|进度)(?:是什么|有哪些|如何)?[。！？!?\s]*$/u;
+  return savedLookup.test(value)
+    || isTerseExecutionStatusQuestion(value)
     || isPriorArtifactDeliveryQuestion(value)
     || isPriorWorkDeliveryFactQuestion(value)
     || isPriorTurnToolReceiptQuestion(value)

@@ -228,6 +228,48 @@ describe('Lumi turn flow', () => {
     expect(flow.routeText).toBe('为什么不回我');
   });
 
+  it.each(['chat', 'voice'] as const)('keeps an answer-completeness correction tool-free in %s', async (channel) => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    const { normalizeActionIntent } = await import('../server/cognition/normalized_action_intent');
+    await initDatabase();
+    const text = '你漏了第二句。只补充一句：你不能保证什么？不要调用工具。';
+    expect(normalizeActionIntent(text)).toMatchObject({
+      kind: 'correction_explanation', operation: 'explain', sideEffectClass: 'none', relation: 'correction',
+    });
+    const flow = buildLumiTurnFlow({ userId: `turn_flow_answer_correction_${channel}`, text, channel,
+      source: channel === 'chat' ? 'command-center-chat' : 'voice', operationMode: 'assistant', targetIsLumi: true });
+    expect(flow.selfRepairTurn).toBe(false);
+    expect(flow.clientActionOnlyTurn).toBe(false);
+    expect(flow.allowToolUseForTurn).toBe(false);
+    expect(flow.completionEvidenceNeeded).toBe(false);
+  });
+
+  it.each([
+    '你的回答不完整。只补充缺少的内容，不要调用工具。',
+    'You missed the second sentence. Explain only; do not call tools.',
+    'Your answer is incomplete. Do not use tools.',
+  ])('recognizes an explicit answer-only correction without task execution: %s', async text => {
+    const { normalizeActionIntent } = await import('../server/cognition/normalized_action_intent');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    expect(normalizeActionIntent(text)).toMatchObject({ kind:'correction_explanation', relation:'correction', sideEffectClass:'none' });
+    const flow = buildLumiTurnFlow({ userId:'answer-only-variants', text, channel:'chat', operationMode:'assistant' });
+    expect(flow.allowToolUseForTurn).toBe(false);expect(flow.completionEvidenceNeeded).toBe(false);
+  });
+  it.each([
+    '不要调用工具。请解释“你漏了第二句”这句话。',
+    '假设你漏了第二句。不要调用工具。',
+    '文件漏了第二行。不要调用工具。',
+    'Explain the quote "Your answer is incomplete." Do not use tools.',
+  ])('does not treat quoted, hypothetical or file omissions as an assistant-answer correction: %s', async text => {
+    const { normalizeActionIntent } = await import('../server/cognition/normalized_action_intent');
+    expect(normalizeActionIntent(text).rule).not.toBe('answer-completeness-correction');
+  });
+  it('retains a separately requested operation after an answer complaint without a no-tool veto', async () => {
+    const { normalizeActionIntent } = await import('../server/cognition/normalized_action_intent');
+    expect(normalizeActionIntent('你漏了第二句。现在打开记事本。')).toMatchObject({kind:'desktop_operation',operation:'navigate',target:'记事本'});
+  });
+
   it('keeps artifact inspection and repair on ordinary work routes', async () => {
     const { initDatabase } = await import('../db_layer');
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');

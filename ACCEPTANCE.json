@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-11-01T11:10:56.905631+00:00",
+  "updatedAt": "2026-11-01T11:52:51.683192+00:00",
   "localDate": "2026-11-01",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "Three-edition personal background and scoped fixes; Designer synchronized with Main",
-    "status": "implemented-locally-verified-with-retained-baseline-failures",
-    "instruction": "Local source/profile maintenance finished with explicit retained baseline failures. Historical business acceptance and native coordinate testing remain sealed or held."
+    "title": "Main program retained-failure remediation",
+    "status": "implemented-locally-verified-with-held-runtime-validation",
+    "instruction": "730 isolated regression cases passed; native coordinate testing and historical business acceptance remain held or sealed. See latestRetainedFailureRemediation for current scope and remaining limits."
   },
   "acceptedWholeItems": [
     3,
@@ -63,10 +63,10 @@
     "installerReleased": false
   },
   "evidence": {
-    "directory": "D:\\Lumi-Audit-Temp\\edition-optimization-20261101",
-    "manifest": "D:\\Lumi-Audit-Temp\\edition-optimization-20261101\\evidence-seal.json",
-    "sha256": "9217f8e56a1be63a44b630a6e03ee939e3bab69f39f7e818f295a02199b4ccc9",
-    "files": 1420,
+    "directory": "D:\\Lumi-Audit-Temp\\retained-failures-remediation-20261101",
+    "manifest": "D:\\Lumi-Audit-Temp\\retained-failures-remediation-20261101\\evidence-seal.json",
+    "sha256": "31a2996974f42d0e1c08968e322548ad7082aad15b416c10af1dcc68a08bc8ea",
+    "files": 527,
     "canonicalLedger": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\active-closure-checkpoint.json"
   },
@@ -432,8 +432,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "implemented-locally-verified-with-retained-baseline-failures",
-    "priority": "Scoped source and skill startup repairs completed. Retained baseline failures and real-provider/native validation remain explicit; no accepted business operation replay."
+    "status": "implemented-locally-verified-with-held-runtime-validation",
+    "priority": "Main reply/receipt/task-flow source fixes verified locally. Global i18n baseline, variant synchronization and real runtime validation remain explicit."
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -9913,5 +9913,57 @@
     },
     "localCommitsRequired": true,
     "remotePushPerformed": false
+  },
+  "latestRetainedFailureRemediation": {
+    "atUTC": "2026-11-01T11:52:51.683192+00:00",
+    "status": "implemented-locally-verified-with-held-runtime-validation",
+    "scope": "Main source maintenance only; not whole-application or business acceptance",
+    "sourceRoot": "D:\\lumiOS",
+    "sourceVersion": "3.1.1",
+    "sourceBaseCommit": "1bd19e1b2ec0c45397c3d8e22751214569fbdfae",
+    "evidenceDirectory": "D:\\Lumi-Audit-Temp\\retained-failures-remediation-20261101",
+    "report": "D:\\Lumi-Audit-Temp\\retained-failures-remediation-20261101\\report.json",
+    "evidenceSeal": "D:\\Lumi-Audit-Temp\\retained-failures-remediation-20261101\\evidence-seal.json",
+    "evidenceSha256": "31a2996974f42d0e1c08968e322548ad7082aad15b416c10af1dcc68a08bc8ea",
+    "evidenceFiles": 527,
+    "sourceManifest": "D:\\Lumi-Audit-Temp\\retained-failures-remediation-20261101\\source-manifest.json",
+    "sourceManifestSha256": "e1b2bd20eb018f0cf0b25bee56cf7f2831800cc1c9736b3619f01f71ef369f30",
+    "regression": {
+      "report": "finalizer/stable-final.json",
+      "sha256": "3d7154d7c1d5f38d9832ee469bd38d650a2e977c23b1682f75029b487feedc27",
+      "files": 19,
+      "total": 730,
+      "passed": 730,
+      "failed": 0,
+      "skipped": 0,
+      "sourceStable": true,
+      "fullSuite": false
+    },
+    "changes": [
+      "Ground reply claims in scoped receipts; protect source literals, diagnostic history and completed artifacts.",
+      "Keep no-tool answer corrections conversational; provide scoped read-only prior-result context.",
+      "Require all requested company-query ranges and source proof before task completion.",
+      "Modernize legal research-plan receipts without asserting platform results or authorizing additional effects.",
+      "Deliver requested file paths/readback metadata; preserve partial outcomes, explicit exclusions and host verification failures.",
+      "Migrate stale API/copy/registration test contracts with explicit negative controls."
+    ],
+    "retainedLimitations": [
+      "Global i18n check still fails on 38 pre-existing findings / 57 literal occurrences in two unchanged legal source files.",
+      "Native coordinate testing remains paused; no real-provider, paid-generation, external messaging or business acceptance replay.",
+      "Accepted whole items 3, 15 and 16, held items, default model and legal archive remain unchanged.",
+      "Only the main checkout is changed this round. Designer/lawyer differences were compared read-only; these new fixes are not synchronized to them.",
+      "No installer/release, runtime reload or remote push. Source/line evidence is not dynamic line coverage."
+    ],
+    "acceptedWholeItemsUnchanged": [
+      3,
+      15,
+      16
+    ],
+    "heldItemsUnchanged": true,
+    "modelPreferenceChanged": false,
+    "remotePush": false,
+    "installerReleased": false,
+    "designerAndLawyerSynchronized": false,
+    "historicalEvidencePreserved": true
   }
 }

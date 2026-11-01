@@ -669,6 +669,8 @@ describe('recent action continuation', () => {
         toolCalls: JSON.stringify([{
           name: 'desktop_list_apps',
           arguments: {},
+          capability: { operation:'observe', sideEffects:[{type:'local_read'}], verification:{required:true,strategy:'terminal_receipt'} },
+          terminalVerification: { status:'verified', reason:'Current-format synthetic observation receipt' },
           result: JSON.stringify([
             { label: 'AutoCAD', path: 'C:\\Program Files\\AutoCAD\\acad.exe' },
             { label: 'WPS Office', path: 'C:\\Program Files\\WPS\\wps.exe' },
@@ -686,6 +688,45 @@ describe('recent action continuation', () => {
     expect(bridge).toContain('sample=AutoCAD | WPS Office');
     expect(bridge).not.toContain('\u963f\u9646');
     expect(bridge).not.toContain('wechat_send_message');
+    expect(bridge).toContain('Do not call tools');
+    expect(bridge).not.toContain('capability envelope');
+  });
+
+  it.each([
+    ['missing capability', {capability:undefined}],
+    ['unverified', {terminalVerification:{status:'unverified'}}],
+    ['failed', {error:'Synthetic read failed'}],
+    ['missing payload', {result:''}],
+    ['mutation', {capability:{operation:'mutate',sideEffects:[{type:'local_write'}]}}],
+    ['external effect', {capability:{operation:'observe',sideEffects:[{type:'network_write'}]}}],
+  ])('does not promote %s history to a read-result bridge', (_, changed) => {
+    const call = {name:'desktop_list_apps',arguments:{},result:JSON.stringify([{label:'Synthetic App'}]),capability:{operation:'observe',sideEffects:[{type:'local_read'}]},terminalVerification:{status:'verified'},...changed};
+    expect(buildRecentActionContinuationBridge('结果呢', [
+      {role:'user',message:'帮我看下桌面上有多少软件。'},
+      {role:'assistant',message:'Recorded observation.',toolCalls:JSON.stringify([call])},
+    ])).toBe('');
+  });
+
+  it.each([
+    '继续',
+    '我让你看桌面上多少软件，请打开浏览器再跟我说呀',
+    '我让你看桌面上多少软件你倒是跟我说呀。现在打开浏览器。',
+    '不要告诉我刚才桌面软件的结果。',
+    '假设我让你看桌面上多少软件你倒是跟我说呀',
+    '请解释“我让你看桌面上多少软件你倒是跟我说呀”这句话。',
+  ])('does not turn a new, mixed, quoted or negated instruction into an observation-only bridge: %s', text => {
+    const call = {name:'desktop_list_apps',arguments:{},result:JSON.stringify([{label:'Synthetic App'}]),capability:{operation:'observe',sideEffects:[{type:'local_read'}]},terminalVerification:{status:'verified'}};
+    expect(buildRecentActionContinuationBridge(text, [
+      {role:'user',message:'帮我看下桌面上有多少软件。'},
+      {role:'assistant',message:'Recorded observation.',toolCalls:JSON.stringify([call])},
+    ])).toBe('');
+  });
+
+  it('does not recover an older or expired observation across a newer ordinary exchange', () => {
+    const call = {name:'desktop_list_apps',arguments:{},result:JSON.stringify([{label:'Synthetic App'}]),capability:{operation:'observe',sideEffects:[{type:'local_read'}]},terminalVerification:{status:'verified'}};
+    const history = [{role:'user',message:'帮我看下桌面上有多少软件。'},{role:'assistant',message:'Recorded observation.',toolCalls:JSON.stringify([call])}];
+    expect(buildRecentActionContinuationBridge('结果呢',[...history,{role:'user',message:'Hello, how are you?'},{role:'assistant',message:'I am ready to help.'}])).toBe('');
+    expect(buildRecentActionContinuationBridge('结果呢',history.map(item=>({...item,timestamp:new Date(Date.now()-3*60*60*1000).toISOString()})))).toBe('');
   });
 
   it('continues the latest unfinished action for direct execution pressure', () => {
