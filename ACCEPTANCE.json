@@ -14430,5 +14430,160 @@
     "releasePublished": false,
     "evidence": "D:\\Lumi-Audit-Temp\\main-win-mac-build-20261102\\ci-remediation-checkpoint\\evidence-seal.json",
     "evidenceSha256": "4e03a3f65ff63b46e70f9b9212bb0a4b0dd5b3a1fd5409d6c98a697ed553fd3f"
+  },
+  "latestPublicRepositoryDelivery": {
+    "atUTC": "2026-11-02T15:00:17.674280+00:00",
+    "status": "public-source-heads-confirmed; checkpoint-delivery-recorded-externally",
+    "sourceVersion": "3.1.1",
+    "repositories": {
+      "main": "5pyj29s7cm-tech/LumiCore",
+      "legal": "5pyj29s7cm-tech/LumiCore-Legal",
+      "designer": "5pyj29s7cm-tech/LumiCore-Designer"
+    },
+    "reviewedSourceVersions": {
+      "main": {
+        "version": "3.1.1",
+        "commit": "85997df8efc6d85fc7f42f2e4084f0cecd8fb90f"
+      },
+      "legal": {
+        "version": "3.1.1",
+        "commit": "bb302130225ae74cdddedaa4d59297385b3b519e"
+      },
+      "designer": {
+        "version": "3.1.1",
+        "commit": "b442545b3eeeebd5fa67f5af5d2d286d02ba4ae7"
+      }
+    },
+    "publishedBranch": "main",
+    "evidence": {
+      "seal": {
+        "path": "D:\\Lumi-Audit-Temp\\main-win-mac-build-20261102\\evidence-seal.json",
+        "bytes": 684041,
+        "sha256": "f900e79c6dba986b2262e45d89914014921eef8bc29b023ef48c09bd884dfca7"
+      },
+      "report": {
+        "path": "D:\\Lumi-Audit-Temp\\main-win-mac-build-20261102\\report.json",
+        "bytes": 25631,
+        "sha256": "627468059e23994f527303df3dc434d198211ad4137f2b0164186bb91329e4d4"
+      },
+      "delivery": {
+        "path": "D:\\Lumi-Audit-Temp\\main-win-mac-build-20261102\\delivery-artifacts.json",
+        "bytes": 11537,
+        "sha256": "14b08b036039fb9cdb4c84c84628973d9d09d0af057273a42ff7bd4f2ecc5f33"
+      },
+      "executionScript": {
+        "path": "D:\\Lumi-Audit-Temp\\main-win-mac-build-20261102-delivery-hooks-review\\finalize-public-delivery.py",
+        "bytes": 27029,
+        "sha256": "96c202cdc8ba8a480ed6da1e769ec73d7979dfa84649427b46e250989e6244b8"
+      },
+      "enabledPreCommitReview": {
+        "path": "D:\\Lumi-Audit-Temp\\main-win-mac-build-20261102-delivery-hooks-review\\review.json",
+        "bytes": 1680,
+        "sha256": "3edc922309f37c7f44339668de6a0dba9ab86bcf216445601da631aedd559b8e"
+      }
+    },
+    "externalExecutionReceipt": "D:\\Lumi-Audit-Temp\\main-win-mac-build-20261102-delivery-receipt.json",
+    "checkpointCommitsAreNotInstallerBuildSource": true,
+    "localInstallationPerformed": false,
+    "wholeApplicationAccepted": false,
+    "previousAcceptanceAndHeldStatePreserved": true,
+    "defaultModelChanged": false,
+    "limits": [
+      "安装包仅针对主程序；律师版和设计师版本轮交付的是公开仓库源码，不是各自的新安装包。",
+      "Windows 为未签名内部安装包；macOS 为 ad-hoc 签名且未公证。没有创建 GitHub Release，不是正式签名发行。",
+      "本机只核验下载字节、回执及 CI 报告，未安装或启动这三个安装包；CI 上的测试不等于本机真人验收。",
+      "常规 LumiCore CI 与安装包工作流分别记录；Rust import 排序检查失败，以及完整 Vitest/清单步骤失败均保留，不宣称全部 CI 通过。",
+      "未重放已验收 3/15/16、held/paused 法律业务、付费生成或原生坐标操作；默认模型保持。",
+      "原数据维护封存为历史独立证据，本轮不重写或重新声明其未通过的下载/账号范围已通过。",
+      "GitHub 产物来源依赖认证下载与 REST 记录；文件名及本地回执不是独立的 GitHub 密码学构建证明。",
+      "sourceVersions 是本次公开源码与安装包构建提交；封存后的验收记录提交可能更新分支 HEAD，不改变安装包内的构建身份。"
+    ]
+  },
+  "latestMainInstallerBuild": {
+    "atUTC": "2026-11-02T15:00:17.674280+00:00",
+    "status": "downloaded-installers-verified-with-explicit-limits",
+    "edition": "main",
+    "appliesToEditions": [
+      "main"
+    ],
+    "repository": "5pyj29s7cm-tech/LumiCore",
+    "buildCommit": "85997df8efc6d85fc7f42f2e4084f0cecd8fb90f",
+    "runId": 41459077051,
+    "runUrl": "https://github.com/5pyj29s7cm-tech/LumiCore/actions/runs/41459077051",
+    "sourceVersion": "3.1.1",
+    "artifactCount": 3,
+    "artifacts": [
+      {
+        "id": "windows-x64",
+        "platform": "windows",
+        "architecture": "x64",
+        "installer": {
+          "path": "D:\\Lumi-Installers\\3.1.1-85997df8\\lumi-core-windows-x64-unsigned-85997df8efc6d85fc7f42f2e4084f0cecd8fb90f\\src-tauri\\target\\release\\bundle\\nsis\\LumiCore_3.1.1_x64-setup.exe",
+          "sha256": "678699eb1381b648875b6065315f2282a1439098929f7793838de1c4f2a3c9ed",
+          "sizeBytes": 219323178
+        },
+        "signing": {
+          "reportedAuthenticode": "NotSigned",
+          "signedPublicRelease": false,
+          "locallyReverified": false
+        }
+      },
+      {
+        "id": "macos-arm64",
+        "platform": "macos",
+        "architecture": "arm64",
+        "installer": {
+          "path": "D:\\Lumi-Installers\\3.1.1-85997df8\\lumi-core-macos-arm64-adhoc-85997df8efc6d85fc7f42f2e4084f0cecd8fb90f\\src-tauri\\target\\aarch64-apple-darwin\\release\\bundle\\dmg\\LumiCore_3.1.1_aarch64.dmg",
+          "sha256": "0bcd609823854aaf7308a93b905cb0c5d9cb4875b5a482545b7ae2415fa27535",
+          "sizeBytes": 155298879
+        },
+        "signing": {
+          "reportedCodesign": "ad-hoc",
+          "notarized": false,
+          "locallyReverified": false,
+          "details": {
+            "Identifier": "com.lumiai.os",
+            "Signature": "adhoc",
+            "TeamIdentifier": "not set"
+          }
+        }
+      },
+      {
+        "id": "macos-x64",
+        "platform": "macos",
+        "architecture": "x64",
+        "installer": {
+          "path": "D:\\Lumi-Installers\\3.1.1-85997df8\\lumi-core-macos-x64-adhoc-85997df8efc6d85fc7f42f2e4084f0cecd8fb90f\\src-tauri\\target\\x86_64-apple-darwin\\release\\bundle\\dmg\\LumiCore_3.1.1_x64.dmg",
+          "sha256": "7664d249b9ce6ee20dc28a0e54ac95c726e3992f4823fcf6ec9b829b44b5d40b",
+          "sizeBytes": 159453271
+        },
+        "signing": {
+          "reportedCodesign": "ad-hoc",
+          "notarized": false,
+          "locallyReverified": false,
+          "details": {
+            "Identifier": "com.lumiai.os",
+            "Signature": "adhoc",
+            "TeamIdentifier": "not set"
+          }
+        }
+      }
+    ],
+    "verificationEvidence": {
+      "path": "D:\\Lumi-Audit-Temp\\main-win-mac-build-20261102\\delivery-artifacts.json",
+      "bytes": 11537,
+      "sha256": "14b08b036039fb9cdb4c84c84628973d9d09d0af057273a42ff7bd4f2ecc5f33"
+    },
+    "localInstallationPerformed": false,
+    "wholeApplicationAccepted": false,
+    "legalAndDesignerInstallersBuilt": false,
+    "checkpointCommitIsNotBuildCommit": true,
+    "limits": [
+      "This verifies downloaded bytes and CI metadata; it does not install or run the installers locally.",
+      "Windows Authenticode and macOS signing/architecture results are reported CI evidence, not a local native recheck.",
+      "Internal unsigned Windows/ad-hoc macOS artifacts are not notarized or public code-signing acceptance.",
+      "GitHub origin depends on the supplied trusted download/run capture; filenames and receipts alone are not a cryptographic GitHub attestation.",
+      "No business acceptance, paid generation, original user data, or native UI operation is performed."
+    ]
   }
 }
