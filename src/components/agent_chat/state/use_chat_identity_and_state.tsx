@@ -375,10 +375,6 @@ export function useChatIdentityAndState({
   // send/new/history shortcut able to submit against the previous conversation.
   const conversationTransitionRef = useRef<symbol | null>(null);
   const [conversationTransitionPending, setConversationTransitionPending] = useState(false);
-  const [conversationHistoryOpen, setConversationHistoryOpen] = useState(true);
-  // The history rail stays mounted at the left edge, but its selector deck
-  // retracts until the user points at it or tabs into it.
-  const [conversationHistorySelectorExpanded, setConversationHistorySelectorExpanded] = useState(false);
   const [commandCenterPlannerOpen, setCommandCenterPlannerOpen] = useState(false);
   const [conversationHistory, setConversationHistory] = useState<ConversationHistoryItem[]>([]);
   const [conversationHistoryLoading, setConversationHistoryLoading] = useState(false);
@@ -445,7 +441,7 @@ export function useChatIdentityAndState({
     endLocalVoiceSession, setIsListening, chatProgressClearTimerRef, lastChatProgressTextRef, setChatProgressLines,
     chatTurnTimerGuardRef, setWorkflowStatus, seenWorkflowToolEvents, draftTextRef, setHasDraftText, messageInputRef,
     showVoicePicker, setShowVoicePicker, showWeChatSettings, setShowWeChatSettings, showAttachmentMenu,
-    setShowAttachmentMenu, conversationHistoryOpen, setConversationHistoryOpen, conversationContextMenu,
+    setShowAttachmentMenu, conversationContextMenu,
     setConversationContextMenu, agent, t, user, agentId, activeDomain, activeOrgId, chatViewWorkRef, chatUploadsRef,
     setAttachmentUploadFailures, setIsOptimizing, setOptimizationProgress, setPreviewFile, messages,
     mediaSourceArtifacts, mediaGenerationArtifacts, platform, socket, agentNameRef, recognition, setCopiedId,
@@ -457,8 +453,7 @@ export function useChatIdentityAndState({
     restoringConversationId, setConversationHistory, setSearchQuery, conversationHistoryLoadingRef,
     conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef,
     setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore,
-    setConversationHistorySelectorExpanded, conversationHistory, conversationHistorySelectorExpanded,
-    conversationHistoryHasMore, conversationHistoryListRef, deletingConversationId, appConfirm,
+    conversationHistory, conversationHistoryHasMore, conversationHistoryListRef, deletingConversationId, appConfirm,
     setDeletingConversationId, scrollRef, chatProgressLines, attachmentUploadText, operationMode, creationRequestId, isCreationWorkspace, onReferenceArtifact,
     onCreationRequestConsumed, mediaSourceUploading, isTyping, setChatSongOpen,
     chatSongWorkbenchRef, prefillMessage, prefillSource, onPrefillConsumed, isListening, localVoiceSession,

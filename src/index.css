@@ -2130,7 +2130,8 @@ html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] {
   /* Keep both rails visually attached to the conversation without pinning
    * their controls against the viewport edge. The equal inline gutter also
    * gives the central transcript a stable visual axis. */
-  padding: clamp(.75rem, 2vw, 1.75rem) clamp(1rem, 2vw, 2.25rem);
+  /* The absolute core-status HUD needs its own space above all three rails. */
+  padding: 3rem clamp(1rem, 2vw, 2.25rem) clamp(.75rem, 2vw, 1.75rem);
   column-gap: clamp(.75rem, 2vw, 1.75rem);
   align-items: stretch;
 }
@@ -2143,8 +2144,7 @@ html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] {
   padding: .75rem .35rem;
 }
 
-.lumi-command-center-layered .lumi-command-center-history-rail,
-.lumi-command-center-layered .lumi-command-center-history-rail-collapsed {
+.lumi-command-center-layered .lumi-command-center-history-rail {
   grid-column: 1;
   grid-row: 1;
 }
@@ -2163,56 +2163,6 @@ html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] {
   align-items: flex-end;
 }
 
-.lumi-command-center-layered .lumi-command-center-history-rail {
-  --history-selector-collapsed-width: 10.5rem;
-  position: relative;
-  align-items: flex-start;
-  overflow: visible;
-  transition: filter .22s ease;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-rail-header {
-  min-height: 2.25rem;
-  width: var(--history-selector-collapsed-width);
-  overflow: hidden;
-  transition: width .24s ease, background-color .2s ease, border-color .2s ease;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-list {
-  width: var(--history-selector-collapsed-width);
-  max-height: 9rem;
-  overflow: visible;
-  perspective: 900px;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  overscroll-behavior: contain;
-  padding: .5rem 0;
-  transition: width .24s ease, max-height .24s ease, overflow .2s ease;
-}
-
-/* The history rail is a compact, layered selector at rest. Moving into it
- * opens the deck into a normal scrollable list; leaving it retracts the deck
- * so the conversation remains the visual focus. The explicit class mirrors
- * the pointer/focus selectors for keyboard and touch-driven state changes. */
-.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-rail-header,
-.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-rail-header,
-.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-rail-header,
-.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-list,
-.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-list,
-.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-list {
-  width: 100%;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-list,
-.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-list,
-.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-list {
-  max-height: min(68vh, 680px);
-  overflow-y: auto;
-  overflow-x: visible;
-  perspective: none;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-list::-webkit-scrollbar,
 .lumi-command-center-layered .lumi-command-center-chat-scroll::-webkit-scrollbar {
   display: none;
   width: 0;
@@ -2223,216 +2173,6 @@ html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] {
   scrollbar-width: none;
   -ms-overflow-style: none;
   overscroll-behavior: contain;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item {
-  position: relative;
-  max-height: 3.1rem;
-  margin-bottom: -1.35rem;
-  border: 1px solid transparent;
-  transform-origin: left center;
-  transition: transform .22s ease, max-height .22s ease, margin .22s ease, opacity .18s ease, background-color .18s ease, box-shadow .18s ease;
-}
-
-/* Three visible cards form the turntable/deck. Older entries remain in the
- * DOM for accessibility and infinite paging, but retract until the rail is
- * opened. */
-.lumi-command-center-layered .lumi-command-center-history-item:nth-child(1) {
-  z-index: 3;
-  background: var(--cc-card, rgba(10, 35, 46, .72));
-  border-color: rgba(103, 232, 249, .22);
-  transform: translateY(0) scale(1);
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item:nth-child(2) {
-  z-index: 2;
-  background: var(--cc-card-secondary, rgba(9, 28, 39, .62));
-  border-color: rgba(103, 232, 249, .14);
-  transform: translate3d(.65rem, 1.35rem, -12px) rotateY(-5deg) scale(.94);
-  opacity: .72;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item:nth-child(3) {
-  z-index: 1;
-  background: var(--cc-card-tertiary, rgba(8, 23, 33, .5));
-  border-color: rgba(103, 232, 249, .09);
-  transform: translate3d(1.2rem, 2.6rem, -24px) rotateY(-9deg) scale(.88);
-  opacity: .42;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item--current {
-  background: var(--cc-card-current, rgba(12, 63, 75, .82)) !important;
-  border-color: rgba(103, 232, 249, .28) !important;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item:nth-child(n+4) {
-  max-height: 0;
-  margin-top: 0;
-  margin-bottom: 0;
-  padding-top: 0;
-  padding-bottom: 0;
-  opacity: 0;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-item,
-.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-item,
-.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-item {
-  max-height: 12rem;
-  margin-bottom: .25rem;
-  opacity: 1;
-  pointer-events: auto;
-  transform: none;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-item:not(.lumi-command-center-history-item--current),
-.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-item:not(.lumi-command-center-history-item--current),
-.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-item:not(.lumi-command-center-history-item--current) {
-  background: transparent;
-  border-color: transparent;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item-marker {
-  position: relative;
-  display: inline-flex;
-  width: .72rem;
-  height: .72rem;
-  flex: 0 0 .72rem;
-  align-items: center;
-  justify-content: center;
-  opacity: .68;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item-marker::before,
-.lumi-command-center-layered .lumi-command-center-history-item-marker::after,
-.lumi-command-center-layered .lumi-command-center-history-item-marker > span {
-  position: absolute;
-  display: block;
-  height: 1px;
-  border-radius: 999px;
-  background: rgba(165, 243, 252, .72);
-  content: "";
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item-marker::before {
-  width: .62rem;
-  transform: translateY(-.16rem);
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item-marker::after {
-  width: .42rem;
-  transform: translateY(.16rem);
-  opacity: .52;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item-marker > span {
-  width: .2rem;
-  transform: translateX(.26rem);
-  opacity: .7;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-selector-mark {
-  position: relative;
-  display: inline-flex;
-  width: 1.15rem;
-  height: 1rem;
-  flex: 0 0 1.15rem;
-  align-items: center;
-  justify-content: center;
-  opacity: .68;
-  transform-origin: center;
-  transition: transform .24s ease, opacity .2s ease;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-selector-mark span {
-  position: absolute;
-  display: block;
-  height: 1px;
-  border-radius: 999px;
-  background: rgba(165, 243, 252, .75);
-  transition: transform .24s ease, width .24s ease, opacity .2s ease;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-selector-mark span:nth-child(1) {
-  width: 1.05rem;
-  transform: translateY(-.23rem) rotate(-10deg);
-}
-
-.lumi-command-center-layered .lumi-command-center-history-selector-mark span:nth-child(2) {
-  width: .78rem;
-  transform: translateY(0) rotate(10deg);
-  opacity: .65;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-selector-mark span:nth-child(3) {
-  width: .45rem;
-  transform: translateY(.23rem) rotate(-10deg);
-  opacity: .42;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-selector-mark,
-.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-selector-mark,
-.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-selector-mark {
-  opacity: 1;
-  transform: rotate(90deg) scale(1.08);
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item:hover,
-.lumi-command-center-layered .lumi-command-center-history-item:focus-visible {
-  z-index: 2;
-  transform: scale(1.025);
-  background: rgba(103, 232, 249, .09);
-  box-shadow: 0 10px 28px var(--cc-shadow, rgba(0, 0, 0, .18));
-  outline: none;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item-preview {
-  display: none;
-  max-height: 1.1rem;
-  overflow: hidden;
-  line-height: 1.1rem;
-  transition: max-height .18s ease, color .18s ease, white-space .18s ease;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item:hover .lumi-command-center-history-item-preview,
-.lumi-command-center-layered .lumi-command-center-history-item:focus-visible .lumi-command-center-history-item-preview {
-  display: -webkit-box;
-  max-height: 4.4rem;
-  white-space: normal;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-  color: var(--cc-muted, rgba(255, 255, 255, .58));
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item:hover .lumi-command-center-history-item-title,
-.lumi-command-center-layered .lumi-command-center-history-item:focus-visible .lumi-command-center-history-item-title {
-  color: var(--cc-ink, rgba(255, 255, 255, .95));
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item-meta {
-  display: none;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-current-badge {
-  display: none;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-item:hover .lumi-command-center-history-item-meta,
-.lumi-command-center-layered .lumi-command-center-history-item:focus-visible .lumi-command-center-history-item-meta {
-  display: flex;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-current-badge,
-.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-current-badge,
-.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-current-badge {
-  display: inline-flex;
-}
-
-.lumi-command-center-layered .lumi-command-center-history-rail-collapsed {
-  width: var(--command-center-rail-width);
-  max-width: var(--command-center-rail-width);
-  padding-top: .75rem;
 }
 
 .lumi-command-center-layered .lumi-command-center-switcher::before {
@@ -2618,13 +2358,6 @@ html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-cor
 
 html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-command-center-cosmos-stage {
   opacity: .58;
-}
-
-html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-command-center-history-item-marker::before,
-html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-command-center-history-item-marker::after,
-html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-command-center-history-item-marker > span,
-html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-command-center-history-selector-mark span {
-  background: rgba(13, 148, 136, .72);
 }
 
 .lumi-command-center-layered .lumi-command-center-chat-rail .lumi-chat-agent-mark {
@@ -2908,32 +2641,8 @@ html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-com
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr) auto;
     width: 100%;
-    padding: .5rem .75rem .75rem;
+    padding: 2.5rem .75rem .75rem;
     gap: .75rem;
-  }
-
-  .lumi-command-center-layered .lumi-command-center-history-rail {
-    width: 100%;
-    max-width: none;
-    flex: none;
-    grid-column: 1;
-    grid-row: 1;
-    min-height: min(30vh, 220px);
-    max-height: min(30vh, 220px);
-    padding: 0;
-    order: 0;
-  }
-
-  .lumi-command-center-layered .lumi-command-center-history-rail-collapsed {
-    width: 100%;
-    max-width: none;
-    flex: none;
-    grid-column: 1;
-    grid-row: 1;
-    min-height: 2.75rem;
-    max-height: 2.75rem;
-    padding: 0;
-    order: 0;
   }
 
   .lumi-command-center-layered .lumi-command-center-chat-rail {
@@ -3185,7 +2894,6 @@ html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper
   animation: lumi-wallpaper-tool-spread-right .62s cubic-bezier(.2, .8, .2, 1) both;
 }
 
-[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-command-center-history-item,
 [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-command-center-switcher-button,
 [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-chat-composer-row {
   backdrop-filter: blur(18px) saturate(118%);

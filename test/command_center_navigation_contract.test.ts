@@ -13,7 +13,9 @@ describe('command center navigation contract', () => {
     expect(chat).toContain("const isCommandCenterUtility = layout === 'command-center' && !isOfficeCommandCenter");
     expect(chat).toContain('isOfficeCommandCenter && (');
     expect(chat).toContain('startNewTextConversation');
-    expect(chat).toContain('toggleConversationHistory');
+    expect(chat).toContain('<ConversationHistoryRail {...input} />');
+    expect(chat).toContain('refreshConversationHistory');
+    expect(chat).not.toContain('toggleConversationHistory');
     expect(chat).toContain('restoreTextConversation');
     expect(chat).toContain('<VoiceCallButton');
     expect(chat).toContain('setShowWeChatSettings(true)');

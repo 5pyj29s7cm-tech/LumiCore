@@ -1,112 +1,132 @@
-import { Loader2, Plus, History } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Loader2, Plus, History, Search, X, RefreshCw, MessageSquare, AlertCircle, ChevronDown } from 'lucide-react';
 import type { AgentChatViewInput } from './AgentChatView';
+import type { ConversationHistoryItem } from './contracts';
+import { conversationHistoryCopy } from '@/i18n/locales/conversationHistory';
+import { matchingSnippet, useConversationHistorySearch } from './conversation_history_search';
+import './conversation_history_rail.css';
 
-export function renderConversationHistoryRail({ conversationHistorySelectorExpanded, setConversationHistorySelectorExpanded, handleConversationHistorySelectorBlur, t, conversationHistory, startNewTextConversation, isCreatingConversation, restoringConversationId, conversationHistoryListRef, handleConversationHistoryScroll, conversationHistoryLoading, conversationHistoryLoadingMore, orderedConversationHistory, attachmentConversationIdRef, restoreTextConversation, setConversationContextMenu, isZh, conversationHistoryHasMore }: Pick<AgentChatViewInput, "conversationHistorySelectorExpanded" | "setConversationHistorySelectorExpanded" | "handleConversationHistorySelectorBlur" | "t" | "conversationHistory" | "startNewTextConversation" | "isCreatingConversation" | "restoringConversationId" | "conversationHistoryListRef" | "handleConversationHistoryScroll" | "conversationHistoryLoading" | "conversationHistoryLoadingMore" | "orderedConversationHistory" | "attachmentConversationIdRef" | "restoreTextConversation" | "setConversationContextMenu" | "isZh" | "conversationHistoryHasMore">) {
+type HistoryRailProps = Pick<AgentChatViewInput,
+  'conversationHistory' |
+  'startNewTextConversation' | 'isCreatingConversation' | 'restoringConversationId' | 'conversationHistoryListRef' |
+  'handleConversationHistoryScroll' | 'conversationHistoryLoading' | 'conversationHistoryLoadingMore' |
+  'orderedConversationHistory' | 'attachmentConversationIdRef' | 'restoreTextConversation' | 'setConversationContextMenu' |
+  'isZh' | 'conversationHistoryHasMore' | 'refreshConversationHistory' | 'loadMoreConversationHistory' |
+  'conversationHistoryError' | 'scopedConversationUrl'>;
+
+type HistoryRow = {
+  id: string;
+  title: string;
+  preview: string;
+  timestamp?: string;
+  messageCount?: number;
+};
+
+function formatHistoryTime(timestamp: string | undefined, isZh: boolean) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toLocaleString(isZh ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function fromHeader(conversation: ConversationHistoryItem, untitled: string): HistoryRow {
+  return {
+    id: conversation.id,
+    title: conversation.displayTitle || conversation.title || conversation.preview || untitled,
+    preview: conversation.preview || '',
+    timestamp: conversation.lastActiveAt || conversation.createdAt,
+    messageCount: conversation.messageCount,
+  };
+}
+
+export function ConversationHistoryRail(props: HistoryRailProps) {
+  const {
+    conversationHistory, orderedConversationHistory, startNewTextConversation, isCreatingConversation,
+    restoringConversationId, conversationHistoryListRef, handleConversationHistoryScroll,
+    conversationHistoryLoading, conversationHistoryLoadingMore, attachmentConversationIdRef,
+    restoreTextConversation, setConversationContextMenu, isZh, conversationHistoryHasMore,
+    refreshConversationHistory, loadMoreConversationHistory, conversationHistoryError, scopedConversationUrl,
+  } = props;
+  const copy = conversationHistoryCopy(isZh);
+  const [query, setQuery] = useState('');
+  const [searchRetry, setSearchRetry] = useState(0);
+  const search = useConversationHistorySearch(query, scopedConversationUrl, searchRetry);
+  const searching = Boolean(query.trim());
+  const rows = useMemo(() => {
+    if (!searching) return orderedConversationHistory.map(item => fromHeader(item, copy.untitled));
+    const headers = new Map(conversationHistory.map(item => [item.id, item]));
+    const seen = new Set<string>();
+    return search.results.flatMap(match => {
+      if (seen.has(match.conversationId)) return [];
+      seen.add(match.conversationId);
+      const header = headers.get(match.conversationId);
+      const firstLine = match.message.split(/\r?\n/).find(line => line.trim())?.trim() || copy.untitled;
+      return [{
+        id: match.conversationId,
+        title: header ? fromHeader(header, copy.untitled).title : firstLine,
+        preview: matchingSnippet(match.message, query),
+        timestamp: header?.lastActiveAt || header?.createdAt || match.timestamp,
+        messageCount: header?.messageCount,
+      }];
+    });
+  }, [searching, orderedConversationHistory, conversationHistory, search.results, query, copy.untitled]);
+  const busy = isCreatingConversation || Boolean(restoringConversationId);
+  const error = searching ? search.error : conversationHistoryError;
+  const loading = searching ? search.loading : conversationHistoryLoading && rows.length === 0;
+  const retry = () => searching ? setSearchRetry(value => value + 1) : void refreshConversationHistory();
+
   return (
-<aside
-            data-command-center-history-rail
-            data-wallpaper-tool="command-history"
-            data-command-center-history-selector
-            data-command-center-history-selector-expanded={conversationHistorySelectorExpanded ? 'true' : 'false'}
-            onMouseEnter={() => setConversationHistorySelectorExpanded(true)}
-            onMouseLeave={() => setConversationHistorySelectorExpanded(false)}
-            onFocusCapture={() => setConversationHistorySelectorExpanded(true)}
-            onBlurCapture={handleConversationHistorySelectorBlur}
-            className={`lumi-command-center-history-rail relative z-30 flex min-h-0 shrink-0 flex-col ${conversationHistorySelectorExpanded ? 'lumi-command-center-history-rail--expanded' : ''}`}
-            aria-label={t.previousConversations || 'Conversation history'}
-            aria-expanded={conversationHistorySelectorExpanded}
-          >
-            <div className="lumi-command-center-history-rail-header flex shrink-0 items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <History size={14} className="shrink-0 text-cyan-200/75" />
-                <span className="lumi-command-center-history-selector-mark" aria-hidden="true"><span /><span /><span /></span>
-                <span className="truncate text-[11px] font-black uppercase tracking-[0.14em] text-white/65">
-                  {t.previousConversations || 'Conversation history'}
-                </span>
+    <aside
+      data-command-center-history-rail
+      data-wallpaper-tool="command-history"
+      className="lumi-command-center-history-rail lumi-history-panel"
+      aria-label={copy.title}
+    >
+      <div className="lumi-command-center-history-rail-header lumi-history-header">
+        <div className="lumi-history-heading"><History size={17} /><h2>{copy.title}</h2></div>
+        <div className="lumi-history-header-actions">
+          <button type="button" className="lumi-history-icon-button" onClick={() => { void refreshConversationHistory(); if (searching) setSearchRetry(value => value + 1); }} disabled={conversationHistoryLoading || conversationHistoryLoadingMore} title={copy.refresh} aria-label={copy.refresh}>
+            <RefreshCw size={14} className={conversationHistoryLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+      </div>
+      <div className="lumi-history-controls">
+        <button type="button" data-command-center-new-conversation className="lumi-history-new" onClick={() => void startNewTextConversation()} disabled={busy} aria-label={copy.newConversation}>
+          {isCreatingConversation ? <Loader2 size={16} className="animate-spin" /> : <Plus size={17} />}<span>{copy.newConversation}</span>
+        </button>
+        <div className="lumi-history-search">
+          <Search size={14} aria-hidden="true" />
+          <input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder={copy.searchHint} aria-label={copy.search} autoComplete="off" spellCheck={false} />
+          {query && <button type="button" className="lumi-history-clear" onClick={() => setQuery('')} aria-label={copy.clear}><X size={13} /></button>}
+        </div>
+      </div>
+      <div className="lumi-history-section-label" aria-live="polite">
+        <span>{searching ? copy.matches : copy.recent}</span>
+        <span>{searching ? rows.length + ' ' + copy.conversations : (conversationHistoryHasMore ? copy.loaded : copy.total) + ' ' + conversationHistory.length}</span>
+      </div>
+      <div ref={searching ? undefined : conversationHistoryListRef} onScroll={searching ? undefined : handleConversationHistoryScroll} className="lumi-command-center-history-list lumi-history-list custom-scrollbar" aria-busy={loading || conversationHistoryLoadingMore}>
+        {error && <div className="lumi-history-error" role="alert"><AlertCircle size={15} /><div><strong>{searching ? copy.searchFailed : copy.loadFailed}</strong><span>{error}</span><button type="button" onClick={retry} aria-label={searching ? copy.retrySearch : copy.refresh}>{copy.retry}</button></div></div>}
+        {loading ? <div className="lumi-history-empty" role="status"><Loader2 size={22} className="animate-spin" /><p>{searching ? copy.searching : copy.loading}</p></div> : rows.length === 0 && !error ? (
+          <div className="lumi-history-empty"><MessageSquare size={26} /><strong>{searching ? copy.noMatches : copy.empty}</strong><p>{searching ? copy.noMatchesHint : copy.emptyHint}</p></div>
+        ) : rows.map(conversation => {
+          const current = conversation.id === attachmentConversationIdRef.current;
+          return (
+            <button key={conversation.id} type="button" aria-haspopup="menu" aria-current={current ? 'true' : undefined} onClick={() => void restoreTextConversation(conversation.id)}
+              onContextMenu={event => { event.preventDefault(); setConversationContextMenu({ conversationId: conversation.id, x: Math.min(event.clientX, Math.max(12, window.innerWidth - 236)), y: Math.min(event.clientY, Math.max(12, window.innerHeight - 86)) }); }}
+              disabled={busy} data-command-center-history-item className={'lumi-command-center-history-item lumi-history-row' + (current ? ' lumi-command-center-history-item--current' : '')}>
+              <div className="lumi-history-row-title-line">
+                <span className="lumi-command-center-history-item-title lumi-history-row-title" title={conversation.title}>{conversation.title}</span>
+                {(restoringConversationId === conversation.id || current) && <span className="lumi-history-row-status">{restoringConversationId === conversation.id ? <Loader2 size={12} className="animate-spin" /> : <span className="lumi-command-center-history-current-badge">{copy.current}</span>}</span>}
               </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <span className="font-mono text-[9px] text-white/28" aria-live="polite">{conversationHistory.length}</span>
-                <button
-                  type="button"
-                  data-command-center-new-conversation
-                  onClick={() => void startNewTextConversation()}
-                  disabled={isCreatingConversation || Boolean(restoringConversationId)}
-                  className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 text-white/38 transition-colors hover:border-cyan-300/25 hover:bg-cyan-300/[0.08] hover:text-cyan-100 disabled:cursor-wait disabled:opacity-50"
-                  title={t.newConversationHint || t.newConversation || 'New conversation'}
-                  aria-label={t.newConversation || 'New conversation'}
-                >
-                  {isCreatingConversation ? <Loader2 size={13} className="animate-spin" /> : <Plus size={14} />}
-                </button>
-              </div>
-            </div>
-            <div
-              ref={conversationHistoryListRef}
-              onScroll={handleConversationHistoryScroll}
-              className="lumi-command-center-history-list custom-scrollbar min-h-0 flex-1 overflow-y-auto"
-              aria-busy={conversationHistoryLoading || conversationHistoryLoadingMore}
-            >
-              {conversationHistoryLoading && conversationHistory.length === 0 ? (
-                <div className="flex items-center justify-center py-8 text-white/35"><Loader2 size={16} className="animate-spin" /></div>
-              ) : conversationHistory.length === 0 ? (
-                <div className="px-2 py-8 text-center text-[11px] text-white/35">{t.noConversations || 'No conversations yet'}</div>
-              ) : (
-                <>
-                  {orderedConversationHistory.map(conversation => {
-                    const current = conversation.id === attachmentConversationIdRef.current;
-                    const title = conversation.displayTitle || conversation.title || conversation.preview || t.untitled || 'Untitled';
-                    return (
-                      <button
-                        key={conversation.id}
-                        type="button"
-                        aria-haspopup="menu"
-                        onClick={() => void restoreTextConversation(conversation.id)}
-                        onContextMenu={(event) => {
-                          event.preventDefault();
-                          setConversationContextMenu({
-                            conversationId: conversation.id,
-                            x: Math.min(event.clientX, Math.max(12, window.innerWidth - 236)),
-                            y: Math.min(event.clientY, Math.max(12, window.innerHeight - 86)),
-                          });
-                        }}
-                        disabled={Boolean(restoringConversationId) || isCreatingConversation}
-                        data-command-center-history-item
-                        className={`lumi-command-center-history-item group mb-1 w-full rounded-xl px-3 py-2.5 text-left transition-colors disabled:cursor-wait disabled:opacity-60 ${
-                          current ? 'lumi-command-center-history-item--current bg-cyan-300/[0.10]' : 'hover:bg-white/[0.05]'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="flex min-w-0 items-center gap-2">
-                            <span className="lumi-command-center-history-item-marker" aria-hidden="true"><span /></span>
-                            <span className="lumi-command-center-history-item-title min-w-0 truncate text-[11px] font-semibold text-white/75">{title}</span>
-                          </span>
-                          {restoringConversationId === conversation.id ? (
-                            <Loader2 size={11} className="shrink-0 animate-spin text-cyan-200" />
-                          ) : current ? (
-                            <span className="lumi-command-center-history-current-badge shrink-0 rounded-full bg-cyan-300/[0.12] px-1.5 py-0.5 text-[8px] font-bold text-cyan-100/75">{t.currentConversation || 'Current'}</span>
-                          ) : null}
-                        </div>
-                        {conversation.preview && <div className="lumi-command-center-history-item-preview mt-1 truncate text-[10px] text-white/34">{conversation.preview}</div>}
-                        <div className="lumi-command-center-history-item-meta mt-1.5 flex items-center justify-between text-[9px] text-white/24">
-                          <span>{conversation.messageCount || 0} {t.messageCountLabel || 'messages'}</span>
-                          <span>{new Date(conversation.lastActiveAt || conversation.createdAt).toLocaleString(isZh ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                  {conversationHistoryLoadingMore && (
-                    <div className="flex items-center justify-center gap-2 py-3 text-[10px] text-cyan-100/45">
-                      <Loader2 size={13} className="animate-spin" />
-                      <span>{t.loading || 'Loading more'}</span>
-                    </div>
-                  )}
-                  {!conversationHistoryHasMore && (
-                    <div className="px-2 py-3 text-center text-[9px] uppercase tracking-[0.14em] text-white/22">
-                      {t.allConversationsLoaded || 'All conversations loaded'}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </aside>
+              <span className="lumi-command-center-history-item-preview lumi-history-row-preview">{conversation.preview || copy.noMessages}</span>
+              <span className="lumi-command-center-history-item-meta lumi-history-row-meta"><span>{typeof conversation.messageCount === 'number' ? conversation.messageCount + ' ' + copy.messages : copy.matchingContent}</span><time dateTime={conversation.timestamp}>{formatHistoryTime(conversation.timestamp, isZh)}</time></span>
+            </button>
+          );
+        })}
+        {searching && search.capped && !loading && <p className="lumi-history-footer-note">{copy.searchLimit}</p>}
+        {!searching && rows.length > 0 && (conversationHistoryHasMore ? <button type="button" className="lumi-history-load-more" onClick={() => void loadMoreConversationHistory()} disabled={conversationHistoryLoadingMore || conversationHistoryLoading} aria-label={copy.loadMore}>{conversationHistoryLoadingMore ? <Loader2 size={14} className="animate-spin" /> : <ChevronDown size={14} />}<span>{conversationHistoryLoadingMore ? copy.loadingMore : copy.loadMore}</span></button> : <p className="lumi-history-footer-note">{copy.allLoaded}</p>)}
+      </div>
+
+    </aside>
   );
 }

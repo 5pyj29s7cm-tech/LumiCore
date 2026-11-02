@@ -10,7 +10,7 @@ type Props = {
   setPreference: (preference: DesktopExecutionPreference) => Promise<boolean>;
 };
 
-/** Both placements reflect one acknowledged execution preference, not wallpaper. */
+/** The command-center control reflects the acknowledged execution preference. */
 export function DesktopModeSwitch({ preference, lang, appearance, setPreference }: Props) {
   const light = appearance === 'light';
   const copy = desktopModeCopy(lang === 'zh' ? 'zh' : 'en');

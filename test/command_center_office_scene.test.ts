@@ -41,6 +41,7 @@ describe('single-core command center', () => {
   it('uses a deterministic orbital field and respects reduced-motion preferences', () => {
     const sphere = source('src/components/LumiCoreSphere.tsx');
     const styles = source('src/index.css');
+    const historyStyles = source('src/components/agent_chat/conversation_history_rail.css');
 
     expect(sphere).toContain('data-lumi-core-command-field');
     expect(sphere).toContain('const COSMOS_STARS = [');
@@ -69,6 +70,7 @@ describe('single-core command center', () => {
     const chatPage = source('src/components/AgentChatPage.tsx');
     const panel = source('src/components/CommandCenterPanel.tsx');
     const styles = source('src/index.css');
+    const historyStyles = source('src/components/agent_chat/conversation_history_rail.css');
 
     expect(chatPage).toContain('data-command-center-appearance={');
     expect(chatPage).toContain("'--lumi-chat-background': chatAccentTheme.background");
@@ -220,6 +222,7 @@ describe('single-core command center', () => {
     const taskWidget = source('src/components/ActiveTaskWidget.tsx');
     const surfaces = source('shared/client_surfaces.ts');
     const styles = source('src/index.css');
+    const historyStyles = source('src/components/agent_chat/conversation_history_rail.css');
 
     expect(chatPage).toContain('lumi-command-center-workspace lumi-command-center-layered overflow-hidden');
     expect(chatPage).toContain('lumi-command-center-office lumi-command-center-cosmos-stage');
@@ -245,11 +248,11 @@ describe('single-core command center', () => {
     expect(chatPage).toContain("msg.type === 'agent' ? 'items-start' : 'items-end'");
     expect(chatPage).toContain('lumi-command-center-history-item-preview');
     expect(chatPage).toContain('lumi-command-center-history-item-meta');
-    expect(chatPage).toContain('data-command-center-history-selector');
-    expect(chatPage).toContain('conversationHistorySelectorExpanded');
-    expect(chatPage).toContain('lumi-command-center-history-selector-mark');
-    expect(chatPage).toContain('lumi-command-center-history-item-marker');
-    expect(chatPage).toContain('onMouseLeave={() => setConversationHistorySelectorExpanded(false)}');
+    expect(chatPage).toContain('<ConversationHistoryRail {...input} />');
+    expect(chatPage).toContain('refreshConversationHistory');
+    expect(chatPage).toContain('loadMoreConversationHistory');
+    expect(chatPage).not.toContain('conversationHistorySelectorExpanded');
+    expect(chatPage).not.toContain('data-command-center-history-selector');
     expect(chatPage).toContain('data-command-center-new-conversation');
     expect(chatPage).toContain('data-command-center-message-type');
     expect(chatPage).not.toContain('lumi-command-center-history-new');
@@ -274,15 +277,18 @@ describe('single-core command center', () => {
     expect(styles).toContain('.lumi-command-center-layered .lumi-command-center-switcher');
     expect(styles).toContain('scrollbar-width: none');
     expect(styles).toContain('.lumi-command-center-switcher-copy');
-    expect(styles).toContain('.lumi-command-center-history-item-preview {\n  display: none;');
-    expect(styles).toContain('.lumi-command-center-history-item-meta {\n  display: none;');
+    expect(styles).not.toContain('.lumi-command-center-history-item-preview {\n  display: none;');
+    expect(historyStyles).toContain('.lumi-history-row-preview');
+    expect(styles).not.toContain('.lumi-command-center-history-item-meta {\n  display: none;');
+    expect(historyStyles).toContain('.lumi-history-row-meta');
     expect(styles).toContain('--command-center-rail-width: clamp(220px, 20vw, 300px)');
     expect(styles).toContain('.lumi-command-center-history-rail');
-    expect(styles).toContain('--history-selector-collapsed-width');
-    expect(styles).toContain('.lumi-command-center-history-rail:hover .lumi-command-center-history-list');
-    expect(styles).toContain('.lumi-command-center-history-item:nth-child(2)');
-    expect(styles).toContain('.lumi-command-center-history-item:nth-child(n+4)');
-    expect(styles).toContain('padding: clamp(.75rem, 2vw, 1.75rem) clamp(1rem, 2vw, 2.25rem)');
+    expect(styles).not.toContain('--history-selector-collapsed-width');
+    expect(styles).not.toContain('.lumi-command-center-history-rail:hover .lumi-command-center-history-list');
+    expect(historyStyles).toContain('overflow-y: auto');
+    expect(styles).not.toContain('.lumi-command-center-history-item:nth-child(2)');
+    expect(styles).not.toContain('.lumi-command-center-history-item:nth-child(n+4)');
+    expect(styles).toContain('padding: 3rem clamp(1rem, 2vw, 2.25rem) clamp(.75rem, 2vw, 1.75rem)');
     expect(styles).toContain('.lumi-command-center-message-text');
     expect(styles).toContain('.lumi-command-center-message-row[data-command-center-message-type="user"] > *');
     expect(styles).toContain('flex-direction: row');
@@ -291,7 +297,7 @@ describe('single-core command center', () => {
     expect(chatPage).toContain('<ActiveTaskWidget');
     expect(chatPage).toContain('<VoiceCallButton');
     expect(chatPage).toContain('setShowWeChatSettings(true)');
-    expect(chatPage).toContain('toggleConversationHistory');
+    expect(chatPage).not.toContain('toggleConversationHistory');
     expect(chatPage).not.toContain('aria-expanded={conversationHistoryOpen}');
     expect(chatPage).not.toContain('conversationPanelView');
     expect(chatPage).not.toContain('<ConversationTaskLedger');

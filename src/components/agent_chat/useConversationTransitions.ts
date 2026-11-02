@@ -2,7 +2,7 @@
 import { type ConversationHistoryItem, type ConversationHistoryContextMenu } from "./contracts";
 
 import type { ChatAttachmentReference } from "@/lib/chatAttachmentReferences";
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ChatViewWorkRegistry } from '@/lib/chatViewWork';
 
@@ -44,15 +44,11 @@ conversationHistoryOffsetRef: React.RefObject<number>;
 setConversationHistoryLoadingMore: React.Dispatch<React.SetStateAction<boolean>>;
 setConversationHistoryLoading: React.Dispatch<React.SetStateAction<boolean>>;
 setConversationHistoryHasMore: React.Dispatch<React.SetStateAction<boolean>>;
-setConversationHistorySelectorExpanded: React.Dispatch<React.SetStateAction<boolean>>;
 activeOrgId: string;
-conversationHistoryOpen: boolean;
 isOfficeCommandCenter: boolean;
 conversationHistory: ConversationHistoryItem[];
-conversationHistorySelectorExpanded: boolean;
 conversationHistoryHasMore: boolean;
 conversationHistoryListRef: React.RefObject<HTMLDivElement>;
-setConversationHistoryOpen: React.Dispatch<React.SetStateAction<boolean>>;
 attachmentConversationIdRef: React.RefObject<string>;
 setRestoringConversationId: React.Dispatch<React.SetStateAction<string>>;
 normalizePersistedMessages: (rawMessages: any[]) => any[];
@@ -63,7 +59,7 @@ setConversationContextMenu: React.Dispatch<React.SetStateAction<ConversationHist
 appConfirm: ReturnType<typeof useAppConfirm>;
 setDeletingConversationId: React.Dispatch<React.SetStateAction<string>>;
 };
-export function useConversationTransitions({ conversationTransitionRef, isCreatingConversation, restoringConversationId, setConversationTransitionPending, setIsCreatingConversation, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, activeDomain, detachPreviousExecution, bindAttachmentContextToConversation, setConversationHistory, setMessages, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, messageInputRef, agentId, isOpen, conversationHistoryLoadingRef, conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef, setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore, setConversationHistorySelectorExpanded, activeOrgId, conversationHistoryOpen, isOfficeCommandCenter, conversationHistory, conversationHistorySelectorExpanded, conversationHistoryHasMore, conversationHistoryListRef, setConversationHistoryOpen, attachmentConversationIdRef, setRestoringConversationId, normalizePersistedMessages, deletingConversationId, t, isZh, setConversationContextMenu, appConfirm, setDeletingConversationId }: useConversationTransitionsInput) {
+export function useConversationTransitions({ conversationTransitionRef, isCreatingConversation, restoringConversationId, setConversationTransitionPending, setIsCreatingConversation, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, activeDomain, detachPreviousExecution, bindAttachmentContextToConversation, setConversationHistory, setMessages, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, messageInputRef, agentId, isOpen, conversationHistoryLoadingRef, conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef, setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore, activeOrgId, isOfficeCommandCenter, conversationHistory, conversationHistoryHasMore, conversationHistoryListRef, attachmentConversationIdRef, setRestoringConversationId, normalizePersistedMessages, deletingConversationId, t, isZh, setConversationContextMenu, appConfirm, setDeletingConversationId }: useConversationTransitionsInput) {
 
   const activateTranscript = useCallback((conversationId: string, messages: any[]) => {
     detachPreviousExecution();
@@ -123,24 +119,37 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
     return () => window.removeEventListener('lumi:new-conversation', startNewConversation);
   }, [isOpen, startNewTextConversation]);
 
+  const [conversationHistoryError, setConversationHistoryError] = useState('');
+  const historyPanelVisibilityRef = useRef<{ scope: string; urlScope: typeof scopedConversationUrl; visible: boolean } | null>(null);
+  const historyRowsScopeRef = useRef(scopedConversationUrl);
+  const historyAbortRef = useRef<AbortController | null>(null);
+  // Hide the preceding owner's headers during the scope-changing render,
+  // before the effect resets the underlying page state.
+  const scopedConversationHistory = useMemo(() => historyRowsScopeRef.current === scopedConversationUrl
+    ? conversationHistory : [], [conversationHistory, scopedConversationUrl]);
+
   const loadConversationHistory = useCallback(async ({ append = false }: { append?: boolean } = {}) => {
-    if (conversationHistoryLoadingRef.current) return;
+    if (append && conversationHistoryLoadingRef.current) return;
     if (append && !conversationHistoryHasMoreRef.current) return;
 
     const requestId = ++conversationHistoryRequestRef.current;
+    historyAbortRef.current?.abort();
+    const controller = new AbortController();
+    historyAbortRef.current = controller;
     const offset = append ? conversationHistoryOffsetRef.current : 0;
     conversationHistoryLoadingRef.current = true;
+    setConversationHistoryError('');
     if (append) setConversationHistoryLoadingMore(true);
     else setConversationHistoryLoading(true);
 
     try {
       const response = await fetch(
         scopedConversationUrl(`/api/conversations?limit=${CONVERSATION_HISTORY_PAGE_SIZE}&offset=${offset}`),
-        { credentials: 'include' },
+        { credentials: 'include', signal: controller.signal },
       );
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result?.error || 'Unable to load conversation history');
-      if (requestId !== conversationHistoryRequestRef.current) return;
+      if (requestId !== conversationHistoryRequestRef.current || controller.signal.aborted) return;
 
       const page = (Array.isArray(result?.conversations) ? result.conversations : [])
         .filter((item: any) => String(item?.id || '').trim()) as ConversationHistoryItem[];
@@ -153,6 +162,9 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
         return [...merged.values()];
       });
 
+      if (!append && conversationHistoryListRef.current) {
+        conversationHistoryListRef.current.scrollTop = 0;
+      }
       conversationHistoryOffsetRef.current = offset + page.length;
       const hasMore = typeof result?.hasMore === 'boolean'
         ? result.hasMore
@@ -160,8 +172,10 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
       conversationHistoryHasMoreRef.current = hasMore;
       setConversationHistoryHasMore(hasMore);
     } catch (error: any) {
-      if (requestId === conversationHistoryRequestRef.current && !append) {
-        toast.error(error?.message || 'Unable to load conversation history');
+      if (requestId === conversationHistoryRequestRef.current && !controller.signal.aborted) {
+        const message = error?.message || 'Unable to load conversation history';
+        setConversationHistoryError(message);
+        if (!append) toast.error(message);
       }
     } finally {
       if (requestId === conversationHistoryRequestRef.current) {
@@ -169,13 +183,20 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
         setConversationHistoryLoading(false);
         setConversationHistoryLoadingMore(false);
       }
+      if (historyAbortRef.current === controller) historyAbortRef.current = null;
     }
-  }, [conversationHistoryHasMoreRef, conversationHistoryLoadingRef, conversationHistoryOffsetRef, conversationHistoryRequestRef, scopedConversationUrl, setConversationHistory, setConversationHistoryHasMore, setConversationHistoryLoading, setConversationHistoryLoadingMore]);
+  }, [conversationHistoryHasMoreRef, conversationHistoryListRef, conversationHistoryLoadingRef, conversationHistoryOffsetRef, conversationHistoryRequestRef, scopedConversationUrl, setConversationHistory, setConversationHistoryHasMore, setConversationHistoryLoading, setConversationHistoryLoadingMore]);
 
-  // Reset the paging cursor when the user switches domain/agent. A stale
+  const refreshConversationHistory = useCallback(() => loadConversationHistory(), [loadConversationHistory]);
+  const loadMoreConversationHistory = useCallback(() => loadConversationHistory({ append: true }), [loadConversationHistory]);
+
+  // Reset the paging cursor when the account or conversation scope changes. A stale
   // response from the previous scope is ignored by the request generation.
   useEffect(() => {
     conversationHistoryRequestRef.current += 1;
+    historyAbortRef.current?.abort();
+    historyAbortRef.current = null;
+    historyRowsScopeRef.current = scopedConversationUrl;
     conversationHistoryOffsetRef.current = 0;
     conversationHistoryHasMoreRef.current = true;
     conversationHistoryLoadingRef.current = false;
@@ -183,28 +204,31 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
     setConversationHistoryHasMore(true);
     setConversationHistoryLoading(false);
     setConversationHistoryLoadingMore(false);
-    setConversationHistorySelectorExpanded(false);
-  }, [activeDomain, activeOrgId, agentId, conversationHistoryHasMoreRef, conversationHistoryLoadingRef, conversationHistoryOffsetRef, conversationHistoryRequestRef, setConversationHistory, setConversationHistoryHasMore, setConversationHistoryLoading, setConversationHistoryLoadingMore, setConversationHistorySelectorExpanded]);
+    setConversationHistoryError('');
+    return () => {
+      conversationHistoryRequestRef.current += 1;
+      historyAbortRef.current?.abort();
+      historyAbortRef.current = null;
+    };
+  }, [activeDomain, activeOrgId, agentId, scopedConversationUrl, conversationHistoryHasMoreRef, conversationHistoryLoadingRef, conversationHistoryOffsetRef, conversationHistoryRequestRef, setConversationHistory, setConversationHistoryHasMore, setConversationHistoryLoading, setConversationHistoryLoadingMore]);
 
+  // Refresh when the office becomes visible or changes scope.
+  // Ordinary renders and focus changes never reload the fixed history panel.
   useEffect(() => {
-    if (!conversationHistoryOpen) setConversationHistorySelectorExpanded(false);
-  }, [conversationHistoryOpen, setConversationHistorySelectorExpanded]);
-
-  // The office rail is visible by default and loads its first page without a
-  // popover click. Re-opening a collapsed rail reuses the existing pages.
-  useEffect(() => {
-    if (!isOpen || !isOfficeCommandCenter || !conversationHistoryOpen) return;
-    if (conversationHistory.length > 0 || conversationHistoryLoadingRef.current) return;
-    if (!conversationHistoryHasMoreRef.current) return;
-    void loadConversationHistory();
-  }, [conversationHistory, conversationHistoryHasMoreRef, conversationHistoryLoadingRef, conversationHistoryOpen, isOfficeCommandCenter, isOpen, loadConversationHistory]);
+    const scope = JSON.stringify([activeDomain, activeOrgId || '', agentId]);
+    const visible = isOpen && isOfficeCommandCenter;
+    const previous = historyPanelVisibilityRef.current;
+    historyPanelVisibilityRef.current = { scope, urlScope: scopedConversationUrl, visible };
+    if (!visible || (previous?.visible && previous.scope === scope && previous.urlScope === scopedConversationUrl)) return;
+    void refreshConversationHistory();
+  }, [activeDomain, activeOrgId, agentId, isOfficeCommandCenter, isOpen, refreshConversationHistory, scopedConversationUrl]);
 
   // If the first page does not fill the rail, keep asking for pages until the
   // list has a scrollable viewport (or the server reports that it is done).
   // This makes "无极" history useful even for users whose first page is short,
   // without requiring a manual drag on an invisible scrollbar.
   useEffect(() => {
-    if (!isOpen || !isOfficeCommandCenter || !conversationHistoryOpen || !conversationHistorySelectorExpanded || !conversationHistoryHasMore) return;
+    if (!isOpen || !isOfficeCommandCenter || !conversationHistoryHasMore) return;
     const list = conversationHistoryListRef.current;
     if (!list || list.scrollHeight > list.clientHeight + 8) return;
     const frame = requestAnimationFrame(() => {
@@ -213,36 +237,25 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
       void loadConversationHistory({ append: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [conversationHistory, conversationHistoryHasMore, conversationHistoryListRef, conversationHistoryOpen, conversationHistorySelectorExpanded, isOfficeCommandCenter, isOpen, loadConversationHistory]);
-
-  const toggleConversationHistory = useCallback(() => {
-    setConversationHistoryOpen(current => !current);
-  }, [setConversationHistoryOpen]);
+  }, [conversationHistory, conversationHistoryHasMore, conversationHistoryListRef, isOfficeCommandCenter, isOpen, loadConversationHistory]);
 
   const handleConversationHistoryScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
-    if (!conversationHistorySelectorExpanded) return;
+    if (!isOpen || !isOfficeCommandCenter) return;
     const target = event.currentTarget;
     if (target.scrollHeight - target.scrollTop - target.clientHeight > 96) return;
     void loadConversationHistory({ append: true });
-  }, [conversationHistorySelectorExpanded, loadConversationHistory]);
+  }, [isOfficeCommandCenter, isOpen, loadConversationHistory]);
 
-  const handleConversationHistorySelectorBlur = useCallback((event: React.FocusEvent<HTMLElement>) => {
-    const nextTarget = event.relatedTarget;
-    if (nextTarget && event.currentTarget.contains(nextTarget as Node)) return;
-    setConversationHistorySelectorExpanded(false);
-  }, [setConversationHistorySelectorExpanded]);
-
-  // Keep the active transcript at the front of the collapsed deck. The full
-  // list still preserves the server's recency order after the selector opens.
+  // Keep the active transcript at the front without changing its content.
   const orderedConversationHistory = useMemo(() => {
-    const activeId = conversationHistory.find(item => item.status === 'active')?.id || attachmentConversationIdRef.current;
-    if (!activeId) return conversationHistory;
-    return [...conversationHistory].sort((left, right) => {
+    const activeId = scopedConversationHistory.find(item => item.status === 'active')?.id || attachmentConversationIdRef.current;
+    if (!activeId) return scopedConversationHistory;
+    return [...scopedConversationHistory].sort((left, right) => {
       if (left.id === activeId) return -1;
       if (right.id === activeId) return 1;
       return 0;
     });
-  }, [attachmentConversationIdRef, conversationHistory]);
+  }, [attachmentConversationIdRef, scopedConversationHistory]);
 
   const restoreTextConversation = useCallback(async (conversationId: string) => {
     if (!conversationId || conversationTransitionRef.current || restoringConversationId || isCreatingConversation) return;
@@ -283,7 +296,6 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
         ...item,
         status: item.id === conversationId ? 'active' : item.status === 'active' ? 'closed' : item.status,
       })));
-      setConversationHistorySelectorExpanded(false);
       requestAnimationFrame(() => messageInputRef.current?.focus());
     } catch (error: any) {
       if (work.isCurrent()) toast.error(error?.message || 'Unable to open this conversation');
@@ -295,7 +307,7 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
         setRestoringConversationId('');
       }
     }
-  }, [conversationTransitionRef, restoringConversationId, isCreatingConversation, attachmentConversationIdRef, setConversationTransitionPending, setRestoringConversationId, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, agentId, activeDomain, activateTranscript, normalizePersistedMessages, setConversationHistory, setConversationHistorySelectorExpanded, messageInputRef]);
+  }, [conversationTransitionRef, restoringConversationId, isCreatingConversation, attachmentConversationIdRef, setConversationTransitionPending, setRestoringConversationId, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, agentId, activeDomain, activateTranscript, normalizePersistedMessages, setConversationHistory, messageInputRef]);
 
   const deleteConversationFromHistory = useCallback(async (conversationId: string) => {
     const id = String(conversationId || '').trim();
@@ -343,5 +355,5 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
       setDeletingConversationId('');
     }
   }, [appConfirm, attachmentConversationIdRef, conversationHistory, conversationHistoryOffsetRef, deletingConversationId, isZh, restoringConversationId, scopedConversationUrl, setConversationContextMenu, setConversationHistory, setDeletingConversationId, startNewTextConversation, t.cancel, t.delete, t.deleteFailed, t.deleted, t.untitled]);
-return { handleConversationHistorySelectorBlur, startNewTextConversation, handleConversationHistoryScroll, orderedConversationHistory, restoreTextConversation, toggleConversationHistory, deleteConversationFromHistory };
+return { refreshConversationHistory, loadMoreConversationHistory, scopedConversationHistory, conversationHistoryError: historyRowsScopeRef.current === scopedConversationUrl ? conversationHistoryError : '', startNewTextConversation, handleConversationHistoryScroll, orderedConversationHistory, restoreTextConversation, deleteConversationFromHistory };
 }

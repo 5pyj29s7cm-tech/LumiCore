@@ -18,7 +18,7 @@ import type { MediaGenerationArtifact } from "@/lib/mediaGenerationArtifacts";
 import type { useChatIdentityAndState } from './use_chat_identity_and_state';
 
 export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<typeof useChatIdentityAndState>) {
-  const { isCreationWorkspace, chatExecutionSource, mediaStudioOpenRef, activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef, setMediaStudioMode, setMediaGenerationArtifacts, setMediaGeneration, setMediaGenerationRetryRequest, setMediaSourceArtifacts, setMediaSources, setMediaSourceUploading, mediaSourceUploadTargetRef, isOpen, isOfficeCommandCenter, pendingAttachmentsRef, pendingAttachments, inputDictationActiveRef, localCallState, endLocalVoiceSession, setIsListening, chatProgressClearTimerRef, lastChatProgressTextRef, setChatProgressLines, chatTurnTimerGuardRef, setWorkflowStatus, seenWorkflowToolEvents, draftTextRef, setHasDraftText, messageInputRef, showVoicePicker, setShowVoicePicker, showWeChatSettings, setShowWeChatSettings, showAttachmentMenu, setShowAttachmentMenu, conversationHistoryOpen, setConversationHistoryOpen, conversationContextMenu, setConversationContextMenu, agent, t, user, agentId, activeDomain, activeOrgId, chatViewWorkRef, chatUploadsRef, setAttachmentUploadFailures, setIsOptimizing, setOptimizationProgress, setPreviewFile, messages, mediaSourceArtifacts, mediaGenerationArtifacts, platform } = previousBindings;
+  const { isCreationWorkspace, chatExecutionSource, mediaStudioOpenRef, activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef, setMediaStudioMode, setMediaGenerationArtifacts, setMediaGeneration, setMediaGenerationRetryRequest, setMediaSourceArtifacts, setMediaSources, setMediaSourceUploading, mediaSourceUploadTargetRef, isOpen, isOfficeCommandCenter, pendingAttachmentsRef, pendingAttachments, inputDictationActiveRef, localCallState, endLocalVoiceSession, setIsListening, chatProgressClearTimerRef, lastChatProgressTextRef, setChatProgressLines, chatTurnTimerGuardRef, setWorkflowStatus, seenWorkflowToolEvents, draftTextRef, setHasDraftText, messageInputRef, showVoicePicker, setShowVoicePicker, showWeChatSettings, setShowWeChatSettings, showAttachmentMenu, setShowAttachmentMenu, conversationContextMenu, setConversationContextMenu, agent, t, user, agentId, activeDomain, activeOrgId, chatViewWorkRef, chatUploadsRef, setAttachmentUploadFailures, setIsOptimizing, setOptimizationProgress, setPreviewFile, messages, mediaSourceArtifacts, mediaGenerationArtifacts, platform } = previousBindings;
 
 
   const resetMediaGenerationSurface = useCallback(() => {
@@ -135,13 +135,12 @@ export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<t
         if (showVoicePicker) setShowVoicePicker(false);
         if (showWeChatSettings) setShowWeChatSettings(false);
         if (showAttachmentMenu) setShowAttachmentMenu(false);
-        if (conversationHistoryOpen) setConversationHistoryOpen(false);
         if (conversationContextMenu) setConversationContextMenu(null);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [conversationContextMenu, conversationHistoryOpen, setConversationContextMenu, setConversationHistoryOpen, setShowAttachmentMenu, setShowVoicePicker, setShowWeChatSettings, showAttachmentMenu, showVoicePicker, showWeChatSettings]);
+  }, [conversationContextMenu, setConversationContextMenu, setShowAttachmentMenu, setShowVoicePicker, setShowWeChatSettings, showAttachmentMenu, showVoicePicker, showWeChatSettings]);
 
   const agentName = agent?.name || (t.lumiEssence || 'Lumi Essence');
   const agentCategory = agent?.category || (t.friend || 'friend');
@@ -162,10 +161,16 @@ export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<t
   const { conversationAttachments, conversationAttachmentsRef, attachmentConversationIdRef,
     bindAttachmentContextToConversation, rememberConversationAttachments, clearConversationAttachments: clearStoredAttachments,
   } = useConversationAttachments(attachmentContextStoragePrefix, resetAttachmentConversationView);
+  // The server owns authorization. Keep the URL callback identity bound to the
+  // complete UI scope even when two authenticated scopes use the same URL.
+  const conversationUrlScope = useMemo(() => ({
+    ownerId: user?.uid || user?.id || user?.username || 'anonymous',
+    domain: activeDomain, orgId: activeOrgId || '', agentId, isCreationWorkspace,
+  }), [user?.uid, user?.id, user?.username, activeDomain, activeOrgId, agentId, isCreationWorkspace]);
   const scopedConversationUrl = useCallback((path: string) => {
     const separator = path.includes('?') ? '&' : '?';
-    return `${path}${separator}domain=${encodeURIComponent(activeDomain)}&agentId=${encodeURIComponent(agentId)}${isCreationWorkspace ? '&surface=creation' : ''}`;
-  }, [activeDomain, agentId, isCreationWorkspace]);
+    return `${path}${separator}domain=${encodeURIComponent(conversationUrlScope.domain)}&agentId=${encodeURIComponent(conversationUrlScope.agentId)}${conversationUrlScope.isCreationWorkspace ? '&surface=creation' : ''}`;
+  }, [conversationUrlScope]);
   const scopedFileUrl = useCallback((path: string) => {
     const separator = path.includes('?') ? '&' : '?';
     const orgScope = activeDomain === 'work' && activeOrgId

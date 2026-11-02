@@ -1,0 +1,74 @@
+.lumi-history-panel,
+.lumi-command-center-layered .lumi-history-panel {
+  --history-ink: rgba(240, 248, 252, .9);
+  --history-muted: rgba(190, 207, 220, .54);
+  --history-border: rgba(165, 213, 232, .1);
+  --history-accent: #a5edf0;
+  position: relative;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-height: 0;
+  align-items: stretch;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 20px;
+  background: transparent;
+  color: var(--history-ink);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.lumi-history-header { display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto; gap: 8px; padding: 18px 14px 13px 16px; }
+.lumi-history-heading { display: flex; align-items: center; min-width: 0; gap: 9px; }
+.lumi-history-heading > svg { color: var(--history-accent); opacity: .8; }
+.lumi-history-heading h2 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: .025em; }
+.lumi-history-header-actions { display: flex; gap: 2px; }
+.lumi-history-icon-button, .lumi-history-clear { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 27px; height: 27px; border-radius: 7px; color: var(--history-muted); transition: color .15s, background-color .15s; }
+.lumi-history-icon-button:hover, .lumi-history-clear:hover { background: transparent; color: var(--history-ink); }
+.lumi-history-panel button:focus-visible, .lumi-history-search:focus-within { outline: 2px solid rgba(133, 225, 235, .65); outline-offset: 2px; }
+.lumi-history-panel button:disabled { cursor: wait; opacity: .55; }
+.lumi-history-controls { flex-shrink: 0; padding: 0 12px; }
+.lumi-history-new { display: flex; width: 100%; min-height: 37px; align-items: center; justify-content: center; gap: 7px; border: 1px solid rgba(133, 225, 235, .2); border-radius: 10px; background: transparent; color: #b6eff1; font-size: 12px; font-weight: 600; transition: background-color .15s, border-color .15s; }
+.lumi-history-new:hover { background: transparent; border-color: rgba(133, 225, 235, .35); }
+.lumi-history-search { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 0 8px 0 10px; min-height: 35px; border: 1px solid var(--history-border); border-radius: 9px; background: transparent; color: var(--history-muted); }
+.lumi-history-search > svg { flex-shrink: 0; }
+.lumi-history-search input { width: 100%; min-width: 0; padding: 8px 0; border: 0; outline: 0; background: transparent; color: var(--history-ink); font-size: 11px; }
+.lumi-history-search input::placeholder { color: var(--history-muted); }
+.lumi-history-search input::-webkit-search-cancel-button { -webkit-appearance: none; }
+.lumi-history-clear { width: 21px; height: 23px; }
+.lumi-history-section-label { display: flex; justify-content: space-between; flex-shrink: 0; gap: 5px; padding: 16px 16px 9px; color: var(--history-muted); font-size: 10px; }
+.lumi-history-section-label > span:last-child { font-variant-numeric: tabular-nums; opacity: .8; }
+.lumi-history-list, .lumi-command-center-layered .lumi-history-list { flex: 1 1 0%; min-height: 0; width: 100%; padding: 0 7px 8px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(143, 185, 207, .2) transparent; scrollbar-gutter: stable; }
+.lumi-history-list::-webkit-scrollbar { width: 4px; }
+.lumi-history-list::-webkit-scrollbar-thumb { background: rgba(143, 185, 207, .2); border-radius: 8px; }
+.lumi-history-row, .lumi-command-center-layered .lumi-history-row { position: relative; display: flex; flex-direction: column; width: 100%; gap: 7px; margin: 0 0 5px; padding: 10px 11px; border: 1px solid transparent; border-radius: 12px; background: transparent; text-align: left; transition: border-color .15s, background-color .15s; }
+.lumi-history-row:hover, .lumi-command-center-layered .lumi-history-row:hover { border-color: var(--history-border); background: transparent; }
+.lumi-history-row.lumi-command-center-history-item--current, .lumi-command-center-layered .lumi-history-row.lumi-command-center-history-item--current { border-color: rgba(107, 213, 228, .24); background: transparent; }
+.lumi-history-row-title-line { display: flex; align-items: flex-start; min-width: 0; gap: 8px; }
+.lumi-history-row-status { display: flex; flex-shrink: 0; align-items: center; margin-top: 3px; color: var(--history-accent); white-space: nowrap; }
+.lumi-command-center-history-current-badge { display: inline-flex; align-items: center; gap: 4px; color: var(--history-accent); font-size: 9px; line-height: 13px; }
+.lumi-command-center-history-current-badge::before { width: 4px; height: 4px; border-radius: 50%; background: currentColor; content: ''; }
+.lumi-history-row-title, .lumi-command-center-layered .lumi-history-row-title { flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; color: var(--history-ink); font-size: 13px; font-weight: 550; line-height: 1.6; }
+.lumi-history-row-preview, .lumi-command-center-layered .lumi-history-row-preview { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; color: var(--history-muted); font-size: 11px; line-height: 1.6; }
+.lumi-history-row-meta, .lumi-command-center-layered .lumi-history-row-meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; color: var(--history-muted); font-size: 10px; font-variant-numeric: tabular-nums; opacity: .9; }
+.lumi-history-row-meta time { white-space: nowrap; }
+.lumi-history-empty { display: flex; min-height: 180px; padding: 35px 12px; flex-direction: column; align-items: center; justify-content: center; gap: 11px; text-align: center; color: var(--history-muted); }
+.lumi-history-empty > svg { color: rgba(151, 206, 223, .48); }
+.lumi-history-empty strong { color: var(--history-ink); font-size: 12px; font-weight: 500; }
+.lumi-history-empty p { margin: 0; font-size: 11px; }
+.lumi-history-error { display: flex; gap: 8px; margin: 0 4px 10px; padding: 12px; border: 1px solid rgba(239, 179, 127, .18); border-radius: 10px; background: transparent; color: #dbba9f; }
+.lumi-history-error > svg { flex-shrink: 0; margin-top: 2px; }
+.lumi-history-error > div { min-width: 0; }
+.lumi-history-error strong { display: block; font-size: 11px; font-weight: 500; }
+.lumi-history-error span { display: block; margin-top: 4px; overflow-wrap: anywhere; font-size: 10px; opacity: .7; }
+.lumi-history-error button { display: block; margin-top: 8px; color: var(--history-accent); font-size: 11px; text-decoration: underline; text-underline-offset: 3px; }
+.lumi-history-load-more { display: flex; width: calc(100% - 8px); min-height: 34px; margin: 8px 4px 4px; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--history-border); border-radius: 9px; color: var(--history-muted); font-size: 10px; }
+.lumi-history-load-more:hover { background: transparent; color: var(--history-ink); }
+.lumi-history-footer-note { margin: 0; padding: 16px 8px 10px; text-align: center; color: var(--history-muted); font-size: 9px; line-height: 1.6; opacity: .65; }
+html[data-mode="light"] .lumi-history-panel { --history-ink: #244552; --history-muted: #6c8792; --history-border: rgba(47, 108, 128, .14); --history-accent: #267d89; background: transparent; }
+html[data-mode="light"] .lumi-history-search { background: transparent; }
+html[data-mode="light"] .lumi-history-new { color: #267d89; }
+@media (max-width: 900px) { .lumi-command-center-layered .lumi-history-panel { width: 100%; max-width: none; flex: none; grid-column: 1; grid-row: 1; min-height: min(38vh, 300px); max-height: min(38vh, 300px); order: 0; } .lumi-history-header { padding: 10px 12px 8px; } .lumi-history-controls { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; } .lumi-history-new { width: auto; padding-inline: 12px; } .lumi-history-search { margin-top: 0; } .lumi-history-section-label { padding-top: 10px; } }
+@media (prefers-reduced-motion: reduce) { .lumi-history-panel * { transition: none !important; } }

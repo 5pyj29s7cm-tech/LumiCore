@@ -1,4 +1,3 @@
-import { DesktopModeSwitch } from './DesktopModeSwitch';
 import { LumiCoreAvatar } from "./widget";
 import { Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -11,7 +10,7 @@ import { PresenceIndicator } from "../biometrics/PresenceIndicator";
 import { uiMessage } from "../../i18n/uiMessages";
 import type { DesktopShellViewInput } from './DesktopShellView';
 
-export function renderDesktopCoreStage({ selectedPet, setPersonalizationSection, toggleWindow, callState, t, petReaction, equippedAccessories, audioLevel, startStandardVoiceCall, endVoiceCallFromUI, lang, operationMode, meetingNotesOpen, meetingPaused, openMeetingModeWithConfirm, canCustomizeLumiAppearance, setSelectedPet, savePetPrefsToServer, facePresenceRequested, faceRecognition, presence, voiceprint, sphereSentiment, isMuted, isTauri, isWallpaperMode, desktopExecutionPreference, setDesktopExecutionPreference, interrupt, toggleMute, resolvedAppearanceMode, wakeEnabled, wakeWord, transcript }: Pick<DesktopShellViewInput, "selectedPet" | "setPersonalizationSection" | "toggleWindow" | "callState" | "t" | "petReaction" | "equippedAccessories" | "audioLevel" | "startStandardVoiceCall" | "endVoiceCallFromUI" | "lang" | "operationMode" | "meetingNotesOpen" | "meetingPaused" | "openMeetingModeWithConfirm" | "canCustomizeLumiAppearance" | "setSelectedPet" | "savePetPrefsToServer" | "facePresenceRequested" | "faceRecognition" | "presence" | "voiceprint" | "sphereSentiment" | "isMuted" | "isTauri" | "isWallpaperMode" | "desktopExecutionPreference" | "setDesktopExecutionPreference" | "interrupt" | "toggleMute" | "resolvedAppearanceMode" | "wakeEnabled" | "wakeWord" | "transcript">) {
+export function renderDesktopCoreStage({ selectedPet, setPersonalizationSection, toggleWindow, callState, t, petReaction, equippedAccessories, audioLevel, startStandardVoiceCall, endVoiceCallFromUI, lang, operationMode, meetingNotesOpen, meetingPaused, openMeetingModeWithConfirm, canCustomizeLumiAppearance, setSelectedPet, savePetPrefsToServer, facePresenceRequested, faceRecognition, presence, voiceprint, sphereSentiment, isMuted, isTauri, isWallpaperMode, interrupt, toggleMute, resolvedAppearanceMode, wakeEnabled, wakeWord, transcript }: Pick<DesktopShellViewInput, "selectedPet" | "setPersonalizationSection" | "toggleWindow" | "callState" | "t" | "petReaction" | "equippedAccessories" | "audioLevel" | "startStandardVoiceCall" | "endVoiceCallFromUI" | "lang" | "operationMode" | "meetingNotesOpen" | "meetingPaused" | "openMeetingModeWithConfirm" | "canCustomizeLumiAppearance" | "setSelectedPet" | "savePetPrefsToServer" | "facePresenceRequested" | "faceRecognition" | "presence" | "voiceprint" | "sphereSentiment" | "isMuted" | "isTauri" | "isWallpaperMode" | "interrupt" | "toggleMute" | "resolvedAppearanceMode" | "wakeEnabled" | "wakeWord" | "transcript">) {
   return (
 <div data-wallpaper-tool="personal-core" className="lumi-core-stage absolute inset-0 flex items-center justify-center z-[15] pointer-events-none">
         <motion.div
@@ -144,7 +143,6 @@ export function renderDesktopCoreStage({ selectedPet, setPersonalizationSection,
               </>
             )}
 
-            <div className="mt-4"><DesktopModeSwitch preference={desktopExecutionPreference} setPreference={setDesktopExecutionPreference} lang={lang} appearance={resolvedAppearanceMode} /></div>
             <div className={`lumi-core-secondary flex flex-col items-center gap-4 mt-8 transition-all duration-1000 ${isWallpaperMode ? 'opacity-0 blur-sm pointer-events-none' : 'opacity-100'}`}>
               <VoicePicker t={t} />
 

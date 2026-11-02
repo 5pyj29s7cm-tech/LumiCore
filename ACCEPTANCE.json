@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-11-01T15:09:12.499653+00:00",
+  "updatedAt": "2026-11-02T09:48:50.004072+00:00",
   "localDate": "2026-11-01",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "Automatic cross-session saved memory in ordinary Chat",
-    "status": "implemented-and-isolated-verified",
-    "instruction": "Current maintenance summary: latestAutomaticMemoryContext. Historical acceptance remains sealed or held; native coordinate testing stays paused."
+    "title": "Three-edition conversation panel and personal navigation maintenance",
+    "status": "implemented-and-scoped-verified-with-retained-baseline-failures",
+    "instruction": "Current maintenance summary: latestConversationListSync. Historical business acceptance stays sealed or held; native coordinate testing remains paused."
   },
   "acceptedWholeItems": [
     3,
@@ -36,48 +36,44 @@
     "Existing file full body returned through normal Socket and persisted exactly once with terminal task/turn"
   ],
   "knownUnresolved": [
-    "验证范围为三版源码、真实隔离本地记忆库到Chat提示词装配和选定回归；未调用真实模型检验最终回复，真人坐标复测仍暂停，不代表整程序或业务验收。",
-    "当前召回使用本地关键词匹配，沿用人格记忆类型、置信度和条数策略；没有新增向量/外部嵌入调用或RAG检索。",
-    "用户可在当前消息明确要求不使用记忆；这不是新的持久设置。retrieveLimit=0仍关闭召回。autoExtract设置只控制写入，不作为读取禁用开关。",
-    "明确标记为secret、session/ephemeral或firewall拒绝的记忆被排除；旧记录缺少这些元数据时按既有兼容规则处理，未新增历史内容秘密扫描。",
-    "范围按用户、个人/工作域、组织及共享/当前agent隔离；远程受限和记忆化身走既有独立边界。",
-    "普通Chat仍保留原生会话历史；本次自动注入的是相关已保存记忆，不自动拉入其它会话全文。记忆内容作为历史数据，不作为工具请求或授权。",
-    "三版源码仍为3.1.1；本轮未构建安装包、部署或重启运行客户端，不能认定当前运行二进制已经更新。",
-    "历史3/15/16封存、2暂停、10保留及其他held状态不变；没有修改默认模型、恢复法律历史验收、发起外部业务/付费生成或推送远端。",
-    "历史运行、性能、安装及完整套件限制保留。旧PID/健康/数据库计数不是本轮观测；行号/SHA是源码定位，不是动态行覆盖。",
-    "自动注入专项没有调用工具、嵌入或真实模型；扩展回归内既有记忆测试每版出现8次嵌入请求尝试，均被外部网络guard阻断，见regression-environment-review.json，不能宣称整个测试集零请求尝试。",
-    "相邻回归保留6条基线已存在的失败（三版各2条）：内部guard错误历史缺少公开失败轮、记忆化身文本聊天缺少其专属私密资料。详见retainedRegressionFailures及三版HEAD投影对照；没有修改断言消除失败，也未计入通过。"
+    "本轮为三版前端同步、样式/入口调整和跨账号组织请求失效修复；验证采用隔离React/DOM、定向回归和生产桌面编译，不代表真人或整程序验收。真人坐标复测仍暂停。",
+    "隔离桌面编译使用write:false，将产出的JS/CSS保存到审计目录；不运行原配置写入dist的public资产复制钩子，不是安装包构建或已运行客户端验收。没有重启、安装或发布程序。",
+    "Main/Designer较新的服务端消息游标分页和原生历史请求行为保留，未覆盖为Legal旧的客户端history注入；三版默认模型和执行偏好持久化规则未改。",
+    "此前自动记忆轮次保留的6条相邻失败（公开错误历史、化身私密资料）未在本轮修复，不据本轮列表通过认定它们通过。",
+    "历史3/15/16封存、2暂停、10保留和其他held状态不变；法律历史业务验收未恢复，未调用真实模型/外部业务或付费生成，未推送远端。",
+    "源码版本仍为3.1.1；行号和SHA用于精确源码定位，不是动态行覆盖。完整套件和原生视觉验收未执行。",
+    "本轮选定回归保留原OS-core导航字符串断言失败；改前HEAD已复现，未为了通过而改动不相关导航实现。详见retainedRegressionFailures与独立基线证据。"
   ],
   "validation": {
-    "scope": "ordinary Chat automatic saved-memory context and selected adjacent regressions",
+    "scope": "conversation panel, personal controls, scope invalidation and selected adjacent regressions",
     "selectedRegression": {
-      "countRuleZh": "每个版本+测试文件只取指定最后完整结果；专项重复运行不再累加，失败和跳过如实记录。",
+      "countRuleZh": "每版+文件只计指定最后完整结果，参数化同名用例按原顺序保留；重跑不累加，失败/跳过明确计数。",
       "perEdition": {
         "main": {
-          "files": 18,
-          "executed": 301,
-          "passed": 299,
-          "failed": 2,
+          "files": 11,
+          "executed": 98,
+          "passed": 97,
+          "failed": 1,
           "skipped": 0
         },
         "legal": {
-          "files": 18,
-          "executed": 297,
-          "passed": 295,
-          "failed": 2,
+          "files": 4,
+          "executed": 39,
+          "passed": 39,
+          "failed": 0,
           "skipped": 0
         },
         "designer": {
-          "files": 18,
-          "executed": 302,
-          "passed": 300,
-          "failed": 2,
+          "files": 11,
+          "executed": 98,
+          "passed": 97,
+          "failed": 1,
           "skipped": 0
         }
       },
-      "totalExecuted": 900,
-      "totalPassed": 894,
-      "totalFailed": 6,
+      "totalExecuted": 235,
+      "totalPassed": 233,
+      "totalFailed": 2,
       "checks": {
         "main": {
           "sourceStable": true,
@@ -108,6 +104,22 @@
               "exitCode": 0
             },
             {
+              "name": "command-center-css",
+              "command": [
+                "node",
+                "scripts/check-command-center-css.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "website-boundary",
+              "command": [
+                "node",
+                "scripts/check-website-boundary.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
               "name": "diff-check",
               "command": [
                 "git",
@@ -115,9 +127,20 @@
                 "--check"
               ],
               "exitCode": 0
+            },
+            {
+              "name": "desktop-compilation",
+              "command": [
+                "node",
+                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\build-isolated.mjs",
+                "D:\\lumiOS",
+                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\main\\final-ui\\build-output"
+              ],
+              "exitCode": 0
             }
           ],
-          "record": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\final-checks\\main\\sealed-candidate\\result.json"
+          "record": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\main\\final-ui\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\main\\final-ui\\build-result.json"
         },
         "legal": {
           "sourceStable": true,
@@ -148,6 +171,22 @@
               "exitCode": 0
             },
             {
+              "name": "command-center-css",
+              "command": [
+                "node",
+                "scripts/check-command-center-css.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "website-boundary",
+              "command": [
+                "node",
+                "scripts/check-website-boundary.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
               "name": "diff-check",
               "command": [
                 "git",
@@ -155,9 +194,20 @@
                 "--check"
               ],
               "exitCode": 0
+            },
+            {
+              "name": "desktop-compilation",
+              "command": [
+                "node",
+                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\build-isolated.mjs",
+                "D:\\lumiOS-variants\\lumi-legal-client",
+                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\legal\\final-ui\\build-output"
+              ],
+              "exitCode": 0
             }
           ],
-          "record": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\final-checks\\legal\\sealed-candidate\\result.json"
+          "record": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\legal\\final-ui\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\legal\\final-ui\\build-result.json"
         },
         "designer": {
           "sourceStable": true,
@@ -188,6 +238,22 @@
               "exitCode": 0
             },
             {
+              "name": "command-center-css",
+              "command": [
+                "node",
+                "scripts/check-command-center-css.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "website-boundary",
+              "command": [
+                "node",
+                "scripts/check-website-boundary.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
               "name": "diff-check",
               "command": [
                 "git",
@@ -195,68 +261,53 @@
                 "--check"
               ],
               "exitCode": 0
+            },
+            {
+              "name": "desktop-compilation",
+              "command": [
+                "node",
+                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\build-isolated.mjs",
+                "D:\\lumiOS-variants\\lumi-designer-client",
+                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\designer\\final-ui\\build-output"
+              ],
+              "exitCode": 0
             }
           ],
-          "record": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\final-checks\\designer\\sealed-candidate\\result.json"
+          "record": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\designer\\final-ui\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\designer\\final-ui\\build-result.json"
         }
       },
       "fullSuite": false,
       "selectedTests": "final-selected-tests.json"
     },
-    "previousTwelveProbeDisposition": {
-      "previousReport": "D:/Lumi-Audit-Temp/legacy-applicability-remediation-20261101/report.json",
-      "previousSealSha256": "f73c22fb6c9be487b5451921397dd8598f14776fe46748a3d0267ec67fbef8a4",
-      "previousFailures": 12,
-      "currentOutcome": "Same four original inputs per edition obtain relevant actual saved-memory content in the assembled Chat prompt and request no tools; final-v2 45 cases per edition and final regression include these cases.",
-      "supersededContract": "User requested automatic context injection, not a new memory_search tool. Historical tool-availability probes remain immutable failures under their original contract.",
-      "toolAdded": false,
+    "syncProvenance": {
+      "legalOriginCommit": "a605973ed430a57c753e1485894fc46389229680",
+      "originDate": "2026-10-26",
+      "gapConfirmed": "Main and Designer lacked the fixed history panel, search, refresh, pagination/retry UI and associated tests.",
+      "syncMethod": "Selective frontend port, then user-requested transparent surfaces/personal mode placement and account/organization invalidation fixes applied across all three editions.",
       "wholeItemAccepted": false
     },
     "retainedRegressionFailures": [
       {
         "edition": "main",
-        "file": "test/conversation_prompt_context.test.ts",
-        "case": "shared conversation prompt context keeps the user request and a public failure when internal guard protocol is removed",
-        "report": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\verification\\main\\final-regression\\tests.json"
-      },
-      {
-        "edition": "main",
-        "file": "test/memory_avatar_chat_lifecycle.test.ts",
-        "case": "supplies the same private materials to the real text handler without enabling tools or learning",
-        "report": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\verification\\main\\final-regression\\tests.json"
-      },
-      {
-        "edition": "legal",
-        "file": "test/conversation_prompt_context.test.ts",
-        "case": "shared conversation prompt context keeps the user request and a public failure when internal guard protocol is removed",
-        "report": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\verification\\legal\\final-regression\\tests.json"
-      },
-      {
-        "edition": "legal",
-        "file": "test/memory_avatar_chat_lifecycle.test.ts",
-        "case": "supplies the same private materials to the real text handler without enabling tools or learning",
-        "report": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\verification\\legal\\final-regression\\tests.json"
+        "file": "test/command_center_navigation_contract.test.ts",
+        "case": "command center navigation contract returns from an OS core opened by the command center back to the office",
+        "report": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\test-verification\\main\\final-v2\\tests.json"
       },
       {
         "edition": "designer",
-        "file": "test/conversation_prompt_context.test.ts",
-        "case": "shared conversation prompt context keeps the user request and a public failure when internal guard protocol is removed",
-        "report": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\verification\\designer\\final-regression\\tests.json"
-      },
-      {
-        "edition": "designer",
-        "file": "test/memory_avatar_chat_lifecycle.test.ts",
-        "case": "supplies the same private materials to the real text handler without enabling tools or learning",
-        "report": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\verification\\designer\\final-regression\\tests.json"
+        "file": "test/command_center_navigation_contract.test.ts",
+        "case": "command center navigation contract returns from an OS core opened by the command center back to the office",
+        "report": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\test-verification\\designer\\final-v2\\tests.json"
       }
     ],
     "wholeApplicationAccepted": false
   },
   "evidence": {
-    "directory": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101",
-    "manifest": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\evidence-seal.json",
-    "sha256": "b2be0367a0fdd4834bf02c78d7a0db3a42e8c3029251c7517de9da2988c3bbb2",
-    "files": 953,
+    "directory": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102",
+    "manifest": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\evidence-seal.json",
+    "sha256": "e4644fc74fa1823ce9386455d99c5e5d9322314dbe6de2993d683642c85f6912",
+    "files": 3267,
     "canonicalLedger": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\active-closure-checkpoint.json"
   },
@@ -271,10 +322,10 @@
   },
   "repository": {
     "edition": "main",
-    "root": "D:\\lumiOS",
-    "baseCommit": "e3a9d54c1ca18d889c581945519e5104fe0db041",
+    "root": "D:/lumiOS",
+    "baseCommit": "afd08f4dbe29111be0eaedd99bc68acd67ed7a59",
     "branch": "feature/chat-song-workbench-20260916",
-    "localCommitReceipt": "D:\\Lumi-Audit-Temp\\chat-auto-memory-delivery-20261101.json"
+    "localCommitReceipt": "D:\\Lumi-Audit-Temp\\conversation-list-sync-delivery-20261102.json"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
@@ -623,8 +674,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "implemented-and-isolated-verified",
-    "priority": "Automatic saved-memory context in Main, Legal and Designer; historical business acceptance remains held or sealed."
+    "status": "implemented-and-scoped-verified-with-retained-baseline-failures",
+    "priority": "Conversation panel and personal UI maintenance across three editions; historical business acceptance remains held or sealed."
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -10606,6 +10657,267 @@
         "historicalBusinessStateNotResumed": true,
         "historicalFields": "checkpointSummaryHistory preserves superseded summaries; acceptedWholeItems/counts/heldItems/archive are unchanged."
       }
+    },
+    {
+      "archivedAtUTC": "2026-11-02T09:48:50.004072+00:00",
+      "baseCommit": "afd08f4dbe29111be0eaedd99bc68acd67ed7a59",
+      "snapshot": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\checkpoint-before\\main\\ACCEPTANCE.json",
+      "snapshotSha256": "435e086d86f978461ddb6e7a1336ff9108c548f8c8877eccd951aef1bdc7e9f8",
+      "reason": "User requested cross-edition conversation UI synchronization and transparent/personal controls; previous maintenance summaries and business outcomes remain historical evidence.",
+      "currentItem": {
+        "id": null,
+        "title": "Automatic cross-session saved memory in ordinary Chat",
+        "status": "implemented-and-isolated-verified",
+        "instruction": "Current maintenance summary: latestAutomaticMemoryContext. Historical acceptance remains sealed or held; native coordinate testing stays paused."
+      },
+      "knownUnresolved": [
+        "验证范围为三版源码、真实隔离本地记忆库到Chat提示词装配和选定回归；未调用真实模型检验最终回复，真人坐标复测仍暂停，不代表整程序或业务验收。",
+        "当前召回使用本地关键词匹配，沿用人格记忆类型、置信度和条数策略；没有新增向量/外部嵌入调用或RAG检索。",
+        "用户可在当前消息明确要求不使用记忆；这不是新的持久设置。retrieveLimit=0仍关闭召回。autoExtract设置只控制写入，不作为读取禁用开关。",
+        "明确标记为secret、session/ephemeral或firewall拒绝的记忆被排除；旧记录缺少这些元数据时按既有兼容规则处理，未新增历史内容秘密扫描。",
+        "范围按用户、个人/工作域、组织及共享/当前agent隔离；远程受限和记忆化身走既有独立边界。",
+        "普通Chat仍保留原生会话历史；本次自动注入的是相关已保存记忆，不自动拉入其它会话全文。记忆内容作为历史数据，不作为工具请求或授权。",
+        "三版源码仍为3.1.1；本轮未构建安装包、部署或重启运行客户端，不能认定当前运行二进制已经更新。",
+        "历史3/15/16封存、2暂停、10保留及其他held状态不变；没有修改默认模型、恢复法律历史验收、发起外部业务/付费生成或推送远端。",
+        "历史运行、性能、安装及完整套件限制保留。旧PID/健康/数据库计数不是本轮观测；行号/SHA是源码定位，不是动态行覆盖。",
+        "自动注入专项没有调用工具、嵌入或真实模型；扩展回归内既有记忆测试每版出现8次嵌入请求尝试，均被外部网络guard阻断，见regression-environment-review.json，不能宣称整个测试集零请求尝试。",
+        "相邻回归保留6条基线已存在的失败（三版各2条）：内部guard错误历史缺少公开失败轮、记忆化身文本聊天缺少其专属私密资料。详见retainedRegressionFailures及三版HEAD投影对照；没有修改断言消除失败，也未计入通过。"
+      ],
+      "evidence": {
+        "directory": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101",
+        "manifest": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\evidence-seal.json",
+        "sha256": "b2be0367a0fdd4834bf02c78d7a0db3a42e8c3029251c7517de9da2988c3bbb2",
+        "files": 953,
+        "canonicalLedger": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\joint-acceptance-20261023.json",
+        "canonicalCheckpoint": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\active-closure-checkpoint.json"
+      },
+      "workFocus": {
+        "area": "main-program-optimization-and-scoped-variant-maintenance",
+        "sourceRoot": "D:\\lumiOS",
+        "requestedByUser": true,
+        "lawyerDevelopmentArchived": true,
+        "lawyerArchiveTag": "archive/legal-development-20261027",
+        "status": "implemented-and-isolated-verified",
+        "priority": "Automatic saved-memory context in Main, Legal and Designer; historical business acceptance remains held or sealed."
+      },
+      "repository": {
+        "edition": "main",
+        "root": "D:\\lumiOS",
+        "baseCommit": "e3a9d54c1ca18d889c581945519e5104fe0db041",
+        "branch": "feature/chat-song-workbench-20260916",
+        "localCommitReceipt": "D:\\Lumi-Audit-Temp\\chat-auto-memory-delivery-20261101.json"
+      },
+      "validation": {
+        "scope": "ordinary Chat automatic saved-memory context and selected adjacent regressions",
+        "selectedRegression": {
+          "countRuleZh": "每个版本+测试文件只取指定最后完整结果；专项重复运行不再累加，失败和跳过如实记录。",
+          "perEdition": {
+            "main": {
+              "files": 18,
+              "executed": 301,
+              "passed": 299,
+              "failed": 2,
+              "skipped": 0
+            },
+            "legal": {
+              "files": 18,
+              "executed": 297,
+              "passed": 295,
+              "failed": 2,
+              "skipped": 0
+            },
+            "designer": {
+              "files": 18,
+              "executed": 302,
+              "passed": 300,
+              "failed": 2,
+              "skipped": 0
+            }
+          },
+          "totalExecuted": 900,
+          "totalPassed": 894,
+          "totalFailed": 6,
+          "checks": {
+            "main": {
+              "sourceStable": true,
+              "checks": [
+                {
+                  "name": "typecheck",
+                  "command": [
+                    "node",
+                    "node_modules/typescript/bin/tsc",
+                    "--noEmit"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "architecture",
+                  "command": [
+                    "node",
+                    "scripts/check-architecture-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "i18n",
+                  "command": [
+                    "node",
+                    "scripts/check-i18n-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "diff-check",
+                  "command": [
+                    "git",
+                    "diff",
+                    "--check"
+                  ],
+                  "exitCode": 0
+                }
+              ],
+              "record": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\final-checks\\main\\sealed-candidate\\result.json"
+            },
+            "legal": {
+              "sourceStable": true,
+              "checks": [
+                {
+                  "name": "typecheck",
+                  "command": [
+                    "node",
+                    "node_modules/typescript/bin/tsc",
+                    "--noEmit"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "architecture",
+                  "command": [
+                    "node",
+                    "scripts/check-architecture-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "i18n",
+                  "command": [
+                    "node",
+                    "scripts/check-i18n-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "diff-check",
+                  "command": [
+                    "git",
+                    "diff",
+                    "--check"
+                  ],
+                  "exitCode": 0
+                }
+              ],
+              "record": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\final-checks\\legal\\sealed-candidate\\result.json"
+            },
+            "designer": {
+              "sourceStable": true,
+              "checks": [
+                {
+                  "name": "typecheck",
+                  "command": [
+                    "node",
+                    "node_modules/typescript/bin/tsc",
+                    "--noEmit"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "architecture",
+                  "command": [
+                    "node",
+                    "scripts/check-architecture-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "i18n",
+                  "command": [
+                    "node",
+                    "scripts/check-i18n-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "diff-check",
+                  "command": [
+                    "git",
+                    "diff",
+                    "--check"
+                  ],
+                  "exitCode": 0
+                }
+              ],
+              "record": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\final-checks\\designer\\sealed-candidate\\result.json"
+            }
+          },
+          "fullSuite": false,
+          "selectedTests": "final-selected-tests.json"
+        },
+        "previousTwelveProbeDisposition": {
+          "previousReport": "D:/Lumi-Audit-Temp/legacy-applicability-remediation-20261101/report.json",
+          "previousSealSha256": "f73c22fb6c9be487b5451921397dd8598f14776fe46748a3d0267ec67fbef8a4",
+          "previousFailures": 12,
+          "currentOutcome": "Same four original inputs per edition obtain relevant actual saved-memory content in the assembled Chat prompt and request no tools; final-v2 45 cases per edition and final regression include these cases.",
+          "supersededContract": "User requested automatic context injection, not a new memory_search tool. Historical tool-availability probes remain immutable failures under their original contract.",
+          "toolAdded": false,
+          "wholeItemAccepted": false
+        },
+        "retainedRegressionFailures": [
+          {
+            "edition": "main",
+            "file": "test/conversation_prompt_context.test.ts",
+            "case": "shared conversation prompt context keeps the user request and a public failure when internal guard protocol is removed",
+            "report": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\verification\\main\\final-regression\\tests.json"
+          },
+          {
+            "edition": "main",
+            "file": "test/memory_avatar_chat_lifecycle.test.ts",
+            "case": "supplies the same private materials to the real text handler without enabling tools or learning",
+            "report": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\verification\\main\\final-regression\\tests.json"
+          },
+          {
+            "edition": "legal",
+            "file": "test/conversation_prompt_context.test.ts",
+            "case": "shared conversation prompt context keeps the user request and a public failure when internal guard protocol is removed",
+            "report": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\verification\\legal\\final-regression\\tests.json"
+          },
+          {
+            "edition": "legal",
+            "file": "test/memory_avatar_chat_lifecycle.test.ts",
+            "case": "supplies the same private materials to the real text handler without enabling tools or learning",
+            "report": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\verification\\legal\\final-regression\\tests.json"
+          },
+          {
+            "edition": "designer",
+            "file": "test/conversation_prompt_context.test.ts",
+            "case": "shared conversation prompt context keeps the user request and a public failure when internal guard protocol is removed",
+            "report": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\verification\\designer\\final-regression\\tests.json"
+          },
+          {
+            "edition": "designer",
+            "file": "test/memory_avatar_chat_lifecycle.test.ts",
+            "case": "supplies the same private materials to the real text handler without enabling tools or learning",
+            "report": "D:\\Lumi-Audit-Temp\\chat-auto-memory-20261101\\verification\\designer\\final-regression\\tests.json"
+          }
+        ],
+        "wholeApplicationAccepted": false
+      },
+      "updatedAt": "2026-11-01T15:09:12.499653+00:00",
+      "latestMaintenanceSummary": {
+        "field": "latestAutomaticMemoryContext",
+        "atUTC": "2026-11-01T15:09:12.499653+00:00",
+        "historicalBusinessStateNotResumed": true,
+        "historicalFields": "Prior maintenance and business acceptance records remain historical evidence. Automatic context supersedes the earlier no-memory capability limitation under the new user request."
+      }
     }
   ],
   "latestApplicabilityRemediation": {
@@ -10849,10 +11161,10 @@
     "lastSyncedCommitMeaning": "Full merge ancestry is unchanged; these scoped patches are recorded separately."
   },
   "latestMaintenanceSummary": {
-    "field": "latestAutomaticMemoryContext",
-    "atUTC": "2026-11-01T15:09:12.499653+00:00",
+    "field": "latestConversationListSync",
+    "atUTC": "2026-11-02T09:48:50.004072+00:00",
     "historicalBusinessStateNotResumed": true,
-    "historicalFields": "Prior maintenance and business acceptance records remain historical evidence. Automatic context supersedes the earlier no-memory capability limitation under the new user request."
+    "historicalFields": "Prior maintenance and business acceptance records remain historical evidence. Conversation panel and personal UI changes are scoped maintenance, not a change to historical acceptance outcomes."
   },
   "latestAutomaticMemoryContext": {
     "atUTC": "2026-11-01T15:09:12.499653+00:00",
@@ -11107,6 +11419,315 @@
       "designer": {
         "path": "D:\\lumiOS-variants\\lumi-designer-client",
         "head": "44ceeffcd9fbaf93aa4fd36990662648b348db77",
+        "branch": "contrib/installer-inputs-20260915-designer"
+      }
+    },
+    "lastSyncedCommitMeaning": "Full merge ancestry is unchanged; these scoped patches are recorded separately."
+  },
+  "latestConversationListSync": {
+    "atUTC": "2026-11-02T09:48:50.004072+00:00",
+    "status": "implemented-and-scoped-verified-with-retained-baseline-failures",
+    "report": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\report.json",
+    "reportSha256": "26cd0447c91848fc3e1b866a80326524c5da380a7d61e8810e48f01621707b6b",
+    "sourceVersions": {
+      "main": "3.1.1",
+      "legal": "3.1.1",
+      "designer": "3.1.1"
+    },
+    "selectedRegression": {
+      "countRuleZh": "每版+文件只计指定最后完整结果，参数化同名用例按原顺序保留；重跑不累加，失败/跳过明确计数。",
+      "perEdition": {
+        "main": {
+          "files": 11,
+          "executed": 98,
+          "passed": 97,
+          "failed": 1,
+          "skipped": 0
+        },
+        "legal": {
+          "files": 4,
+          "executed": 39,
+          "passed": 39,
+          "failed": 0,
+          "skipped": 0
+        },
+        "designer": {
+          "files": 11,
+          "executed": 98,
+          "passed": 97,
+          "failed": 1,
+          "skipped": 0
+        }
+      },
+      "totalExecuted": 235,
+      "totalPassed": 233,
+      "totalFailed": 2,
+      "checks": {
+        "main": {
+          "sourceStable": true,
+          "checks": [
+            {
+              "name": "typecheck",
+              "command": [
+                "node",
+                "node_modules/typescript/bin/tsc",
+                "--noEmit"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "architecture",
+              "command": [
+                "node",
+                "scripts/check-architecture-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "i18n",
+              "command": [
+                "node",
+                "scripts/check-i18n-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "command-center-css",
+              "command": [
+                "node",
+                "scripts/check-command-center-css.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "website-boundary",
+              "command": [
+                "node",
+                "scripts/check-website-boundary.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "diff-check",
+              "command": [
+                "git",
+                "diff",
+                "--check"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "desktop-compilation",
+              "command": [
+                "node",
+                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\build-isolated.mjs",
+                "D:\\lumiOS",
+                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\main\\final-ui\\build-output"
+              ],
+              "exitCode": 0
+            }
+          ],
+          "record": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\main\\final-ui\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\main\\final-ui\\build-result.json"
+        },
+        "legal": {
+          "sourceStable": true,
+          "checks": [
+            {
+              "name": "typecheck",
+              "command": [
+                "node",
+                "node_modules/typescript/bin/tsc",
+                "--noEmit"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "architecture",
+              "command": [
+                "node",
+                "scripts/check-architecture-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "i18n",
+              "command": [
+                "node",
+                "scripts/check-i18n-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "command-center-css",
+              "command": [
+                "node",
+                "scripts/check-command-center-css.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "website-boundary",
+              "command": [
+                "node",
+                "scripts/check-website-boundary.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "diff-check",
+              "command": [
+                "git",
+                "diff",
+                "--check"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "desktop-compilation",
+              "command": [
+                "node",
+                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\build-isolated.mjs",
+                "D:\\lumiOS-variants\\lumi-legal-client",
+                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\legal\\final-ui\\build-output"
+              ],
+              "exitCode": 0
+            }
+          ],
+          "record": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\legal\\final-ui\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\legal\\final-ui\\build-result.json"
+        },
+        "designer": {
+          "sourceStable": true,
+          "checks": [
+            {
+              "name": "typecheck",
+              "command": [
+                "node",
+                "node_modules/typescript/bin/tsc",
+                "--noEmit"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "architecture",
+              "command": [
+                "node",
+                "scripts/check-architecture-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "i18n",
+              "command": [
+                "node",
+                "scripts/check-i18n-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "command-center-css",
+              "command": [
+                "node",
+                "scripts/check-command-center-css.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "website-boundary",
+              "command": [
+                "node",
+                "scripts/check-website-boundary.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "diff-check",
+              "command": [
+                "git",
+                "diff",
+                "--check"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "desktop-compilation",
+              "command": [
+                "node",
+                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\build-isolated.mjs",
+                "D:\\lumiOS-variants\\lumi-designer-client",
+                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\designer\\final-ui\\build-output"
+              ],
+              "exitCode": 0
+            }
+          ],
+          "record": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\designer\\final-ui\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\designer\\final-ui\\build-result.json"
+        }
+      },
+      "fullSuite": false,
+      "selectedTests": "final-selected-tests.json"
+    },
+    "syncProvenance": {
+      "legalOriginCommit": "a605973ed430a57c753e1485894fc46389229680",
+      "originDate": "2026-10-26",
+      "gapConfirmed": "Main and Designer lacked the fixed history panel, search, refresh, pagination/retry UI and associated tests.",
+      "syncMethod": "Selective frontend port, then user-requested transparent surfaces/personal mode placement and account/organization invalidation fixes applied across all three editions.",
+      "wholeItemAccepted": false
+    },
+    "retainedRegressionFailures": [
+      {
+        "edition": "main",
+        "file": "test/command_center_navigation_contract.test.ts",
+        "case": "command center navigation contract returns from an OS core opened by the command center back to the office",
+        "report": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\test-verification\\main\\final-v2\\tests.json"
+      },
+      {
+        "edition": "designer",
+        "file": "test/command_center_navigation_contract.test.ts",
+        "case": "command center navigation contract returns from an OS core opened by the command center back to the office",
+        "report": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\test-verification\\designer\\final-v2\\tests.json"
+      }
+    ],
+    "evidence": {
+      "directory": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102",
+      "manifest": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\evidence-seal.json",
+      "sha256": "e4644fc74fa1823ce9386455d99c5e5d9322314dbe6de2993d683642c85f6912",
+      "files": 3267,
+      "canonicalLedger": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\joint-acceptance-20261023.json",
+      "canonicalCheckpoint": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\active-closure-checkpoint.json"
+    },
+    "limitsZh": [
+      "本轮为三版前端同步、样式/入口调整和跨账号组织请求失效修复；验证采用隔离React/DOM、定向回归和生产桌面编译，不代表真人或整程序验收。真人坐标复测仍暂停。",
+      "隔离桌面编译使用write:false，将产出的JS/CSS保存到审计目录；不运行原配置写入dist的public资产复制钩子，不是安装包构建或已运行客户端验收。没有重启、安装或发布程序。",
+      "Main/Designer较新的服务端消息游标分页和原生历史请求行为保留，未覆盖为Legal旧的客户端history注入；三版默认模型和执行偏好持久化规则未改。",
+      "此前自动记忆轮次保留的6条相邻失败（公开错误历史、化身私密资料）未在本轮修复，不据本轮列表通过认定它们通过。",
+      "历史3/15/16封存、2暂停、10保留和其他held状态不变；法律历史业务验收未恢复，未调用真实模型/外部业务或付费生成，未推送远端。",
+      "源码版本仍为3.1.1；行号和SHA用于精确源码定位，不是动态行覆盖。完整套件和原生视觉验收未执行。",
+      "本轮选定回归保留原OS-core导航字符串断言失败；改前HEAD已复现，未为了通过而改动不相关导航实现。详见retainedRegressionFailures与独立基线证据。"
+    ],
+    "wholeApplicationAccepted": false,
+    "nativeCoordinateTesting": "paused",
+    "archiveAcceptanceResumed": false,
+    "defaultModelChanged": false,
+    "remotePushPerformed": false,
+    "runtimeRestarted": false,
+    "installedBinariesRebuilt": false,
+    "localCommitReceipt": "D:\\Lumi-Audit-Temp\\conversation-list-sync-delivery-20261102.json",
+    "selectivePatchProvenance": {
+      "main": {
+        "path": "D:/lumiOS",
+        "head": "afd08f4dbe29111be0eaedd99bc68acd67ed7a59",
+        "branch": "feature/chat-song-workbench-20260916"
+      },
+      "legal": {
+        "path": "D:/lumiOS-variants/lumi-legal-client",
+        "head": "96769c6ce13ee31722f041a12a41d21a81454804",
+        "branch": "contrib/installer-inputs-20260915-legal"
+      },
+      "designer": {
+        "path": "D:/lumiOS-variants/lumi-designer-client",
+        "head": "ac2524661066a6c85ce61de1727bfd1cc78d47e3",
         "branch": "contrib/installer-inputs-20260915-designer"
       }
     },
