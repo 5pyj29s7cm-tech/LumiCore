@@ -1,3 +1,4 @@
+import { MemoryAvatarEntryFeedback, type MemoryAvatarEntryState } from '../MemoryAvatarEntryFeedback';
 import { ClientSurface } from '../ClientSurface';
 import { renderShellChrome } from './shell_chrome_view';
 import { DesktopModeSwitch } from './DesktopModeSwitch';
@@ -85,6 +86,9 @@ setActiveTab: (tab: string) => void;
 setMemoryLabOpen: React.Dispatch<React.SetStateAction<boolean>>;
 setSanctuaryOpen: React.Dispatch<React.SetStateAction<boolean>>;
 setSanctuaryAgent: React.Dispatch<any>;
+memoryAvatarEntryState: MemoryAvatarEntryState | null;
+cancelMemoryAvatarEntry: () => void;
+retryMemoryAvatarEntry: () => void;
 setChatPrefill: React.Dispatch<React.SetStateAction<{ text: string; source: string; }>>;
 chatOpen: boolean;
 knowledgeOpen: boolean;
@@ -215,7 +219,7 @@ setMemoryAvatars: React.Dispatch<React.SetStateAction<any[]>>;
 enterCreatedMemoryAvatar: (avatar: any) => void;
 };
 export function DesktopShellView(input: DesktopShellViewInput) {
-  const { resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, isWallpaperWorkbench, applyWallpaperMode, desktopExecutionPreference, setDesktopExecutionPreference, lang, personalScale, personalOpacity, syncRate, t, setSyncRate, openSurface, closeSurface, workDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, user, startStandardVoiceCall, endVoiceCallFromUI, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar, callState, audioLevel } = input;
+  const { memoryAvatarEntryState, cancelMemoryAvatarEntry, retryMemoryAvatarEntry, resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, isWallpaperWorkbench, applyWallpaperMode, desktopExecutionPreference, setDesktopExecutionPreference, lang, personalScale, personalOpacity, syncRate, t, setSyncRate, openSurface, closeSurface, workDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, user, startStandardVoiceCall, endVoiceCallFromUI, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar, callState, audioLevel } = input;
 
   const handleRealmWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     if ((input.activeTab !== 'home' && !input.minimizedWindows.includes(input.activeTab)) || input.isWallpaperMode
@@ -604,9 +608,13 @@ export function DesktopShellView(input: DesktopShellViewInput) {
         )}
       </AnimatePresence>
 
+      {memoryAvatarEntryState && <MemoryAvatarEntryFeedback state={memoryAvatarEntryState} locale={lang} onClose={cancelMemoryAvatarEntry} onRetry={retryMemoryAvatarEntry} />}
+
       {/* Sanctuary — fullscreen private Memory Avatar conversation */}
       {sanctuaryLoaded && (
-        <ClientSurface id="memory-avatar" active={sanctuaryOpen}>
+        <div hidden={!sanctuaryOpen} className="pointer-events-auto fixed inset-0 z-[210] bg-background text-foreground" data-memory-avatar-surface="">
+        <ClientSurface id="memory-avatar" active={sanctuaryOpen} onClose={closeMemoryAvatar}
+          fallback={sanctuaryOpen ? <MemoryAvatarEntryFeedback state={{ status: 'loading' }} locale={lang} onClose={closeMemoryAvatar} lazy /> : null}>
           <Sanctuary
             agent={sanctuaryAgent}
             lang={lang}
@@ -627,6 +635,7 @@ export function DesktopShellView(input: DesktopShellViewInput) {
             }}
           />
         </ClientSurface>
+        </div>
       )}
 
       {/* Memory Avatar Lab fullscreen overlay */}

@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-11-02T09:48:50.004072+00:00",
+  "updatedAt": "2026-11-02T10:17:49.055072+00:00",
   "localDate": "2026-11-01",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "Three-edition conversation panel and personal navigation maintenance",
-    "status": "implemented-and-scoped-verified-with-retained-baseline-failures",
-    "instruction": "Current maintenance summary: latestConversationListSync. Historical business acceptance stays sealed or held; native coordinate testing remains paused."
+    "title": "Memory Territory entry loading and recovery maintenance",
+    "status": "implemented-and-scoped-verified-main-entry-user-confirmed",
+    "instruction": "Current maintenance summary: latestMemoryTerritoryEntry. Historical business acceptance stays sealed or held; native coordinate testing remains paused."
   },
   "acceptedWholeItems": [
     3,
@@ -36,44 +36,43 @@
     "Existing file full body returned through normal Socket and persisted exactly once with terminal task/turn"
   ],
   "knownUnresolved": [
-    "本轮为三版前端同步、样式/入口调整和跨账号组织请求失效修复；验证采用隔离React/DOM、定向回归和生产桌面编译，不代表真人或整程序验收。真人坐标复测仍暂停。",
-    "隔离桌面编译使用write:false，将产出的JS/CSS保存到审计目录；不运行原配置写入dist的public资产复制钩子，不是安装包构建或已运行客户端验收。没有重启、安装或发布程序。",
-    "Main/Designer较新的服务端消息游标分页和原生历史请求行为保留，未覆盖为Legal旧的客户端history注入；三版默认模型和执行偏好持久化规则未改。",
-    "此前自动记忆轮次保留的6条相邻失败（公开错误历史、化身私密资料）未在本轮修复，不据本轮列表通过认定它们通过。",
-    "历史3/15/16封存、2暂停、10保留和其他held状态不变；法律历史业务验收未恢复，未调用真实模型/外部业务或付费生成，未推送远端。",
-    "源码版本仍为3.1.1；行号和SHA用于精确源码定位，不是动态行覆盖。完整套件和原生视觉验收未执行。",
-    "本轮选定回归保留原OS-core导航字符串断言失败；改前HEAD已复现，未为了通过而改动不相关导航实现。详见retainedRegressionFailures与独立基线证据。"
+    "用户现场现象为主程序点击记忆领地无反应；隔离测试证明请求未完成时没有反馈等代码缺陷，不等同已观测或证明用户现场的具体网络原因。",
+    "本轮为记忆领地入口加载、失败与取消处理的前端维护；不代表记忆领地所有业务或整程序验收。真人坐标复测仍暂停。",
+    "隔离桌面编译使用write:false，产物保存到审计目录，不运行原配置写入dist的public资产复制钩子；没有重启、安装、打包或发布程序。",
+    "前轮Main/Designer各1条既有导航断言失败，以及自动记忆轮次保留的6条相邻失败（公开错误历史、化身私密资料）未在本轮修复；未把它们计为通过。",
+    "历史3/15/16封存、2暂停、10保留和其他held状态不变；法律历史业务验收未恢复，默认模型未改，未调用真实模型/付费生成或修改真实人物资料，未推送远端。",
+    "源码版本仍为3.1.1；行号和SHA用于源码定位，不是动态行覆盖。完整套件和自动原生界面测试未执行；用户手动确认仅限主程序入口出现界面。"
   ],
   "validation": {
-    "scope": "conversation panel, personal controls, scope invalidation and selected adjacent regressions",
+    "scope": "Memory Territory entry loading, recovery, owner isolation and selected adjacent regressions",
     "selectedRegression": {
       "countRuleZh": "每版+文件只计指定最后完整结果，参数化同名用例按原顺序保留；重跑不累加，失败/跳过明确计数。",
       "perEdition": {
         "main": {
-          "files": 11,
-          "executed": 98,
-          "passed": 97,
-          "failed": 1,
+          "files": 9,
+          "executed": 116,
+          "passed": 116,
+          "failed": 0,
           "skipped": 0
         },
         "legal": {
-          "files": 4,
-          "executed": 39,
-          "passed": 39,
+          "files": 9,
+          "executed": 112,
+          "passed": 112,
           "failed": 0,
           "skipped": 0
         },
         "designer": {
-          "files": 11,
-          "executed": 98,
-          "passed": 97,
-          "failed": 1,
+          "files": 9,
+          "executed": 116,
+          "passed": 116,
+          "failed": 0,
           "skipped": 0
         }
       },
-      "totalExecuted": 235,
-      "totalPassed": 233,
-      "totalFailed": 2,
+      "totalExecuted": 344,
+      "totalPassed": 344,
+      "totalFailed": 0,
       "checks": {
         "main": {
           "sourceStable": true,
@@ -132,15 +131,15 @@
               "name": "desktop-compilation",
               "command": [
                 "node",
-                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\build-isolated.mjs",
+                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\build-isolated.mjs",
                 "D:\\lumiOS",
-                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\main\\final-ui\\build-output"
+                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\main\\final-v2\\build-output"
               ],
               "exitCode": 0
             }
           ],
-          "record": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\main\\final-ui\\result.json",
-          "buildRecord": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\main\\final-ui\\build-result.json"
+          "record": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\main\\final-v2\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\main\\final-v2\\build-result.json"
         },
         "legal": {
           "sourceStable": true,
@@ -199,15 +198,15 @@
               "name": "desktop-compilation",
               "command": [
                 "node",
-                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\build-isolated.mjs",
+                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\build-isolated.mjs",
                 "D:\\lumiOS-variants\\lumi-legal-client",
-                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\legal\\final-ui\\build-output"
+                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\legal\\final-v2\\build-output"
               ],
               "exitCode": 0
             }
           ],
-          "record": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\legal\\final-ui\\result.json",
-          "buildRecord": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\legal\\final-ui\\build-result.json"
+          "record": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\legal\\final-v2\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\legal\\final-v2\\build-result.json"
         },
         "designer": {
           "sourceStable": true,
@@ -266,48 +265,53 @@
               "name": "desktop-compilation",
               "command": [
                 "node",
-                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\build-isolated.mjs",
+                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\build-isolated.mjs",
                 "D:\\lumiOS-variants\\lumi-designer-client",
-                "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\designer\\final-ui\\build-output"
+                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\designer\\final-v2\\build-output"
               ],
               "exitCode": 0
             }
           ],
-          "record": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\designer\\final-ui\\result.json",
-          "buildRecord": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\designer\\final-ui\\build-result.json"
+          "record": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\designer\\final-v2\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\designer\\final-v2\\build-result.json"
         }
       },
       "fullSuite": false,
       "selectedTests": "final-selected-tests.json"
     },
+    "manualMainEntry": {
+      "atUTC": "2026-11-02T10:12:35.4134765Z",
+      "reportedSymptom": "Main: clicking Memory Territory has no visible response.",
+      "userConfirmedEdition": "main",
+      "currentStatus": "user-confirmed-main-entry-open",
+      "userReplies": [
+        "出现加载、超时或错误提示",
+        "正在加载",
+        "出现界面"
+      ],
+      "finalUserReply": "出现界面",
+      "scope": "User manually confirmed that the Main Memory Territory interface appeared after clicking. No confirmation of other editions, person creation, conversation, media generation or complete application acceptance.",
+      "serverServingUpdatedModules": "runtime-dev-assets.json",
+      "nativeWindowLoadedExactSourceHashConfirmed": false,
+      "automatedNativeCoordinates": "paused",
+      "businessOperationReplayed": false,
+      "originalLiveIncidentCauseConfirmed": false
+    },
     "syncProvenance": {
-      "legalOriginCommit": "a605973ed430a57c753e1485894fc46389229680",
-      "originDate": "2026-10-26",
-      "gapConfirmed": "Main and Designer lacked the fixed history panel, search, refresh, pagination/retry UI and associated tests.",
-      "syncMethod": "Selective frontend port, then user-requested transparent surfaces/personal mode placement and account/organization invalidation fixes applied across all three editions.",
+      "userSymptom": "Main: clicking Memory Territory has no visible response.",
+      "confirmedDefect": "Opening waited for a list request before any visible state; the request had no deadline and list errors were silently treated as cached or empty results.",
+      "runtimeLimit": "The local health endpoint returned HTTP 200; no authenticated user list request was observed. The exact live incident cause remains unconfirmed.",
+      "scope": "Repair the common entry flow across Main, Legal and Designer; preserve existing business data and private ownership guards.",
       "wholeItemAccepted": false
     },
-    "retainedRegressionFailures": [
-      {
-        "edition": "main",
-        "file": "test/command_center_navigation_contract.test.ts",
-        "case": "command center navigation contract returns from an OS core opened by the command center back to the office",
-        "report": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\test-verification\\main\\final-v2\\tests.json"
-      },
-      {
-        "edition": "designer",
-        "file": "test/command_center_navigation_contract.test.ts",
-        "case": "command center navigation contract returns from an OS core opened by the command center back to the office",
-        "report": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\test-verification\\designer\\final-v2\\tests.json"
-      }
-    ],
+    "retainedRegressionFailures": [],
     "wholeApplicationAccepted": false
   },
   "evidence": {
-    "directory": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102",
-    "manifest": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\evidence-seal.json",
-    "sha256": "e4644fc74fa1823ce9386455d99c5e5d9322314dbe6de2993d683642c85f6912",
-    "files": 3267,
+    "directory": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102",
+    "manifest": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\evidence-seal.json",
+    "sha256": "3e75bf385ab38ba58a5d12b92a2e869fdf60c740a382b2bae9d9cf2532f4641a",
+    "files": 1194,
     "canonicalLedger": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\active-closure-checkpoint.json"
   },
@@ -323,9 +327,9 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "afd08f4dbe29111be0eaedd99bc68acd67ed7a59",
+    "baseCommit": "e5cd1952097d00f47b423483772f248e03af7eaa",
     "branch": "feature/chat-song-workbench-20260916",
-    "localCommitReceipt": "D:\\Lumi-Audit-Temp\\conversation-list-sync-delivery-20261102.json"
+    "localCommitReceipt": "D:\\Lumi-Audit-Temp\\memory-territory-entry-delivery-20261102.json"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
@@ -674,8 +678,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "implemented-and-scoped-verified-with-retained-baseline-failures",
-    "priority": "Conversation panel and personal UI maintenance across three editions; historical business acceptance remains held or sealed."
+    "status": "implemented-and-scoped-verified-main-entry-user-confirmed",
+    "priority": "Memory Territory entry maintenance across three editions; historical business acceptance remains held or sealed."
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -10918,6 +10922,318 @@
         "historicalBusinessStateNotResumed": true,
         "historicalFields": "Prior maintenance and business acceptance records remain historical evidence. Automatic context supersedes the earlier no-memory capability limitation under the new user request."
       }
+    },
+    {
+      "archivedAtUTC": "2026-11-02T10:17:49.055072+00:00",
+      "baseCommit": "e5cd1952097d00f47b423483772f248e03af7eaa",
+      "snapshot": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\checkpoint-before\\main\\ACCEPTANCE.json",
+      "snapshotSha256": "b6b464ef655737b4b55a49947fe051d02c3d5bbb11ebe3fa9eafd5bf3e6e5d58",
+      "reason": "User reported that Main Memory Territory did not respond to clicks; common entry maintenance across three editions preserves previous maintenance summaries and business outcomes.",
+      "currentItem": {
+        "id": null,
+        "title": "Three-edition conversation panel and personal navigation maintenance",
+        "status": "implemented-and-scoped-verified-with-retained-baseline-failures",
+        "instruction": "Current maintenance summary: latestConversationListSync. Historical business acceptance stays sealed or held; native coordinate testing remains paused."
+      },
+      "knownUnresolved": [
+        "本轮为三版前端同步、样式/入口调整和跨账号组织请求失效修复；验证采用隔离React/DOM、定向回归和生产桌面编译，不代表真人或整程序验收。真人坐标复测仍暂停。",
+        "隔离桌面编译使用write:false，将产出的JS/CSS保存到审计目录；不运行原配置写入dist的public资产复制钩子，不是安装包构建或已运行客户端验收。没有重启、安装或发布程序。",
+        "Main/Designer较新的服务端消息游标分页和原生历史请求行为保留，未覆盖为Legal旧的客户端history注入；三版默认模型和执行偏好持久化规则未改。",
+        "此前自动记忆轮次保留的6条相邻失败（公开错误历史、化身私密资料）未在本轮修复，不据本轮列表通过认定它们通过。",
+        "历史3/15/16封存、2暂停、10保留和其他held状态不变；法律历史业务验收未恢复，未调用真实模型/外部业务或付费生成，未推送远端。",
+        "源码版本仍为3.1.1；行号和SHA用于精确源码定位，不是动态行覆盖。完整套件和原生视觉验收未执行。",
+        "本轮选定回归保留原OS-core导航字符串断言失败；改前HEAD已复现，未为了通过而改动不相关导航实现。详见retainedRegressionFailures与独立基线证据。"
+      ],
+      "evidence": {
+        "directory": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102",
+        "manifest": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\evidence-seal.json",
+        "sha256": "e4644fc74fa1823ce9386455d99c5e5d9322314dbe6de2993d683642c85f6912",
+        "files": 3267,
+        "canonicalLedger": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\joint-acceptance-20261023.json",
+        "canonicalCheckpoint": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\active-closure-checkpoint.json"
+      },
+      "workFocus": {
+        "area": "main-program-optimization-and-scoped-variant-maintenance",
+        "sourceRoot": "D:\\lumiOS",
+        "requestedByUser": true,
+        "lawyerDevelopmentArchived": true,
+        "lawyerArchiveTag": "archive/legal-development-20261027",
+        "status": "implemented-and-scoped-verified-with-retained-baseline-failures",
+        "priority": "Conversation panel and personal UI maintenance across three editions; historical business acceptance remains held or sealed."
+      },
+      "repository": {
+        "edition": "main",
+        "root": "D:/lumiOS",
+        "baseCommit": "afd08f4dbe29111be0eaedd99bc68acd67ed7a59",
+        "branch": "feature/chat-song-workbench-20260916",
+        "localCommitReceipt": "D:\\Lumi-Audit-Temp\\conversation-list-sync-delivery-20261102.json"
+      },
+      "validation": {
+        "scope": "conversation panel, personal controls, scope invalidation and selected adjacent regressions",
+        "selectedRegression": {
+          "countRuleZh": "每版+文件只计指定最后完整结果，参数化同名用例按原顺序保留；重跑不累加，失败/跳过明确计数。",
+          "perEdition": {
+            "main": {
+              "files": 11,
+              "executed": 98,
+              "passed": 97,
+              "failed": 1,
+              "skipped": 0
+            },
+            "legal": {
+              "files": 4,
+              "executed": 39,
+              "passed": 39,
+              "failed": 0,
+              "skipped": 0
+            },
+            "designer": {
+              "files": 11,
+              "executed": 98,
+              "passed": 97,
+              "failed": 1,
+              "skipped": 0
+            }
+          },
+          "totalExecuted": 235,
+          "totalPassed": 233,
+          "totalFailed": 2,
+          "checks": {
+            "main": {
+              "sourceStable": true,
+              "checks": [
+                {
+                  "name": "typecheck",
+                  "command": [
+                    "node",
+                    "node_modules/typescript/bin/tsc",
+                    "--noEmit"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "architecture",
+                  "command": [
+                    "node",
+                    "scripts/check-architecture-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "i18n",
+                  "command": [
+                    "node",
+                    "scripts/check-i18n-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "command-center-css",
+                  "command": [
+                    "node",
+                    "scripts/check-command-center-css.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "website-boundary",
+                  "command": [
+                    "node",
+                    "scripts/check-website-boundary.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "diff-check",
+                  "command": [
+                    "git",
+                    "diff",
+                    "--check"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "desktop-compilation",
+                  "command": [
+                    "node",
+                    "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\build-isolated.mjs",
+                    "D:\\lumiOS",
+                    "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\main\\final-ui\\build-output"
+                  ],
+                  "exitCode": 0
+                }
+              ],
+              "record": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\main\\final-ui\\result.json",
+              "buildRecord": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\main\\final-ui\\build-result.json"
+            },
+            "legal": {
+              "sourceStable": true,
+              "checks": [
+                {
+                  "name": "typecheck",
+                  "command": [
+                    "node",
+                    "node_modules/typescript/bin/tsc",
+                    "--noEmit"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "architecture",
+                  "command": [
+                    "node",
+                    "scripts/check-architecture-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "i18n",
+                  "command": [
+                    "node",
+                    "scripts/check-i18n-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "command-center-css",
+                  "command": [
+                    "node",
+                    "scripts/check-command-center-css.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "website-boundary",
+                  "command": [
+                    "node",
+                    "scripts/check-website-boundary.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "diff-check",
+                  "command": [
+                    "git",
+                    "diff",
+                    "--check"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "desktop-compilation",
+                  "command": [
+                    "node",
+                    "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\build-isolated.mjs",
+                    "D:\\lumiOS-variants\\lumi-legal-client",
+                    "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\legal\\final-ui\\build-output"
+                  ],
+                  "exitCode": 0
+                }
+              ],
+              "record": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\legal\\final-ui\\result.json",
+              "buildRecord": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\legal\\final-ui\\build-result.json"
+            },
+            "designer": {
+              "sourceStable": true,
+              "checks": [
+                {
+                  "name": "typecheck",
+                  "command": [
+                    "node",
+                    "node_modules/typescript/bin/tsc",
+                    "--noEmit"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "architecture",
+                  "command": [
+                    "node",
+                    "scripts/check-architecture-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "i18n",
+                  "command": [
+                    "node",
+                    "scripts/check-i18n-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "command-center-css",
+                  "command": [
+                    "node",
+                    "scripts/check-command-center-css.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "website-boundary",
+                  "command": [
+                    "node",
+                    "scripts/check-website-boundary.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "diff-check",
+                  "command": [
+                    "git",
+                    "diff",
+                    "--check"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "desktop-compilation",
+                  "command": [
+                    "node",
+                    "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\build-isolated.mjs",
+                    "D:\\lumiOS-variants\\lumi-designer-client",
+                    "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\designer\\final-ui\\build-output"
+                  ],
+                  "exitCode": 0
+                }
+              ],
+              "record": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\designer\\final-ui\\result.json",
+              "buildRecord": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\final-checks\\designer\\final-ui\\build-result.json"
+            }
+          },
+          "fullSuite": false,
+          "selectedTests": "final-selected-tests.json"
+        },
+        "syncProvenance": {
+          "legalOriginCommit": "a605973ed430a57c753e1485894fc46389229680",
+          "originDate": "2026-10-26",
+          "gapConfirmed": "Main and Designer lacked the fixed history panel, search, refresh, pagination/retry UI and associated tests.",
+          "syncMethod": "Selective frontend port, then user-requested transparent surfaces/personal mode placement and account/organization invalidation fixes applied across all three editions.",
+          "wholeItemAccepted": false
+        },
+        "retainedRegressionFailures": [
+          {
+            "edition": "main",
+            "file": "test/command_center_navigation_contract.test.ts",
+            "case": "command center navigation contract returns from an OS core opened by the command center back to the office",
+            "report": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\test-verification\\main\\final-v2\\tests.json"
+          },
+          {
+            "edition": "designer",
+            "file": "test/command_center_navigation_contract.test.ts",
+            "case": "command center navigation contract returns from an OS core opened by the command center back to the office",
+            "report": "D:\\Lumi-Audit-Temp\\conversation-list-sync-20261102\\test-verification\\designer\\final-v2\\tests.json"
+          }
+        ],
+        "wholeApplicationAccepted": false
+      },
+      "updatedAt": "2026-11-02T09:48:50.004072+00:00",
+      "latestMaintenanceSummary": {
+        "field": "latestConversationListSync",
+        "atUTC": "2026-11-02T09:48:50.004072+00:00",
+        "historicalBusinessStateNotResumed": true,
+        "historicalFields": "Prior maintenance and business acceptance records remain historical evidence. Conversation panel and personal UI changes are scoped maintenance, not a change to historical acceptance outcomes."
+      }
     }
   ],
   "latestApplicabilityRemediation": {
@@ -11161,10 +11477,10 @@
     "lastSyncedCommitMeaning": "Full merge ancestry is unchanged; these scoped patches are recorded separately."
   },
   "latestMaintenanceSummary": {
-    "field": "latestConversationListSync",
-    "atUTC": "2026-11-02T09:48:50.004072+00:00",
+    "field": "latestMemoryTerritoryEntry",
+    "atUTC": "2026-11-02T10:17:49.055072+00:00",
     "historicalBusinessStateNotResumed": true,
-    "historicalFields": "Prior maintenance and business acceptance records remain historical evidence. Conversation panel and personal UI changes are scoped maintenance, not a change to historical acceptance outcomes."
+    "historicalFields": "Prior maintenance and business acceptance records remain historical evidence. Memory Territory entry changes are scoped maintenance, not a change to historical acceptance outcomes."
   },
   "latestAutomaticMemoryContext": {
     "atUTC": "2026-11-01T15:09:12.499653+00:00",
@@ -11728,6 +12044,319 @@
       "designer": {
         "path": "D:/lumiOS-variants/lumi-designer-client",
         "head": "ac2524661066a6c85ce61de1727bfd1cc78d47e3",
+        "branch": "contrib/installer-inputs-20260915-designer"
+      }
+    },
+    "lastSyncedCommitMeaning": "Full merge ancestry is unchanged; these scoped patches are recorded separately."
+  },
+  "latestMemoryTerritoryEntry": {
+    "atUTC": "2026-11-02T10:17:49.055072+00:00",
+    "status": "implemented-and-scoped-verified-main-entry-user-confirmed",
+    "report": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\report.json",
+    "reportSha256": "38b8f5a3168d7ad55dd979d750922ef6e851a19fd01adbfb1e8a4c721c903f31",
+    "sourceVersions": {
+      "main": "3.1.1",
+      "legal": "3.1.1",
+      "designer": "3.1.1"
+    },
+    "selectedRegression": {
+      "countRuleZh": "每版+文件只计指定最后完整结果，参数化同名用例按原顺序保留；重跑不累加，失败/跳过明确计数。",
+      "perEdition": {
+        "main": {
+          "files": 9,
+          "executed": 116,
+          "passed": 116,
+          "failed": 0,
+          "skipped": 0
+        },
+        "legal": {
+          "files": 9,
+          "executed": 112,
+          "passed": 112,
+          "failed": 0,
+          "skipped": 0
+        },
+        "designer": {
+          "files": 9,
+          "executed": 116,
+          "passed": 116,
+          "failed": 0,
+          "skipped": 0
+        }
+      },
+      "totalExecuted": 344,
+      "totalPassed": 344,
+      "totalFailed": 0,
+      "checks": {
+        "main": {
+          "sourceStable": true,
+          "checks": [
+            {
+              "name": "typecheck",
+              "command": [
+                "node",
+                "node_modules/typescript/bin/tsc",
+                "--noEmit"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "architecture",
+              "command": [
+                "node",
+                "scripts/check-architecture-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "i18n",
+              "command": [
+                "node",
+                "scripts/check-i18n-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "command-center-css",
+              "command": [
+                "node",
+                "scripts/check-command-center-css.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "website-boundary",
+              "command": [
+                "node",
+                "scripts/check-website-boundary.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "diff-check",
+              "command": [
+                "git",
+                "diff",
+                "--check"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "desktop-compilation",
+              "command": [
+                "node",
+                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\build-isolated.mjs",
+                "D:\\lumiOS",
+                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\main\\final-v2\\build-output"
+              ],
+              "exitCode": 0
+            }
+          ],
+          "record": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\main\\final-v2\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\main\\final-v2\\build-result.json"
+        },
+        "legal": {
+          "sourceStable": true,
+          "checks": [
+            {
+              "name": "typecheck",
+              "command": [
+                "node",
+                "node_modules/typescript/bin/tsc",
+                "--noEmit"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "architecture",
+              "command": [
+                "node",
+                "scripts/check-architecture-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "i18n",
+              "command": [
+                "node",
+                "scripts/check-i18n-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "command-center-css",
+              "command": [
+                "node",
+                "scripts/check-command-center-css.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "website-boundary",
+              "command": [
+                "node",
+                "scripts/check-website-boundary.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "diff-check",
+              "command": [
+                "git",
+                "diff",
+                "--check"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "desktop-compilation",
+              "command": [
+                "node",
+                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\build-isolated.mjs",
+                "D:\\lumiOS-variants\\lumi-legal-client",
+                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\legal\\final-v2\\build-output"
+              ],
+              "exitCode": 0
+            }
+          ],
+          "record": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\legal\\final-v2\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\legal\\final-v2\\build-result.json"
+        },
+        "designer": {
+          "sourceStable": true,
+          "checks": [
+            {
+              "name": "typecheck",
+              "command": [
+                "node",
+                "node_modules/typescript/bin/tsc",
+                "--noEmit"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "architecture",
+              "command": [
+                "node",
+                "scripts/check-architecture-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "i18n",
+              "command": [
+                "node",
+                "scripts/check-i18n-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "command-center-css",
+              "command": [
+                "node",
+                "scripts/check-command-center-css.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "website-boundary",
+              "command": [
+                "node",
+                "scripts/check-website-boundary.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "diff-check",
+              "command": [
+                "git",
+                "diff",
+                "--check"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "desktop-compilation",
+              "command": [
+                "node",
+                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\build-isolated.mjs",
+                "D:\\lumiOS-variants\\lumi-designer-client",
+                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\designer\\final-v2\\build-output"
+              ],
+              "exitCode": 0
+            }
+          ],
+          "record": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\designer\\final-v2\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\designer\\final-v2\\build-result.json"
+        }
+      },
+      "fullSuite": false,
+      "selectedTests": "final-selected-tests.json"
+    },
+    "manualMainEntry": {
+      "atUTC": "2026-11-02T10:12:35.4134765Z",
+      "reportedSymptom": "Main: clicking Memory Territory has no visible response.",
+      "userConfirmedEdition": "main",
+      "currentStatus": "user-confirmed-main-entry-open",
+      "userReplies": [
+        "出现加载、超时或错误提示",
+        "正在加载",
+        "出现界面"
+      ],
+      "finalUserReply": "出现界面",
+      "scope": "User manually confirmed that the Main Memory Territory interface appeared after clicking. No confirmation of other editions, person creation, conversation, media generation or complete application acceptance.",
+      "serverServingUpdatedModules": "runtime-dev-assets.json",
+      "nativeWindowLoadedExactSourceHashConfirmed": false,
+      "automatedNativeCoordinates": "paused",
+      "businessOperationReplayed": false,
+      "originalLiveIncidentCauseConfirmed": false
+    },
+    "syncProvenance": {
+      "userSymptom": "Main: clicking Memory Territory has no visible response.",
+      "confirmedDefect": "Opening waited for a list request before any visible state; the request had no deadline and list errors were silently treated as cached or empty results.",
+      "runtimeLimit": "The local health endpoint returned HTTP 200; no authenticated user list request was observed. The exact live incident cause remains unconfirmed.",
+      "scope": "Repair the common entry flow across Main, Legal and Designer; preserve existing business data and private ownership guards.",
+      "wholeItemAccepted": false
+    },
+    "retainedRegressionFailures": [],
+    "evidence": {
+      "directory": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102",
+      "manifest": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\evidence-seal.json",
+      "sha256": "3e75bf385ab38ba58a5d12b92a2e869fdf60c740a382b2bae9d9cf2532f4641a",
+      "files": 1194,
+      "canonicalLedger": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\joint-acceptance-20261023.json",
+      "canonicalCheckpoint": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\active-closure-checkpoint.json"
+    },
+    "limitsZh": [
+      "用户现场现象为主程序点击记忆领地无反应；隔离测试证明请求未完成时没有反馈等代码缺陷，不等同已观测或证明用户现场的具体网络原因。",
+      "本轮为记忆领地入口加载、失败与取消处理的前端维护；不代表记忆领地所有业务或整程序验收。真人坐标复测仍暂停。",
+      "隔离桌面编译使用write:false，产物保存到审计目录，不运行原配置写入dist的public资产复制钩子；没有重启、安装、打包或发布程序。",
+      "前轮Main/Designer各1条既有导航断言失败，以及自动记忆轮次保留的6条相邻失败（公开错误历史、化身私密资料）未在本轮修复；未把它们计为通过。",
+      "历史3/15/16封存、2暂停、10保留和其他held状态不变；法律历史业务验收未恢复，默认模型未改，未调用真实模型/付费生成或修改真实人物资料，未推送远端。",
+      "源码版本仍为3.1.1；行号和SHA用于源码定位，不是动态行覆盖。完整套件和自动原生界面测试未执行；用户手动确认仅限主程序入口出现界面。"
+    ],
+    "wholeApplicationAccepted": false,
+    "nativeCoordinateTesting": "paused",
+    "archiveAcceptanceResumed": false,
+    "defaultModelChanged": false,
+    "remotePushPerformed": false,
+    "runtimeRestarted": false,
+    "installedBinariesRebuilt": false,
+    "localCommitReceipt": "D:\\Lumi-Audit-Temp\\memory-territory-entry-delivery-20261102.json",
+    "selectivePatchProvenance": {
+      "main": {
+        "path": "D:/lumiOS",
+        "head": "e5cd1952097d00f47b423483772f248e03af7eaa",
+        "branch": "feature/chat-song-workbench-20260916"
+      },
+      "legal": {
+        "path": "D:/lumiOS-variants/lumi-legal-client",
+        "head": "8d63a8db966b65df4b36bbb5affd80bf30c2a84a",
+        "branch": "contrib/installer-inputs-20260915-legal"
+      },
+      "designer": {
+        "path": "D:/lumiOS-variants/lumi-designer-client",
+        "head": "9a15c78d90ebda74df432ccd9fbfcdaea2213e26",
         "branch": "contrib/installer-inputs-20260915-designer"
       }
     },

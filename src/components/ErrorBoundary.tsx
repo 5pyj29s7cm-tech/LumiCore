@@ -15,6 +15,7 @@ interface ErrorBoundaryProps {
   children: React.ReactNode;
   fallback?: React.ReactNode;
   surfaceId?: string;
+  onClose?: () => void;
 }
 
 interface ErrorBoundaryState {
@@ -72,6 +73,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
                 <RefreshCw size={12} />
                 {t.errorRetry || 'Retry'}
               </button>
+              {this.props.onClose && <button type="button" onClick={this.props.onClose} className="px-5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs font-bold text-white/60 hover:text-white">{t.close || 'Close'}</button>}
               {!this.props.surfaceId && <button
                 onClick={() => window.location.reload()}
                 className="px-5 py-2.5 rounded-xl bg-celestial-saturn/10 border border-celestial-saturn/20 flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-celestial-saturn hover:bg-celestial-saturn/20 transition-colors"

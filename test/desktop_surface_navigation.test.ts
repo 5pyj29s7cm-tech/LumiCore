@@ -4,6 +4,7 @@ import { BusinessWorkbench } from '../src/components/BusinessWorkbench';
 import { desktopWindowCommand } from './desktop_window_harness';
 import { expect, it, vi } from 'vitest';
 import { extractSourceExpression } from './source_expression';
+import { withRequestDeadline } from '../src/lib/requestDeadline';
 
 const source = 'src/components/DesktopUI.tsx';
 function desktop(initial: Record<string, any> = {}) {
@@ -11,11 +12,13 @@ function desktop(initial: Record<string, any> = {}) {
     activeTab: 'home', chatOpen: false, knowledgeOpen: false, memoryLabOpen: false,
     sanctuaryOpen: false, sanctuaryAgent: null, chatPrefill: null,
     openWindows: [], minimizedWindows: [], focusedWindow: null, viewMode: 'personal',
-    isSearchOpen: false, isNotificationPanelOpen: false, isDesktopWidgetMode: false, nexusReturnTarget: 'home', ...initial,
+    isSearchOpen: false, isNotificationPanelOpen: false, isDesktopWidgetMode: false, nexusReturnTarget: 'home', memoryAvatarEntry: null, ...initial,
   };
   const windowCommand = desktopWindowCommand(state);
   const scope = { userId: 'owner-a' };
+  const entryScope = { ownerScope: scope, domain: 'personal', orgId: '' };
   const refs = { surfaceReturnTargetRef: { current: 'home' }, memoryAvatarOpenGenerationRef: { current: 4 },
+    memoryAvatarEntryScope: entryScope, memoryAvatarEntryScopeRef: { current: entryScope }, memoryAvatarEntryRequestRef: { current: null },
     memoryAvatarOwnerScope: scope, memoryAvatarOwnerRef: { current: scope }, memoryAvatarSurfaceGeneration: 4 };
   const load = vi.fn(async () => [{ id: 'avatar-a' }]);
   const timers: Array<() => void> = [];
@@ -26,12 +29,12 @@ function desktop(initial: Record<string, any> = {}) {
     };
   }
   const names = ['dismissUtilitySurfaces', 'openCommandCenter', 'inferSurfaceReturnTarget', 'restoreSurfaceReturnTarget',
-    'openKnowledgeBase', 'closeKnowledgeBase', 'openMemoryAvatar', 'openMemoryAvatarLab', 'closeMemoryAvatar',
+    'openKnowledgeBase', 'closeKnowledgeBase', 'openMemoryAvatar', 'openMemoryAvatarLab', 'closeMemoryAvatar', 'cancelMemoryAvatarEntry',
     'openSurface', 'closeSurface', 'setNotificationSurface', 'toggleWindow', 'closeWindow'];
   const callbacks: Record<string, any> = Object.fromEntries(names.map(name => [name, (...args: any[]) => invoke(name, ...args)]));
   function invoke(name: string, ...args: any[]) {
     return extractSourceExpression(source, name, {
-      ...state, ...refs, ...setters, ...callbacks, windowCommand, loadMemoryAvatars: load,
+      ...state, ...refs, ...setters, ...callbacks, windowCommand, loadMemoryAvatars: load, AbortController, withRequestDeadline,
       normalizeTarget: (value: string) => ({ memory: 'knowledge', files: 'knowledge', sync: 'devices',
         chat: 'command-center', sanctuary: 'memory-avatar', sound: 'personalization', 'avatar-studio': 'personalization',
         world: 'nexus', 'nexus-view': 'nexus', 'cloud-canvas': 'nexus', 'memory-avatars': 'memory-avatar' }[value] || value),

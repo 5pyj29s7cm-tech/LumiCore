@@ -12,7 +12,9 @@ import { useVoiceCall } from "@/hooks/useVoiceCall";
 import type { OperationMode } from "@/contexts/AppContext";
 import { useVoiceprint } from "../../../hooks/useVoiceprint";
 import { BACKGROUND_FACE_PRESENCE_CHANGED, BACKGROUND_FACE_PRESENCE_ENABLED_KEY, isBackgroundFacePresenceEnabled, isSensorEnabled, SENSOR_ACCESS_CHANGED } from "@/services/sensorPermissionService";
-import { memoryAvatarService } from "@/services/memoryAvatarService";
+import { MemoryAvatarApiError, memoryAvatarService } from "@/services/memoryAvatarService";
+import { withRequestDeadline } from '@/lib/requestDeadline';
+import type { MemoryAvatarEntryState } from '../../MemoryAvatarEntryFeedback';
 import { getDesktopExternalCapabilities } from "@/services/externalCapabilities";
 import { uiMessage } from "../../../i18n/uiMessages";
 import { desktopWorkflowCopy } from "../../../i18n/locales/desktopWorkflows";
@@ -24,22 +26,51 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
   const { memoryAvatarOwnerScope, memoryAvatarOwnerRef, memoryAvatarListOwnerRef, setMemoryAvatars, memoryAvatars, memoryAvatarOpenGenerationRef, memoryAvatarSurfaceGeneration, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryLoaded, setSanctuaryOpen, inferSurfaceReturnTarget, surfaceReturnTargetRef, dismissUtilitySurfaces, setIsSearchOpen, setViewMode, setActiveTab, restoreSurfaceReturnTarget, isTauri, openCommandCenter, setIsNotificationPanelOpen, setChatPrefill, lang, workDomain, orgConnection, setChatAttachmentRequest, setKnowledgeOpen, desktopIconLayout, desktopIconColumns, canUseExternalCapabilities, externalCapabilities, setIsCompactWindowMode, setIsDesktopWidgetMode, meetingStorageKeys, meetingPreferenceScopeKey, operationMode, knowledgeOpen, setKnowledgeLoaded, chatOpen, setChatLoaded, user, selectedVoiceId, volume, setOperationMode } = previousBindings;
 
 
+  const memoryAvatarEntryScope = useMemo(() => ({
+    ownerScope: memoryAvatarOwnerScope, domain: workDomain, orgId: orgConnection?.orgId || '',
+  }), [memoryAvatarOwnerScope, workDomain, orgConnection?.orgId]);
+  const memoryAvatarEntryScopeRef = useRef(memoryAvatarEntryScope);
+  memoryAvatarEntryScopeRef.current = memoryAvatarEntryScope;
+  const [memoryAvatarEntry, setMemoryAvatarEntry] = useState<(MemoryAvatarEntryState & {
+    generation: number; ownerScope: typeof memoryAvatarOwnerScope; entryScope: typeof memoryAvatarEntryScope;
+  }) | null>(null);
+  const memoryAvatarEntryRequestRef = useRef<{
+    generation: number; ownerScope: typeof memoryAvatarOwnerScope; entryScope: typeof memoryAvatarEntryScope; controller: AbortController;
+    avatarId?: string; returnTarget: SurfaceReturnTarget;
+  } | null>(null);
+  const cancelMemoryAvatarEntry = useCallback(() => {
+    memoryAvatarOpenGenerationRef.current++;
+    memoryAvatarEntryRequestRef.current?.controller.abort();
+    memoryAvatarEntryRequestRef.current = null;
+    setMemoryAvatarEntry(null);
+  }, [memoryAvatarOpenGenerationRef]);
+  useEffect(() => {
+    const request = memoryAvatarEntryRequestRef.current;
+    if (request && (request.entryScope !== memoryAvatarEntryScope || request.generation !== memoryAvatarSurfaceGeneration)) {
+      request.controller.abort();
+      memoryAvatarEntryRequestRef.current = null;
+      setMemoryAvatarEntry(null);
+    }
+  }, [memoryAvatarEntryScope, memoryAvatarSurfaceGeneration]);
+  useEffect(() => () => {
+    memoryAvatarEntryRequestRef.current?.controller.abort();
+    memoryAvatarEntryRequestRef.current = null;
+  }, []);
+
   // Memory Avatars are private, tool-free surfaces. Keep the list in the
   // shell so the command center can open an existing avatar, switch between
   // avatars, or start another distillation without being trapped on the first
   // one that was created.
-  const loadMemoryAvatars = useCallback(async (): Promise<any[]> => {
+  const loadMemoryAvatars = useCallback(async (signal?: AbortSignal): Promise<any[]> => {
     const ownerId = memoryAvatarOwnerScope.userId;
-    if (!ownerId) return [];
-    try {
-      const data = await memoryAvatarService.list();
-      if (memoryAvatarOwnerRef.current !== memoryAvatarOwnerScope) return [];
-      memoryAvatarListOwnerRef.current = ownerId;
-      setMemoryAvatars(data.avatars);
-      return data.avatars;
-    } catch {}
-    return memoryAvatarOwnerRef.current === memoryAvatarOwnerScope && memoryAvatarListOwnerRef.current === ownerId ? memoryAvatars : [];
-  }, [memoryAvatarOwnerScope, memoryAvatarOwnerRef, memoryAvatarListOwnerRef, memoryAvatars, setMemoryAvatars]);
+    if (!ownerId) throw new MemoryAvatarApiError(401, 'authentication_required', 'Authentication required');
+    const data = await memoryAvatarService.list(signal);
+    if (signal?.aborted || memoryAvatarOwnerRef.current !== memoryAvatarOwnerScope
+      || memoryAvatarEntryScopeRef.current !== memoryAvatarEntryScope) return [];
+    memoryAvatarListOwnerRef.current = ownerId;
+    setMemoryAvatars(data.avatars);
+    return data.avatars;
+  }, [memoryAvatarOwnerScope, memoryAvatarOwnerRef, memoryAvatarListOwnerRef, memoryAvatarEntryScope, memoryAvatarEntryScopeRef, setMemoryAvatars]);
 
   const enterCreatedMemoryAvatar = useCallback((avatar: any) => {
     // Exit animations can keep a closed lab mounted. Its late request must not
@@ -55,30 +86,55 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
 
   const openMemoryAvatar = useCallback(async (avatarId?: string, returnTarget?: SurfaceReturnTarget) => {
     const openGeneration = ++memoryAvatarOpenGenerationRef.current;
+    memoryAvatarEntryRequestRef.current?.controller.abort();
+    const controller = new AbortController();
     try { sounds.playClick(); } catch {}
     const origin = returnTarget || inferSurfaceReturnTarget();
-    const avatars = await loadMemoryAvatars();
-    if (openGeneration !== memoryAvatarOpenGenerationRef.current) return;
-    const selected = avatarId
-      ? avatars.find(avatar => avatar?.id === avatarId)
-      : avatars[0];
-    // A stale menu entry must never silently open another person's/avatar's
-    // transcript.  Keep the current surface in place and let the next open
-    // refresh the list instead of falling back to avatars[0].
-    if (avatarId && !selected) return;
-    surfaceReturnTargetRef.current = origin;
-    dismissUtilitySurfaces('memory-avatar');
-    setIsSearchOpen(false);
-    setViewMode('personal');
-    setActiveTab('home');
-    setSanctuaryAgent(selected || null);
-    if (selected) setSanctuaryLoaded(true);
-    setSanctuaryOpen(Boolean(selected));
-    setMemoryLabOpen(!selected);
-  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, loadMemoryAvatars, memoryAvatarOpenGenerationRef, setActiveTab, setIsSearchOpen, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryLoaded, setSanctuaryOpen, setViewMode, surfaceReturnTargetRef]);
+    const request = { generation: openGeneration, ownerScope: memoryAvatarOwnerScope, entryScope: memoryAvatarEntryScope, controller, avatarId, returnTarget: origin };
+    memoryAvatarEntryRequestRef.current = request;
+    setMemoryAvatarEntry({ status: 'loading', generation: openGeneration, ownerScope: memoryAvatarOwnerScope, entryScope: memoryAvatarEntryScope });
+    const current = () => memoryAvatarEntryRequestRef.current === request
+      && memoryAvatarOwnerRef.current === request.ownerScope
+      && memoryAvatarEntryScopeRef.current === request.entryScope
+      && openGeneration === memoryAvatarOpenGenerationRef.current && !controller.signal.aborted;
+    try {
+      const avatars = await withRequestDeadline(signal => loadMemoryAvatars(signal), controller.signal);
+      if (!current()) return;
+      const selected = avatarId ? avatars.find(avatar => avatar?.id === avatarId) : avatars[0];
+      if (avatarId && !selected) {
+        setMemoryAvatarEntry({ status: 'error', issue: 'missing', generation: openGeneration, ownerScope: memoryAvatarOwnerScope, entryScope: memoryAvatarEntryScope });
+        return;
+      }
+      memoryAvatarEntryRequestRef.current = null;
+      setMemoryAvatarEntry(null);
+      surfaceReturnTargetRef.current = origin;
+      dismissUtilitySurfaces('memory-avatar');
+      setIsSearchOpen(false);
+      setViewMode('personal');
+      setActiveTab('home');
+      setSanctuaryAgent(selected || null);
+      if (selected) setSanctuaryLoaded(true);
+      setSanctuaryOpen(Boolean(selected));
+      setMemoryLabOpen(!selected);
+    } catch (error) {
+      if (!current()) return;
+      const issue: MemoryAvatarEntryState['issue'] = error !== null && typeof error === 'object' && 'name' in error && error.name === 'TimeoutError' ? 'timeout'
+        : error instanceof MemoryAvatarApiError && error.code === 'memory_avatar_personal_scope_required' ? 'personalScope'
+        : error instanceof MemoryAvatarApiError && [401, 403].includes(error.status) ? 'unauthorized'
+        : error instanceof MemoryAvatarApiError && error.code === 'invalid_memory_avatar_response' ? 'invalid' : 'load';
+      setMemoryAvatarEntry({ status: 'error', issue, generation: openGeneration, ownerScope: memoryAvatarOwnerScope, entryScope: memoryAvatarEntryScope });
+    }
+  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, loadMemoryAvatars, memoryAvatarOpenGenerationRef, memoryAvatarOwnerScope, memoryAvatarOwnerRef, memoryAvatarEntryScope, memoryAvatarEntryScopeRef, setActiveTab, setIsSearchOpen, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryLoaded, setSanctuaryOpen, setViewMode, surfaceReturnTargetRef]);
+
+  const retryMemoryAvatarEntry = useCallback(() => {
+    const request = memoryAvatarEntryRequestRef.current;
+    if (!request || request.ownerScope !== memoryAvatarOwnerRef.current
+      || request.entryScope !== memoryAvatarEntryScopeRef.current || request.generation !== memoryAvatarOpenGenerationRef.current) return;
+    void openMemoryAvatar(request.avatarId, request.returnTarget);
+  }, [memoryAvatarOpenGenerationRef, memoryAvatarOwnerRef, memoryAvatarEntryScopeRef, openMemoryAvatar]);
 
   const openMemoryAvatarLab = useCallback((returnTarget?: SurfaceReturnTarget) => {
-    memoryAvatarOpenGenerationRef.current++;
+    cancelMemoryAvatarEntry();
     surfaceReturnTargetRef.current = returnTarget || inferSurfaceReturnTarget();
     dismissUtilitySurfaces('memory-avatar');
     setIsSearchOpen(false);
@@ -87,15 +143,15 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
     setSanctuaryOpen(false);
     setSanctuaryAgent(null);
     setMemoryLabOpen(true);
-  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, memoryAvatarOpenGenerationRef, setActiveTab, setIsSearchOpen, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryOpen, setViewMode, surfaceReturnTargetRef]);
+  }, [cancelMemoryAvatarEntry, dismissUtilitySurfaces, inferSurfaceReturnTarget, setActiveTab, setIsSearchOpen, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryOpen, setViewMode, surfaceReturnTargetRef]);
 
   const closeMemoryAvatar = useCallback(() => {
-    memoryAvatarOpenGenerationRef.current++;
+    cancelMemoryAvatarEntry();
     setMemoryLabOpen(false);
     setSanctuaryOpen(false);
     setSanctuaryAgent(null);
     restoreSurfaceReturnTarget();
-  }, [memoryAvatarOpenGenerationRef, restoreSurfaceReturnTarget, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryOpen]);
+  }, [cancelMemoryAvatarEntry, restoreSurfaceReturnTarget, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryOpen]);
 
   useEffect(() => {
     const handler = () => { void openMemoryAvatar(undefined, 'home'); };
@@ -460,8 +516,10 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
       window.removeEventListener('storage', onStorage);
     };
   }, []);
+  const memoryAvatarEntryState = memoryAvatarEntry?.ownerScope === memoryAvatarOwnerScope && memoryAvatarEntry.entryScope === memoryAvatarEntryScope
+    && memoryAvatarEntry.generation === memoryAvatarOpenGenerationRef.current ? memoryAvatarEntry : null;
   return {
-    ...previousBindings, wakeEnabled, sensorPrimerSeen, socket, startCallRef, voiceScopeOptions, ownerVoiceGateOpen, callState, interrupt,
+    ...previousBindings, memoryAvatarEntryState, cancelMemoryAvatarEntry, retryMemoryAvatarEntry, wakeEnabled, sensorPrimerSeen, socket, startCallRef, voiceScopeOptions, ownerVoiceGateOpen, callState, interrupt,
     backgroundFaceRecognitionOptedIn, cameraAccessEnabled, voiceprint, isMuted, callError, meetingStartedAt, legalMeetingCaseTitle, meetingReport,
     meetingNotes, formatMeetingNoteForExport, meetingIdentityRef, setMeetingReport, setMeetingReportGenerating, lastLegalMeetingArchiveRef,
     setLegalMeetingCaseTitle, waitForMeetingRefinement, stopMeetingAudio, setMeetingNotesOpen, endCall, setMeetingPaused, meetingVoiceActiveRef,

@@ -117,7 +117,9 @@ it('discards old distillation after an owner change and lets the new owner start
 const shellCallback = extractSourceExpression.bind(null, 'src/components/DesktopUI.tsx');
 function shell() {
   const scope = { userId: 'owner-a' };
+  const entryScope = { ownerScope: scope, domain: 'personal', orgId: '' };
   return {
+    memoryAvatarEntryScope: entryScope, memoryAvatarEntryScopeRef: { current: entryScope },
     memoryAvatarOwnerScope: scope, memoryAvatarOwnerRef: { current: scope }, memoryAvatarOpenGenerationRef: { current: 4 }, memoryAvatarSurfaceGeneration: 4,
     memoryAvatarListOwnerRef: { current: 'owner-a' }, memoryAvatars: [{ id: 'avatar-current' }],
     setMemoryAvatars: vi.fn(), setMemoryLabOpen: vi.fn(), setSanctuaryAgent: vi.fn(), setSanctuaryLoaded: vi.fn(), setSanctuaryOpen: vi.fn(),

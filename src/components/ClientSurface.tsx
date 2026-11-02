@@ -9,10 +9,10 @@ function SurfaceContent({ id, active, children }: { id: string; active: boolean;
 }
 
 /** Commit only resolved content; isolate failures without replacing the application shell. */
-export function ClientSurface({ id, active = true, fallback = null, children }: {
-  id: string; active?: boolean; fallback?: ReactNode; children: ReactNode;
+export function ClientSurface({ id, active = true, fallback = null, onClose, children }: {
+  id: string; active?: boolean; fallback?: ReactNode; onClose?: () => void; children: ReactNode;
 }) {
-  return <ErrorBoundary key={id} surfaceId={id}>
+  return <ErrorBoundary key={id} surfaceId={id} onClose={onClose}>
     <Suspense fallback={fallback}>
       <SurfaceContent id={id} active={active}>{children}</SurfaceContent>
     </Suspense>
