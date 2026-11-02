@@ -1,6 +1,6 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-11-02T13:29:35.801531+00:00",
+  "updatedAt": "2026-11-02T13:39:06.729565+00:00",
   "localDate": "2026-11-01",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
@@ -14362,5 +14362,34 @@
       "用github编译"
     ],
     "buildResultRecordedSeparately": true
+  },
+  "latestMainPublicGithubInstallerPreparation": {
+    "atUTC": "2026-11-02T13:39:06.729565+00:00",
+    "status": "prepared-awaiting-public-github-build",
+    "baseCommit": "483477f1ee0e481571905468c5317eda73102813",
+    "mainRepository": "5pyj29s7cm-tech/LumiCore",
+    "workflowId": 340404247,
+    "branch": "feature/chat-song-workbench-20260916",
+    "newEditionRepositories": [
+      "5pyj29s7cm-tech/LumiCore-Legal",
+      "5pyj29s7cm-tech/LumiCore-Designer"
+    ],
+    "visibility": "public",
+    "oldPrivateBuildRun": 41454013158,
+    "oldPrivateBuildSuperseded": true,
+    "source": {
+      "path": ".github/workflows/build-installers.yml",
+      "sha256": "5253e627f973a0ab2e6912f58448cccdffdbab59cb37988717208b6f936a2dea"
+    },
+    "checks": {
+      "diffCheck": true,
+      "publicRepositoryOnly": true,
+      "receiptsPreserved": true,
+      "priorGeneratedDocumentUnchanged": true
+    },
+    "wholeApplicationAccepted": false,
+    "releasePublished": false,
+    "evidence": "D:\\Lumi-Audit-Temp\\main-win-mac-build-20261102\\public-preparation\\evidence-seal.json",
+    "evidenceSha256": "b51bfd4c74815c4fadcb5dc14300af8f2e40ad92b6ce3f9de457a043ee802420"
   }
 }

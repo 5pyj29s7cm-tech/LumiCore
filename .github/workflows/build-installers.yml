@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   windows-x64:
-    if: github.repository == '5pyj29s7cm-tech/LumiCore' || github.repository == '5pyj29s7cm-tech/lumi-CEO'
+    if: github.repository == '5pyj29s7cm-tech/LumiCore'
     name: Windows x64 · unsigned NSIS
     runs-on: windows-latest
     timeout-minutes: 120
@@ -109,7 +109,7 @@ jobs:
           retention-days: 14
 
   macos:
-    if: github.repository == '5pyj29s7cm-tech/LumiCore' || github.repository == '5pyj29s7cm-tech/lumi-CEO'
+    if: github.repository == '5pyj29s7cm-tech/LumiCore'
     name: macOS ${{ matrix.label }} · ad-hoc DMG
     timeout-minutes: 120
     strategy:
