@@ -248,7 +248,9 @@ export async function archiveGeneratedOutputs(records: ToolExecutionRecord[], co
           sourceRequestId: record.requestId || context.requestId || '', sourceTool: record.name, createdAt: new Date().toISOString() };
         if (prior) entry.createdAt = prior.createdAt;
         entry.sourceDisclosureEvidence = prior?.sourceDisclosureEvidence || captureArchivedArtifactDisclosureEvidence(record,
-          { userId: context.userId, conversationId: context.conversationId, taskId: context.taskId, requestId: context.requestId }, sha256, source, undefined, evidenceSnapshot, path.join(dir, filename));
+          { userId: context.userId, conversationId: context.conversationId,
+            taskId: context.taskId || record.taskId, requestId: context.requestId || record.requestId },
+          sha256, artifact.path, undefined, evidenceSnapshot, path.join(dir, filename));
         changed.set(id, entry);
         saved.push(entry);
       } finally { await fsp.unlink(temporary).catch(() => {}); }
@@ -344,14 +346,26 @@ export async function assertGeneratedArchiveFilePublic(scope: GeneratedArchiveSc
 
 /** Generated-path downloads must not regain a polluted archived version after conversation deletion. */
 export async function assertGeneratedSourceFilePublic(scope: GeneratedArchiveScope, file: string): Promise<void> {
-  const stored = (await listStoredGeneratedArchive(scope)).filter(entry => sameArtifactPath(entry.sourcePath, file));
+  const matchesFile = (source: string) => sameArtifactPath(source, file)
+    || path.basename(source).toLowerCase() === path.basename(file).toLowerCase()
+      && sameArtifactPath(resolveMigratedDataFile(source), file);
+  const stored = (await listStoredGeneratedArchive(scope)).filter(entry => matchesFile(entry.sourcePath));
   const evidenceSnapshot = capturePublicArtifactEvidenceSnapshot();
   const evidence = evidenceSnapshot.scopeEvidence(scope);
+  const identities = new Set([file, ...stored.map(entry => entry.sourcePath)]);
+  // Keep old source identities for the existing disclosure owner. A verified
+  // filesystem remap does not rewrite or manufacture execution evidence.
+  for (const record of evidence.records.filter(isArtifactProducerRecord)) {
+    const source = artifactPathFromRecord(record);
+    if (source && matchesFile(source)) identities.add(source);
+  }
   const ids = [...evidence.privateIds, ...stored.flatMap(entry => entry.sourceDisclosureEvidence?.privateIds || [])];
   const snapshot = artifactContentSnapshot(file, ids);
   if (!snapshot) return;
   const reject = () => { throw Object.assign(new Error('This generated file is not available for public delivery.'), { status: 403 }); };
-  if (publicArtifactSnapshotDelivery(snapshot, file, scope, undefined, undefined, evidenceSnapshot).deliveryBlocked) reject();
+  for (const source of identities) {
+    if (publicArtifactSnapshotDelivery(snapshot, source, scope, undefined, undefined, evidenceSnapshot).deliveryBlocked) reject();
+  }
   for (const entry of stored.filter(entry => entry.sha256 === snapshot.sha256 && isObservedArchivedArtifactEvidence(entry.sourceDisclosureEvidence))) {
     if (publicArtifactSnapshotDelivery(snapshot, entry.sourcePath,
       { userId: entry.userId, conversationId: entry.sourceConversationId, taskId: entry.sourceTaskId, requestId: entry.sourceRequestId },

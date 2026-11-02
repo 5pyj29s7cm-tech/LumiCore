@@ -12,6 +12,7 @@ import { toolCallFailure, summarizeToolCalls, toolCallSucceeded } from './contin
 import { normalizeConversationActionState } from './continuation/state_normalization';
 import { classifyConversationActionFollowupIntent, isActionBearingGoal, isTaskPreparationContinuation } from './continuation/followup';
 import { extractRecentActionContinuationState } from './continuation/history_projection';
+import { designerRequest } from './designer_contract';
 
 export type { ActionContinuationHistoryItem } from './continuation/contracts';
 export type { RecentActionContinuationState } from './continuation/contracts';
@@ -56,6 +57,12 @@ export function buildConversationActionContinuationState(
 
   const previous = normalizeConversationActionState(input.previous);
   const followupIntent = classifyConversationActionFollowupIntent(userText, previous, undefined, analysis);
+  const sameRequestBlockedObservation = Boolean(designerRequest(userText)?.requiresStage
+    && previous?.status === 'blocked' && previous.latestInstruction === userText
+    // A terminal normalization clears the execution lease. Compare the incoming
+    // owner update identity without restoring that lease on the output.
+    && input.requestId && input.previous?.activeRequestId === input.requestId
+    && calls.every(call => /(?:^|_)(?:status|state|get|list|inspect|read)(?:_|$)/iu.test(toolCallName(call))));
   const samePreparedTurn = Boolean(
     previous
     && previous.latestInstruction === userText
@@ -65,6 +72,7 @@ export function buildConversationActionContinuationState(
     followupIntent === 'execute'
     || followupIntent === 'status'
     || samePreparedTurn
+    || sameRequestBlockedObservation
   ) && Boolean(previous);
   const currentHistory: ActionContinuationHistoryItem[] = [
     { role: 'user', message: userText },
@@ -99,7 +107,7 @@ export function buildConversationActionContinuationState(
   const currentFailure = [...calls].reverse().find(record => !toolCallSucceeded(record));
   const waitingForConfirmation = calls.some(isConfirmationBlockedToolRecord);
   const hasFailure = completion.records.some(record => !toolCallSucceeded(record));
-  const status: ConversationTaskStatus = followupIntent === 'status' && currentFailure
+  const status: ConversationTaskStatus = sameRequestBlockedObservation ? 'blocked' : followupIntent === 'status' && currentFailure
     ? 'blocked'
     : completion.complete
     ? 'completed'
@@ -118,7 +126,7 @@ export function buildConversationActionContinuationState(
     policySnapshot: preparationContinuation && previous?.policySnapshot
       ? previous.policySnapshot : snapshotTaskPolicy(input.toolPolicy) || (inheritsPrevious ? previous?.policySnapshot : undefined),
     receipts,
-    activeRequestId: input.requestId || (inheritsPrevious ? previous?.activeRequestId : undefined),
+    activeRequestId: sameRequestBlockedObservation ? undefined : input.requestId || (inheritsPrevious ? previous?.activeRequestId : undefined),
     supersededTaskId: !inheritsPrevious && previous?.unfinished ? previous.taskId : undefined,
     revision: (inheritsPrevious ? previous?.revision || 0 : 0) + 1,
     goal,
@@ -133,7 +141,7 @@ export function buildConversationActionContinuationState(
       ...(inheritsPrevious ? previous!.sourcePaths : []),
       ...current.sourcePaths,
     ])).slice(0, 8),
-    latestBlocker: waitingForConfirmation
+    latestBlocker: sameRequestBlockedObservation ? previous?.latestBlocker || '' : waitingForConfirmation
       ? ''
       : completion.blocker || (currentFailure ? toolCallFailure(currentFailure) : ''),
     unfinished: status !== 'completed',

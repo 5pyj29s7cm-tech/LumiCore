@@ -8,7 +8,7 @@ function ok(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
 }
 
-const server = new McpServer({ name: 'cad-drafting', version: '1.7.0' }, { capabilities: { tools: {} } });
+const server = new McpServer({ name: 'cad-drafting', version: '1.7.2' }, { capabilities: { tools: {} } });
 
 server.registerTool('cad_space_program', {
   description: 'Create a room/space program with estimated areas, adjacency notes, and drafting assumptions.',

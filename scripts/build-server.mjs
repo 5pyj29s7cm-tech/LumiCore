@@ -82,9 +82,9 @@ await build({
 });
 
 // Ship the existing reviewed data maintenance command; customers do not need a source checkout or tsx.
-await build({
-  entryPoints: ['scripts/merge-legal-data-root.ts'], bundle: true, platform: 'node', format: 'esm',
-  outfile: 'dist-server/maintenance/merge-legal-data-root.mjs',
+for (const sourceVariant of ['legal', 'designer']) await build({
+  entryPoints: [`scripts/merge-${sourceVariant}-data-root.ts`], bundle: true, platform: 'node', format: 'esm',
+  outfile: `dist-server/maintenance/merge-${sourceVariant}-data-root.mjs`,
   external: ['sqlite3', 'sharp', '@img/sharp-win32-x64', '@img/sharp-libvips-win32-x64', 'lightningcss', 'playwright-core', '@larksuiteoapi/node-sdk', 'typescript', 'pdf-parse'],
   banner: { js: "import { createRequire as __lumiCreateRequire } from 'module'; const require = __lumiCreateRequire(import.meta.url);" },
 });

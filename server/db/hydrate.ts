@@ -208,7 +208,11 @@ export async function hydrateDatabaseProjection(query: DatabaseSqlWriteSession['
     return conversation;
   });
 
+  const interiorProjectsRaw = await query<any>('SELECT * FROM interior_projects');
+  const interiorProjectAssetsRaw = await query<any>('SELECT * FROM interior_project_assets');
   const data = {
+    interiorProjects: projectPayloadRows(interiorProjectsRaw, (row, payload) => ({ ...payload, id: row.id, orgId: row.orgId, ownerUserId: row.ownerUserId, status: row.status, createdAt: row.createdAt, updatedAt: row.updatedAt }), true),
+    interiorProjectAssets: projectPayloadRows(interiorProjectAssetsRaw, (row, payload) => ({ ...payload, id: row.id, orgId: row.orgId, projectId: row.projectId, status: row.status, createdAt: row.createdAt, updatedAt: row.updatedAt }), true),
     ...loadDocumentCollections(settings || []),
     users,
     interactions,

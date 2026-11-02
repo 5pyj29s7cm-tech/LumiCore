@@ -1,5 +1,6 @@
 import { PERSONAL_CLIENT_SURFACES } from '../../shared/client_surfaces';
 import { hasExplicitNoToolInstruction } from './no_tool_instruction';
+import { designerStatusRequest } from './designer_instruction_projection';
 
 export const CLIENT_STATE_INSPECTION_REQUEST = /(?:(?:介绍|说明|讲讲|告诉我|读取|查看|检查).{0,24}(?:Lumi\s*)?客户端.{0,24}(?:每一?个|各个|所有|全部)?(?:页面|界面|模块|状态|分区)|(?:Lumi\s*)?客户端.{0,24}(?:每一?个|各个|所有|全部)(?:页面|界面|模块).{0,24}(?:干什么|作用|功能|用途|介绍|说明)|(?:检查|查看|告诉我|现在).{0,18}(?:你的|lumi\s*的)?(?:模式|模态|运行模式|模)状态|(?:你现在|当前).{0,12}(?:是什么|什么)?模式)/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 
@@ -701,6 +702,11 @@ function statusQuery(text: string): NormalizedActionIntent | null {
   // a status noun. Retrospective/status-only forms are excluded by the strict
   // affirmative artifact-action recognizer.
   if (explicitArtifactCreationIntent(text)) return null;
+  if (designerStatusRequest(text)) return {
+    kind: 'status_query', operation: 'status', subject: 'lumi', target: 'design_project',
+    payload: '', sideEffectClass: 'none', relation: 'status', confidence: 0.99,
+    rule: 'designer-persisted-ledger-status',
+  };
   if (hasMixedStatusExecutionIntent(text)) return null;
   if (matchesCnTaskReceiptQuestion(text)) return {
     kind: 'status_query', operation: 'status', subject: 'lumi', target: 'recent_task',

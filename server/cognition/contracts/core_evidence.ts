@@ -133,7 +133,7 @@ export function hasCoreActionEvidence(
     return hasEcommerceOperationsEvidence(successful, taskText);
   }
   if (contract.kind === 'design_delivery') {
-    return hasDesignDeliveryEvidence(successful, taskText);
+    return hasDesignDeliveryEvidence(records, taskText, currentTurn);
   }
   if (contract.kind === 'stock_monitor') {
     return successful.some(record =>

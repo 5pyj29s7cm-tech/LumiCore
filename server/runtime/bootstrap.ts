@@ -1,3 +1,4 @@
+import { reconcileInterruptedIndustryWorkflowTasks } from '../industry/workflow_service';
 import { providerGetterArguments } from "../llm/provider_getters";
 import { runtimeFaults } from './fault_state';
 import { repairTestMemoryProvenance, repairRuntimeLearningEvidence } from '../memory/provenance';
@@ -180,6 +181,8 @@ export async function bootstrap(ctx: BootstrapContext) {
     if (recoveredTasks > 0) {
       console.warn(`[Bootstrap] Recovered ${recoveredTasks} orphaned conversation task lease(s)`);
     }
+    const reconciledIndustryTasks = reconcileInterruptedIndustryWorkflowTasks();
+    if (reconciledIndustryTasks) console.warn(`[Bootstrap] Reconciled ${reconciledIndustryTasks} interrupted industry tasks without replay.`);
     if (llm.refreshLocalModels) {
       const localModels = await llm.refreshLocalModels();
       console.log(`[LLM] Local runtime ready — Ollama=${localModels.ollama}, LM Studio=${localModels.lmstudio}`);

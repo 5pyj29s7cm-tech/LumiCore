@@ -584,6 +584,12 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     : null;
   const entryToolPolicy = input.isSanctuary
     ? NO_TOOLS_POLICY
+    : allowToolUse && input.flow.designerGuidance
+      ? { allowedTools: input.flow.designerGuidance.tools.filter(name => input.toolDeclarations.some(item => item.function.name === name)),
+          forbiddenTools: [], requireConfirmation: [], maxIterations: 2 }
+    : allowToolUse && input.flow.designerRequest
+      ? { allowedTools: input.flow.designerRequest.tools.filter(name => input.toolDeclarations.some(item => item.function.name === name)),
+          forbiddenTools: [], requireConfirmation: [], maxIterations: input.flow.designerRequest.kind === 'status' ? 2 : 12 }
     : selfRepairToolPolicy
       ? selfRepairToolPolicy
       : clientActionToolPolicy
@@ -624,7 +630,12 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
   // A validated workbench request already owns its exact generator and inputs.
   // Keep that route exact so generic file/contract expansion cannot substitute documents.
   const mediaTool = input.flow.structuredMediaRequest ? structuredMediaToolCall(input.flow.structuredMediaRequest).name : undefined;
-  const toolRoute = rawToolRoute && mediaTool
+  const edition = input.flow.designerGuidance || input.flow.designerRequest;
+  const toolRoute = allowToolUse && edition && !input.serverBoundToolName && !mediaTool
+    ? { toolNames: edition.tools.filter(name => input.toolDeclarations.some(item => item.function.name === name)),
+        hardAllowlist: true, categories: ['industry_workflow'], reasons: ['exact design project or stage contract'],
+        totalAvailable: input.toolDeclarations.length, maxTools: edition.tools.length, truncated: false }
+    : rawToolRoute && mediaTool
     ? { ...rawToolRoute, toolNames: rawToolRoute.toolNames.filter(name => name === mediaTool),
         requiredTools: [mediaTool], hardAllowlist: true }
     : rawToolRoute ? enhanceToolRouteForFlow(
@@ -680,6 +691,8 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     maxIterations,
   };
   const promptParts = [
+    input.flow.designerRequest?.prompt || '',
+    input.flow.designerGuidance?.prompt || '',
     '## Lumi Execution Decision',
     `Boundary: ${input.flow.channel}/${input.flow.surface}; tools=${allowToolUse ? 'available' : 'off'}; policyMaxIterations=${toolPolicy.maxIterations || 0}.`,
     allowToolUse ? 'For file/screen/document actions, do not answer with a future-tense promise such as "I will read/open/review it now" as the final response. Call the actual read/open/review tool in this turn. If no readable path/content is available, say clearly that no tool has run yet and ask for the file or location.' : '',

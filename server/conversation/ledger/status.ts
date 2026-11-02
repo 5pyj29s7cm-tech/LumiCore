@@ -6,6 +6,7 @@ import { detectLanguage } from "../../utils/language";
 import type { ConversationActionTaskRow, ConversationActionReceiptRow } from './contracts';
 import { parseObject } from './serialization';
 import { findConversationActionTask, conversationActionStateFromTask } from './queries';
+import { formatMultiDesignWorkflowLedgerStatus } from './designer_status';
 export function formatEnglishPreviousActionLedgerStatus(task: ConversationActionTaskRow, state: ConversationActionContinuationState, taskReceipts: ConversationActionReceiptRow[], query = ''): string {
     const receipt = taskReceipts
         .map((candidate, insertionOrder) => ({ candidate, insertionOrder }))
@@ -86,6 +87,8 @@ export function formatConversationActionLedgerStatus(db: any, input: {
     query?: string;
     taskId?: string;
 }): string | null {
+    const designStatus = formatMultiDesignWorkflowLedgerStatus(db, input);
+    if (designStatus) return designStatus;
     const task = findConversationActionTask(db, input);
     const state = conversationActionStateFromTask(task);
     if (!state)

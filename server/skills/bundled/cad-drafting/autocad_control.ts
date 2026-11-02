@@ -49,7 +49,14 @@ function validOperation(value: any): value is AutocadPlaybackOperation {
   if (value.kind === 'line') return [value.x1, value.y1, value.x2, value.y2].every(finite);
   if (value.kind === 'circle') return [value.x, value.y, value.r].every(finite) && value.r > 0;
   if (value.kind === 'arc') {
-    return [value.cx, value.cy, value.r, value.start, value.end].every(finite) && value.r > 0;
+    const sweep = ((value.end - value.start) % 360 + 360) % 360;
+    return [value.cx, value.cy, value.r, value.start, value.end].every(finite)
+      && value.r > 0
+      && value.start >= 0
+      && value.start < 360
+      && value.end >= 0
+      && value.end < 360
+      && sweep > 0;
   }
   if (value.kind === 'text') {
     return [value.x, value.y, value.height].every(finite)
@@ -79,7 +86,7 @@ export function readAutocadOperationPayload(filePath: string): AutocadOperationP
   const expectedOperationSetId = geometryHash
     ? crypto.createHash('sha256').update(JSON.stringify({ geometryHash, operations })).digest('hex')
     : '';
-  if (version < 2 || !geometryHash || !operationSetId || operationSetId !== expectedOperationSetId) {
+  if (version < 3 || !geometryHash || !operationSetId || operationSetId !== expectedOperationSetId) {
     throw new Error('AutoCAD operations file is missing a current verified operation-set identity. Re-run cad_prepare_autocad_operations.');
   }
   if (parsed.geometryVerified !== true) {
@@ -201,6 +208,7 @@ export function buildAutocadComPlaybackScript(
     ? Math.max(100, Math.min(Math.round(requestedDelay), 5000))
     : 450;
   const createNewDocument = options.createNewDocument !== false;
+  const validatedOperationsBase64 = Buffer.from(JSON.stringify(payload.operations), 'utf-8').toString('base64');
 
   return [
     "$ErrorActionPreference = 'Stop'",
@@ -225,8 +233,9 @@ export function buildAutocadComPlaybackScript(
     `$geometryVerificationRequired = ${payload.geometryVerificationRequired ? '$true' : '$false'}`,
     `$delayMs = ${delayMs}`,
     `$createNewDocument = ${createNewDocument ? '$true' : '$false'}`,
-    '$payload = Get-Content -Raw -LiteralPath $operationsPath -Encoding UTF8 | ConvertFrom-Json',
-    '$operations = @($payload.operations)',
+    `$validatedOperationsBase64 = ${psLiteral(validatedOperationsBase64)}`,
+    '$operationsJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($validatedOperationsBase64))',
+    '$operations = @(ConvertFrom-Json -InputObject $operationsJson)',
     `if ($operations.Count -ne ${payload.operations.length}) { throw 'AutoCAD operations file changed after validation.' }`,
     'Add-Type @"',
     'using System;',
@@ -452,11 +461,10 @@ export function buildAutocadComPlaybackScript(
     "      } elseif ($op.kind -eq 'arc') {",
     '        $start = [double]$op.start',
     '        $end = [double]$op.end',
-    '        if ($end -lt $start) { $swap = $start; $start = $end; $end = $swap }',
     '        $startRad = $start * [Math]::PI / 180.0',
     '        $endRad = $end * [Math]::PI / 180.0',
-    '        while ($startRad -lt 0) { $startRad += 2 * [Math]::PI; $endRad += 2 * [Math]::PI }',
-    '        while ($endRad -le $startRad) { $endRad += 2 * [Math]::PI }',
+    '        $sweep = ((($end - $start) % 360) + 360) % 360',
+    '        if ($start -lt 0 -or $start -ge 360 -or $end -lt 0 -or $end -ge 360 -or $sweep -le 0) { throw "Invalid normalized AutoCAD arc angles." }',
     '        $entity = $model.AddArc((Point3 $op.cx $op.cy), [double]$op.r, $startRad, $endRad)',
     "      } elseif ($op.kind -eq 'text') {",
     '        $entity = $model.AddText([string]$op.text, (Point3 $op.x $op.y), [double]$op.height)',

@@ -154,6 +154,20 @@ const DESIGN_CONTRACTS: IndustryWorkflowContract[] = [
     expectedContentTerms: ['concept', 'layout', 'risk', 'implementation', 'brief', '\u6982\u5ff5', '\u5e03\u5c40', '\u98ce\u9669', '\u5b9e\u65bd', '\u9700\u6c42'],
     confirmationBoundaries: ['Site dimensions, structural changes, MEP conditions, final quotations, contracts, and external delivery require professional review and approval.'],
     requiresFileArtifact: false, acceptedFileExtensions: [], minMatchedContentTerms: 2,
+    executionTools: [
+      'interior_design_project_status',
+      'mcp_design-studio-pack_interior_project_brief',
+      'mcp_design-studio-pack_space_planning_checklist',
+      'mcp_design-studio-pack_site_survey_report',
+      'read_file',
+      'read_pdf',
+      'read_xlsx',
+      'ocr_image_file',
+    ],
+    requiredToolReceipts: [
+      'mcp_design-studio-pack_interior_project_brief',
+      'mcp_design-studio-pack_space_planning_checklist',
+    ],
   },
   {
     productLine: 'design', entryId: 'cad', title: 'CAD scheme', category: 'design_delivery',
@@ -164,6 +178,22 @@ const DESIGN_CONTRACTS: IndustryWorkflowContract[] = [
     expectedContentTerms: ['CAD', 'geometry', 'dimension', 'layer', 'verification', '\u51e0\u4f55', '\u5c3a\u5bf8', '\u56fe\u5c42', '\u9a8c\u8bc1'],
     confirmationBoundaries: ['Unverified dimensions, structural or MEP assumptions, overwriting source drawings, and external delivery require professional approval.'],
     requiresFileArtifact: true, acceptedFileExtensions: ['.dxf', '.dwg', '.cad', '.svg', '.pdf'], minMatchedContentTerms: 1,
+    executionTools: [
+      'interior_design_project_status',
+      'mcp_design-studio-pack_drawing_ingest_qa',
+      'read_file',
+      'read_pdf',
+      'ocr_image_file',
+      'floorplan_extract_geometry',
+      'cad_generate_dxf',
+      'cad_prepare_autocad_operations',
+      'mcp_cad-drafting_autocad_playback_file',
+      'desktop_open',
+    ],
+    requiredToolReceipts: [
+      'mcp_design-studio-pack_drawing_ingest_qa',
+      'cad_generate_dxf',
+    ],
   },
   {
     productLine: 'design', entryId: 'visualization', title: 'Visualization', category: 'design_delivery',
@@ -174,6 +204,18 @@ const DESIGN_CONTRACTS: IndustryWorkflowContract[] = [
     expectedContentTerms: ['camera', 'lighting', 'material', 'render', 'image', '\u6784\u56fe', '\u706f\u5149', '\u6750\u8d28', '\u6e32\u67d3', '\u56fe\u7247'],
     confirmationBoundaries: ['Client-facing claims, licensed assets, final selections, and external delivery require review and approval.'],
     requiresFileArtifact: true, acceptedFileExtensions: ['.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff', '.pdf'], minMatchedContentTerms: 1,
+    executionTools: [
+      'interior_design_project_status',
+      'mcp_design-studio-pack_interior_visual_direction',
+      'read_file',
+      'read_pdf',
+      'ocr_image_file',
+      'generate_image',
+    ],
+    requiredToolReceipts: [
+      'mcp_design-studio-pack_interior_visual_direction',
+      'generate_image',
+    ],
   },
   {
     productLine: 'design', entryId: 'presentation', title: 'Proposal presentation', category: 'design_delivery',
@@ -184,6 +226,17 @@ const DESIGN_CONTRACTS: IndustryWorkflowContract[] = [
     expectedContentTerms: ['proposal', 'storyline', 'layout', 'material', 'implementation', 'PPT', '\u63d0\u6848', '\u7248\u5f0f', '\u6750\u6599', '\u5b9e\u65bd'],
     confirmationBoundaries: ['Commercial terms, final quotations, licensed assets, and client delivery require approval.'],
     requiresFileArtifact: true, acceptedFileExtensions: ['.pptx', '.pdf'], minMatchedContentTerms: 1,
+    executionTools: [
+      'interior_design_project_status',
+      'read_file',
+      'read_pdf',
+      'create_ppt',
+      'desktop_open',
+    ],
+    requiredToolReceipts: [
+      'interior_design_project_status',
+      'create_ppt',
+    ],
   },
   {
     productLine: 'design', entryId: 'handoff', title: 'Delivery center', category: 'design_delivery',
@@ -194,6 +247,14 @@ const DESIGN_CONTRACTS: IndustryWorkflowContract[] = [
     expectedContentTerms: ['drawing', 'schedule', 'version', 'checklist', 'handoff', '\u56fe\u7eb8', '\u6e05\u5355', '\u7248\u672c', '\u6838\u9a8c', '\u4ea4\u4ed8'],
     confirmationBoundaries: ['Final professional sign-off, commercial acceptance, and external delivery require accountable approval and delivery receipts.'],
     requiresFileArtifact: true, acceptedFileExtensions: ['.zip', '.pdf', '.pptx', '.docx', '.xlsx', '.dxf', '.dwg'], minMatchedContentTerms: 1,
+    executionTools: [
+      'interior_design_project_status',
+      'design_delivery_package_create',
+    ],
+    requiredToolReceipts: [
+      'interior_design_project_status',
+      'design_delivery_package_create',
+    ],
   },
 ];
 
@@ -264,4 +325,8 @@ export function normalizeIndustryProductLine(value: unknown): IndustryProductLin
 export function getIndustryWorkflowContracts(productLine: unknown): IndustryWorkflowContract[] {
   const normalized = normalizeIndustryProductLine(productLine);
   return normalized ? CONTRACTS.filter(contract => contract.productLine === normalized) : [];
+}
+
+export function getIndustryWorkflowContract(productLine: unknown, entryId: unknown): IndustryWorkflowContract | null {
+  return getIndustryWorkflowContracts(productLine).find(contract => contract.entryId === String(entryId || "").trim()) || null;
 }

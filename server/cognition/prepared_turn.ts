@@ -1,4 +1,5 @@
 import { runResolvedLumiTurn, type ResolvedTurnModelInput } from './turn_model';
+import { settleDesignerWorkflow } from './designer_settlement';
 import { runResolvedLumiRecovery } from './turn_recovery';
 import { finalizeLumiResponseForDelivery, type LumiResponseDeliveryInput } from './response_delivery';
 import { mergeToolExecutionRecords } from './task_execution_ledger';
@@ -35,11 +36,21 @@ export async function runPreparedLumiTurn(input: PreparedLumiTurnInput) {
   const result: LLMResult = input.skipModel ? { text: '', toolCalls: [], usageRecords: [] } : await runResolvedLumiTurn(input.model);
   input.onResult?.(result); assertCurrent();
   const project = (records: ToolExecutionRecord[]) => input.projectRecords?.(records) || records;
-  const toolRecords = project(mergeToolExecutionRecords(input.toolRecords || [], result.toolCalls || []));
+  let toolRecords = project(mergeToolExecutionRecords(input.toolRecords || [], result.toolCalls || []));
   const usageRecords = [...(result.usageRecords || [])];
   const responseText = String(result.text || '').trim();
   const source = typeof input.source === 'function' ? input.source() : input.source;
-  const policy = input.finalization?.({ result, responseText, toolRecords });
+  let policy = input.finalization?.({ result, responseText, toolRecords });
+  if (!input.skipModel && !policy?.pendingConfirmation && !policy?.isPendingConfirmation?.()
+    && !policy?.aborted && !policy?.isAborted?.()) {
+    const completion = await settleDesignerWorkflow(input.model, toolRecords);
+    assertCurrent();
+    if (completion) {
+      toolRecords = project(mergeToolExecutionRecords(toolRecords, [completion]));
+      if ('registry' in input.model) await input.model.onToolCall?.(completion);
+      policy = input.finalization?.({ result, responseText, toolRecords });
+    }
+  }
   const outbound = await finalizeLumiResponseForDelivery({
     taskText: input.taskText, responseText, completionGuard: result.completionGuard, source,
     flow: input.model.execution.turnIntent.flow, taskId: input.model.execution.taskId || input.taskId, requestId: input.requestId,
@@ -52,7 +63,13 @@ export async function runPreparedLumiTurn(input: PreparedLumiTurnInput) {
         context: { ...input.model.context, ...input.recovery?.context, source: input.recovery?.context?.source || (input.model.context?.source || input.model.config.source || source) + '_guard_recovery' } } : input.model;
       const attempt = await runResolvedLumiRecovery({ model, responseText, recovery });
       usageRecords.push(...attempt.usageRecords); input.onRecoveryUsage?.(attempt.usageRecords);
-      return { ...attempt, toolRecords: project(attempt.toolRecords || []) };
+      const recovered = project(mergeToolExecutionRecords(toolRecords, attempt.toolRecords || []));
+      const recoveryPolicy = input.finalization?.({ result: { ...result, text: attempt.text || '', toolCalls: recovered }, responseText: attempt.text || '', toolRecords: recovered });
+      const completion = !recoveryPolicy?.pendingConfirmation && !recoveryPolicy?.isPendingConfirmation?.()
+        && !recoveryPolicy?.aborted && !recoveryPolicy?.isAborted?.() ? await settleDesignerWorkflow(model, recovered) : null;
+      assertCurrent();
+      if (completion && 'registry' in model) await model.onToolCall?.(completion);
+      return { ...attempt, toolRecords: project(completion ? mergeToolExecutionRecords(recovered, [completion]) : recovered) };
     },
   });
   assertCurrent();

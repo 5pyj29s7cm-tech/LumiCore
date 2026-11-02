@@ -77,7 +77,7 @@ export type ClaimLegacyDataRoot = (legacyRoot: string, currentRoot: string) => L
 
 interface ProductDataMigrationReceipt {
   version: 1;
-  product: 'LumiCore';
+  product: 'LumiCore' | 'Lumi Designer';
   migrationId: string;
   phase: 'prepared';
   method: 'atomic_directory_rename';
@@ -90,7 +90,7 @@ interface ProductDataMigrationReceipt {
 
 interface ProductDataMigrationVerificationReceipt {
   version: 1;
-  product: 'LumiCore';
+  product: 'LumiCore' | 'Lumi Designer';
   migrationReceipt: 'product-data-migration.json';
   migrationId: string;
   migrationReceiptSha256: string;
@@ -182,12 +182,13 @@ function validateMigrationReceipt(
   value: unknown,
   legacyRoot: string,
   currentRoot: string,
+  expectedProduct = 'LumiCore',
 ): ProductDataMigrationReceipt {
   const receipt = value as Partial<ProductDataMigrationReceipt> | null;
   if (
     !receipt
     || receipt.version !== 1
-    || receipt.product !== 'LumiCore'
+    || receipt.product !== expectedProduct
     || !/^[A-Za-z0-9_-]{32,128}$/.test(String(receipt.migrationId || ''))
     || receipt.phase !== 'prepared'
     || receipt.method !== 'atomic_directory_rename'
@@ -202,13 +203,13 @@ function validateMigrationReceipt(
   return receipt as ProductDataMigrationReceipt;
 }
 
-function readMigrationReceipt(receiptRoot: string, legacyRoot: string, currentRoot: string): {
+function readMigrationReceipt(receiptRoot: string, legacyRoot: string, currentRoot: string, expectedProduct?: string): {
   receipt: ProductDataMigrationReceipt;
   digest: string;
 } {
   const receiptPath = path.join(receiptRoot, 'runtime', 'product-data-migration.json');
   const serialized = safeFileContents(receiptPath, 'LumiCore product data migration receipt');
-  const receipt = validateMigrationReceipt(JSON.parse(serialized) as unknown, legacyRoot, currentRoot);
+  const receipt = validateMigrationReceipt(JSON.parse(serialized) as unknown, legacyRoot, currentRoot, expectedProduct);
   return {
     receipt,
     digest: crypto.createHash('sha256').update(serialized, 'utf8').digest('hex'),
@@ -223,7 +224,7 @@ function validateMigrationVerificationReceipt(
   if (
     !existing
     || existing.version !== 1
-    || existing.product !== 'LumiCore'
+    || existing.product !== migration.receipt.product
     || existing.migrationReceipt !== 'product-data-migration.json'
     || existing.migrationId !== migration.receipt.migrationId
     || existing.migrationReceiptSha256 !== migration.digest
@@ -263,48 +264,85 @@ export function preflightProductDataMigrationReceipts(dataRoot = getDataRoot()):
   return true;
 }
 
-/** Follow historical file references only across the verified product-root rename. */
+/** A historical Designer rename is only the first link, never a disclosure grant. */
+function reviewedDesignerRenameRelative(source: string, mergeSourceRoot: string): string | undefined {
+  if (!path.isAbsolute(mergeSourceRoot)) return undefined;
+  const intermediateRoot = path.resolve(mergeSourceRoot);
+  if (normalizeRoot(intermediateRoot) !== normalizeRoot(path.join(path.dirname(intermediateRoot), 'LumiCore-Designer'))) return undefined;
+  const legacyRoot = path.join(path.dirname(intermediateRoot), 'LumiOS-Designer');
+  const relative = path.relative(path.join(legacyRoot, 'data'), source);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return undefined;
+  if (pathExistsOrThrow(legacyRoot)) throw new Error('Historical Designer rename source was recreated; its file identity is ambiguous.');
+  for (let cursor = path.join(intermediateRoot, 'runtime'); path.dirname(cursor) !== cursor; cursor = path.dirname(cursor)) {
+    const stat = fs.lstatSync(cursor);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Historical Designer rename receipts require safe directories.');
+  }
+  const migration = readMigrationReceipt(intermediateRoot, legacyRoot, intermediateRoot, 'Lumi Designer');
+  validateMigrationVerificationReceipt(JSON.parse(safeFileContents(
+    path.join(intermediateRoot, 'runtime', 'product-data-migration-verified.json'),
+    'Historical Designer product data migration verification receipt',
+  )), migration);
+  return relative;
+}
+
+/** Follow historical file references only across verified migration links. */
 export function resolveMigratedDataFile(filePath: string, dataRoot = getDataRoot()): string {
   const source = path.resolve(filePath);
   const currentRoot = path.resolve(dataRoot);
-  const receipts = path.join(currentRoot, 'runtime', 'legal-data-merge');
-  if (pathExistsOrThrow(receipts)) {
-    const directory = fs.lstatSync(receipts);
-    if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error('Legal merge receipts require a safe directory.');
-    for (const name of fs.readdirSync(receipts).filter(name => /^[a-f0-9]{64}\.json$/.test(name))) {
-      const receipt = JSON.parse(safeFileContents(path.join(receipts, name), 'Legal data merge receipt', 64 * 1024)) as Record<string, unknown>;
-      if (receipt.version !== 1 || typeof receipt.sourceRoot !== 'string' || typeof receipt.targetRoot !== 'string'
-        || normalizeRoot(receipt.targetRoot) !== normalizeRoot(currentRoot)) continue;
-      const relative = path.relative(path.join(receipt.sourceRoot, 'data'), source);
-      if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) continue;
-      if (receipt.phase !== 'completed' || typeof receipt.maintenanceManifest !== 'string'
-        || typeof receipt.maintenanceManifestSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(receipt.maintenanceManifestSha256)) throw new Error('Legal file requires a completed verified data merge.');
-      if (pathExistsOrThrow(path.join(receipt.sourceRoot, 'data'))
-        && receipt.sourceFingerprint !== legacyLegalDataFingerprint(receipt.sourceRoot)) throw new Error('Historical Legal data changed after merge.');
-      const raw = safeFileContents(receipt.maintenanceManifest, 'Legal data merge manifest', 4 * 1024 * 1024);
-      if (crypto.createHash('sha256').update(raw).digest('hex') !== receipt.maintenanceManifestSha256) throw new Error('Legal data merge manifest changed.');
-      const manifest = JSON.parse(raw) as Record<string, unknown>;
-      if (manifest.sourceRoot !== receipt.sourceRoot || manifest.targetRoot !== receipt.targetRoot || manifest.inputDigest !== receipt.inputDigest
-        || !Array.isArray(manifest.migratedFiles)) throw new Error('Legal data merge manifest identity is invalid.');
-      const expected = manifest.migratedFiles.find((entry: unknown) => entry && typeof entry === 'object'
-        && (entry as Record<string, unknown>).path === relative.replace(/\\/g, '/')) as Record<string, unknown> | undefined;
-      if (!expected || typeof expected.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expected.sha256)) throw new Error('Historical file was archived, not migrated into the shared root.');
-      const target = path.join(currentRoot, 'data', relative);
-      let cursor = currentRoot;
-      for (const part of path.relative(currentRoot, target).split(path.sep)) {
-        cursor = path.join(cursor, part); const stat = fs.lstatSync(cursor);
-        if (stat.isSymbolicLink()) throw new Error('Shared Legal file cannot cross symbolic links.');
+  // An exact reviewed source takes precedence over an optional historical alias.
+  for (const allowDesignerRename of [false, true]) for (const namespace of ['legal-data-merge', 'designer-data-merge']) {
+    const label = namespace === 'designer-data-merge' ? 'Designer' : 'Legal';
+    const receipts = path.join(currentRoot, 'runtime', namespace);
+    if (pathExistsOrThrow(receipts)) {
+      const directory = fs.lstatSync(receipts);
+      if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error(label + ' merge receipts require a safe directory.');
+      for (const name of fs.readdirSync(receipts).filter(name => /^[a-f0-9]{64}\.json$/.test(name))) {
+        const receipt = JSON.parse(safeFileContents(path.join(receipts, name), label + ' data merge receipt', 64 * 1024)) as Record<string, unknown>;
+        if (receipt.version !== 1 || typeof receipt.sourceRoot !== 'string' || typeof receipt.targetRoot !== 'string'
+          || normalizeRoot(receipt.targetRoot) !== normalizeRoot(currentRoot)) continue;
+        if (namespace === 'designer-data-merge' && receipt.sourceVariant !== 'designer') throw new Error('Designer merge receipt identity is invalid.');
+        let relative = path.relative(path.join(receipt.sourceRoot, 'data'), source);
+        if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+          const renamed = allowDesignerRename && namespace === 'designer-data-merge' ? reviewedDesignerRenameRelative(source, receipt.sourceRoot) : undefined;
+          if (!renamed) continue;
+          relative = renamed;
+        }
+        if (receipt.phase !== 'completed' || typeof receipt.maintenanceManifest !== 'string'
+          || typeof receipt.maintenanceManifestSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(receipt.maintenanceManifestSha256)) throw new Error(label + ' file requires a completed verified data merge.');
+        if (pathExistsOrThrow(path.join(receipt.sourceRoot, 'data'))
+          && receipt.sourceFingerprint !== legacyLegalDataFingerprint(receipt.sourceRoot)) throw new Error('Historical ' + label + ' data changed after merge.');
+        const raw = safeFileContents(receipt.maintenanceManifest, label + ' data merge manifest', 4 * 1024 * 1024);
+        if (crypto.createHash('sha256').update(raw).digest('hex') !== receipt.maintenanceManifestSha256) throw new Error(label + ' data merge manifest changed.');
+        const manifest = JSON.parse(raw) as Record<string, unknown>;
+        if (manifest.sourceRoot !== receipt.sourceRoot || manifest.targetRoot !== receipt.targetRoot || manifest.inputDigest !== receipt.inputDigest
+          || (namespace === 'designer-data-merge' && manifest.sourceVariant !== 'designer')
+          || !Array.isArray(manifest.migratedFiles)) throw new Error(label + ' data merge manifest identity is invalid.');
+        const expected = manifest.migratedFiles.find((entry: unknown) => entry && typeof entry === 'object'
+          && (entry as Record<string, unknown>).path === relative.replace(/\\/g, '/')) as Record<string, unknown> | undefined;
+        if (!expected || typeof expected.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expected.sha256)) throw new Error('Historical file was archived, not migrated into the shared root.');
+        const target = path.join(currentRoot, 'data', relative);
+        let cursor = currentRoot;
+        for (const part of path.relative(currentRoot, target).split(path.sep)) {
+          cursor = path.join(cursor, part); const stat = fs.lstatSync(cursor);
+          if (stat.isSymbolicLink()) throw new Error('Shared ' + label + ' file cannot cross symbolic links.');
+        }
+        const hash = crypto.createHash('sha256'), buffer = Buffer.allocUnsafe(1024 * 1024), descriptor = fs.openSync(target, 'r');
+        try { let length: number; while ((length = fs.readSync(descriptor, buffer, 0, buffer.length, null))) hash.update(buffer.subarray(0, length)); }
+        finally { fs.closeSync(descriptor); }
+        if (hash.digest('hex') !== expected.sha256) throw new Error('Shared ' + label + ' file changed after merge.');
+        return target;
       }
-      const hash = crypto.createHash('sha256'), buffer = Buffer.allocUnsafe(1024 * 1024), descriptor = fs.openSync(target, 'r');
-      try { let length: number; while ((length = fs.readSync(descriptor, buffer, 0, buffer.length, null))) hash.update(buffer.subarray(0, length)); }
-      finally { fs.closeSync(descriptor); }
-      if (hash.digest('hex') !== expected.sha256) throw new Error('Shared Legal file changed after merge.');
-      return target;
     }
   }
   for (const name of ['LumiCore-Legal', 'LumiOS-Legal']) {
     const relative = path.relative(path.join(path.dirname(currentRoot), name, 'data'), source);
     if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) throw new Error('Historical Legal file requires an explicit reviewed merge.');
+  }
+  if (!isExplicitLegacyDesignerRoot(currentRoot)) {
+    for (const name of ['LumiCore-Designer', 'LumiOS-Designer']) {
+      const relative = path.relative(path.join(path.dirname(currentRoot), name, 'data'), source);
+      if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) throw new Error('Historical Designer file requires an explicit reviewed merge.');
+    }
   }
   if (pathExistsOrThrow(source)) return source;
   const legacyData = path.join(path.dirname(currentRoot), LEGACY_PRODUCT_DATA_DIRECTORY, 'data');
@@ -360,6 +398,55 @@ export function legacyLegalDataFingerprint(root: string): string {
 
 export function legalDataMergeReceiptPath(sourceRoot: string, targetRoot: string): string {
   return path.join(targetRoot, 'runtime', 'legal-data-merge', digestRoot(sourceRoot) + '.json');
+}
+
+
+export function designerDataMergeReceiptPath(sourceRoot: string, targetRoot: string): string {
+  return path.join(targetRoot, 'runtime', 'designer-data-merge', digestRoot(sourceRoot) + '.json');
+}
+
+function isExplicitLegacyDesignerRoot(currentRoot: string): boolean {
+  const configured = configuredDataRoot();
+  return configured !== null && normalizeRoot(configured) === normalizeRoot(currentRoot)
+    && ['LumiCore-Designer', 'LumiOS-Designer'].some(name => normalizeRoot(currentRoot) === normalizeRoot(path.join(path.dirname(currentRoot), name)));
+}
+
+/** Do not silently open an empty/shared profile while historical Designer data remains unreviewed. */
+export function assertLegacyDesignerDataMerged(homeDirectory = os.homedir(), targetRoot = resolveDefaultDataRoot(homeDirectory)): void {
+  targetRoot = path.resolve(targetRoot);
+  for (const name of ['LumiCore-Designer', 'LumiOS-Designer']) {
+    const sourceRoot = path.resolve(homeDirectory, name);
+    if (normalizeRoot(sourceRoot) === normalizeRoot(targetRoot)) continue;
+    const sourceData = path.join(sourceRoot, 'data');
+    if (!pathExistsOrThrow(sourceData)) continue;
+    if (readDirectoryState(sourceRoot) === 'missing' || readDirectoryState(sourceData) === 'empty') continue;
+    const receiptPath = designerDataMergeReceiptPath(sourceRoot, targetRoot);
+    if (pathExistsOrThrow(receiptPath)) {
+      const receipt = JSON.parse(safeFileContents(receiptPath, 'Designer data merge receipt', 64 * 1024)) as Record<string, unknown>;
+      if (receipt.version === 1 && receipt.phase === 'completed' && receipt.sourceVariant === 'designer'
+        && receipt.sourceRoot === sourceRoot && receipt.targetRoot === targetRoot
+        && receipt.sourceFingerprint === legacyLegalDataFingerprint(sourceRoot)
+        && typeof receipt.inputDigest === 'string' && /^[a-f0-9]{64}$/.test(receipt.inputDigest)
+        && typeof receipt.maintenanceManifest === 'string' && path.isAbsolute(receipt.maintenanceManifest)
+        && typeof receipt.maintenanceManifestSha256 === 'string' && /^[a-f0-9]{64}$/.test(receipt.maintenanceManifestSha256)
+        && pathExistsOrThrow(path.join(targetRoot, 'data', 'lumi.db'))) {
+        const raw = safeFileContents(receipt.maintenanceManifest, 'Designer data merge manifest', 4 * 1024 * 1024);
+        const manifest = JSON.parse(raw) as Record<string, unknown>;
+        if (crypto.createHash('sha256').update(raw).digest('hex') === receipt.maintenanceManifestSha256
+          && manifest.sourceVariant === 'designer' && manifest.sourceRoot === sourceRoot
+          && manifest.targetRoot === targetRoot && manifest.inputDigest === receipt.inputDigest
+          && Array.isArray(manifest.migratedFiles)) continue;
+      }
+    }
+    const runtimeDirectory = process.env.LUMI_RUNTIME_META_FILE ? path.dirname(process.env.LUMI_RUNTIME_META_FILE) : '';
+    const command = runtimeDirectory
+      ? '"' + process.execPath + '" "' + path.join(runtimeDirectory, 'maintenance', 'merge-designer-data-root.mjs') + '"'
+      : 'node --import tsx scripts/merge-designer-data-root.ts';
+    const roots = ' --source-root "' + sourceRoot + '" --target-root "' + targetRoot + '"';
+    throw new Error('Historical Designer data requires an explicit reviewed merge before shared storage can start. '
+      + 'Review with ' + command + roots + ' --plan <outside-repository-plan.json>. '
+      + 'Apply only the reviewed plan with --apply --backup-dir <new-backup-directory>. No data was moved.');
+  }
 }
 
 export function assertLegacyLegalDataMerged(homeDirectory = os.homedir(), targetRoot = resolveDefaultDataRoot(homeDirectory)): void {

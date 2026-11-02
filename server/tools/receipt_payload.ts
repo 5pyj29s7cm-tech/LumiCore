@@ -1,4 +1,5 @@
 import type { ToolExecutionRecord } from './types';
+import { localArtifactExists } from './capability_verification';
 
 /**
  * Decode the legacy receipt shapes emitted by built-in, MCP, and relayed
@@ -128,6 +129,18 @@ export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
     const ignoredFalseFields = /^(?:wps_create_document|wps_create_document_with_text)$/i.test(record.name)
       ? new Set<string>(['saved'])
       : new Set<string>();
+    // A DXF create call may explicitly leave the desktop closed. Only the
+    // built-in artifact contract can distinguish that from a failed open:
+    // re-check both non-empty files, not the handler's `exists` booleans.
+    if (record.name === 'cad_generate_dxf' && record.arguments?.openPreview !== true
+      && payload.opened === false && payload.previewExists === true
+      && record.terminalVerification?.status === 'verified'
+      && record.capability?.capabilityId === 'cad.dxf.generate'
+      && record.capability.verification.strategy === 'artifact'
+      && ['path', 'previewPath'].every(field => record.capability?.verification.requiredArtifacts?.includes(field))
+      && ['path', 'previewPath'].every(field => localArtifactExists(payload[field]))) {
+      ignoredFalseFields.add('opened');
+    }
     const declaredProgress = record.terminalVerification?.status === 'verified'
       && record.capability?.verification.successStatuses?.includes(status)
       && ['started', 'queued', 'running', 'waiting_confirmation', 'paused'].includes(status);

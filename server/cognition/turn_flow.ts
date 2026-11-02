@@ -1,4 +1,5 @@
 import { TurnAnalysis } from './turn_analysis';
+import { designerRequest, designerGuidanceRequest, type DesignerRequest } from './designer_contract';
 import { isExplicitConfirmationReply } from '../tools/pending_confirmation';
 import { isStoredMemoryRecallQuestion } from './normalized_action_intent';
 import { isSavedMemoryLookupOnlyRequest } from './saved_memory_intent';
@@ -62,6 +63,10 @@ export interface LumiTurnFlowInput {
 }
 
 export interface LumiTurnFlow {
+  designerRequest?: DesignerRequest | null;
+  designerGuidance?: ReturnType<typeof designerGuidanceRequest>;
+  industryWorkflowEntryId?: string;
+  industryGuidanceRequest?: boolean;
   /** Server-owned contract for the exact routed instruction, shared by execution and completion. */
   acceptedActionContract?: { taskText: string; contract: import('./action_contract').LumiActionContract };
   actionFollowupIntent?: import('./action_continuation').RecentActionFollowupIntent;
@@ -488,6 +493,10 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     : derivedExecution;
 
   const flowWithoutPrompt: Omit<LumiTurnFlow, 'promptOverlay'> = {
+    designerRequest: explicitNoToolInstruction ? null : designerRequest(input.text),
+    designerGuidance: explicitNoToolInstruction ? null : designerGuidanceRequest(input.text),
+    industryWorkflowEntryId: explicitNoToolInstruction ? '' : designerRequest(input.text)?.kind === 'status' ? '' : designerRequest(input.text)?.entryId || '',
+    industryGuidanceRequest: !explicitNoToolInstruction && Boolean(designerGuidanceRequest(input.text)),
     actionFollowupIntent,
     currentAppEditTarget,
     channel: input.channel,

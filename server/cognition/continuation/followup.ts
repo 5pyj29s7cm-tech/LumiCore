@@ -1,4 +1,5 @@
 import { actionInstructionClauses } from '../action_instruction_clauses';
+import { designerStatusRequest } from '../designer_instruction_projection';
 import type { ActionIntentAnalysis } from "../normalized_action_intent";
 import { buildTaskTargetAnchorProjection, outputDocumentInstruction } from "../../conversation/task_target_anchor";
 import { hasMixedStatusExecutionIntent, isImmediateAssistantRestatementRequest, normalizeActionIntent, type NormalizedActionIntent } from "../normalized_action_intent";
@@ -221,6 +222,7 @@ export function classifyConversationActionFollowupIntent(
   state?: ConversationActionContinuationState | null,
   acceptedIntent?: NormalizedActionIntent, analysis?: ActionIntentAnalysis
 ): RecentActionFollowupIntent {
+  if (designerStatusRequest(text)) return 'status';
   if (isImmediateAssistantRestatementRequest(text)) return 'repeat';
   const durableState = normalizeConversationActionState(state);
   const compactText = compact(actionInstructionClauses(text).map(clause => clause.probe).join(''), 500);

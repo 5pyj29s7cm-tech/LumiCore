@@ -1,5 +1,6 @@
 import type { ToolExecutionRecord } from "../../tools/types";
-import { parseRecordJson } from "../action_contract_support";
+import { designerRequest, verifiedDesignerReceipt } from '../designer_contract';
+import { parseRecordJson, expandSuccessfulRecords } from "../action_contract_support";
 import { requiresVisibleAutoCadExecution, requiresAutoCadMcpPlayback, requiresSourceGrounding } from "../action_request";
 import { hasMeaningfulArguments, hasVisibleAutoCadExecutionEvidence } from "../action_desktop_evidence";
 import { hasCreatedArtifact, hasArtifactVerification, hasSourceInspectionEvidence } from './artifact_evidence';
@@ -57,7 +58,12 @@ export function hasEcommerceOperationsEvidence(records: ToolExecutionRecord[], t
   return analyzed || copyProduced || hasActualMediaEvidence(records, 'either') || platformChanged;
 }
 
-export function hasDesignDeliveryEvidence(records: ToolExecutionRecord[], taskText: string): boolean {
+export function hasDesignDeliveryEvidence(records: ToolExecutionRecord[], taskText: string, currentTurn?: { requestId?: string; taskId?: string }): boolean {
+  const request = designerRequest(taskText);
+  if (request) return Boolean(verifiedDesignerReceipt(records, request, currentTurn));
+  // Only the exact stage ledger needs raw failed receipts to reject a stale success.
+  // Generic design evidence retains the pre-existing successful-record boundary.
+  records = expandSuccessfulRecords(records);
   const sourceRequired = requiresSourceGrounding(taskText);
   const wantsCompositePackage = /(?:\u5168\u5957\u8bbe\u8ba1|\u5168\u6848\u8bbe\u8ba1|\u5b8c\u6574\u4ea4\u4ed8\u5305|\u8bbe\u8ba1\u4ea4\u4ed8|\u88c5\u4fee\u4ea4\u4ed8|full\s+(?:design|renovation|interior)|design\s+(?:delivery|package|handoff))/iu.test(taskText);
   const wantsCad = /(?:\bCAD\b|\bDXF\b|\bDWG\b|AutoCAD|\u65bd\u5de5\u56fe|\u5e73\u9762\u56fe)/iu.test(taskText);

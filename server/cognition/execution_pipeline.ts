@@ -1,4 +1,5 @@
 import { mediaContractForRequest } from './contracts/media_contract';
+import { designerRequest } from './designer_contract';
 import { TurnAnalysis } from './turn_analysis';
 import { resolveUserTurn, type TurnResolution } from './turn_resolution';
 import { restrictToolPolicyForExecutionBoundary, restrictVisibleToolRouteForExecutionBoundary } from '../tools/remote_policy';
@@ -119,6 +120,11 @@ function applyCurrentTurnNoMutationConstraint(
   mediaScope: ReturnType<typeof mediaAuthoringMutationScope> = null,
 ): LumiExecutionDecision {
   const originalText = text;
+  if (designerRequest(text)?.forbidsMutation) {
+    return restrictLumiExecutionTools(execution, registry.getCapabilityManifest(undefined, { context: visibilityContext })
+      .filter(entry => entry.operation !== 'observe' || entry.sideEffects.some(effect => effect.type !== 'local_read'))
+      .map(entry => entry.toolName));
+  }
   // A confirmation-only external-commit request deliberately says both
   // "prepare to send" and "do not send now". It must expose the exact
   // external tool so the executor can create a bound pending confirmation;
@@ -425,7 +431,10 @@ export function buildLumiExecutionPipeline(
       mediaScope,
     ),
     taskRelation.binding === 'stale'
-      ? ['*', ...(input.additionalForbiddenTools || [])] : input.additionalForbiddenTools,
+      ? ['*', ...(input.additionalForbiddenTools || [])] : [...(input.additionalForbiddenTools || []),
+        ...(!turnIntent.flow.designerRequest ? ['interior_design_project_create', 'interior_design_project_select'] : []),
+        ...(!turnIntent.flow.designerGuidance ? ['industry_user_guide', 'industry_guidance_preference_set'] : []),
+      ],
   );
   // Resolve the entry ceiling before publishing any capability, plan or schema.
   // Consumers use this same policy/projection; the registry still enforces it.

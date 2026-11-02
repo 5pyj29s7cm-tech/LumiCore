@@ -1,4 +1,4 @@
-import { assertLegacyLegalDataMerged, getDataRoot } from '../config/data_path';
+import { assertLegacyDesignerDataMerged, assertLegacyLegalDataMerged, getDataRoot } from '../config/data_path';
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
@@ -177,6 +177,11 @@ function mountAccountProvisioningRoutes(router: Router, jwtSecret: string, getCo
     if (req.body?.sharedBackendReuse === true && req.body?.nativeProductIdentifier === 'com.lumiai.legal') {
       try { assertLegacyLegalDataMerged(undefined, getDataRoot()); }
       catch { return res.status(409).json({ error: 'Historical legal data has not been merged into this backend. Complete the reviewed merge before opening Legal with shared storage.', code: 'LEGAL_DATA_MERGE_REQUIRED' }); }
+    }
+
+    if (req.body?.sharedBackendReuse === true && req.body?.nativeProductIdentifier === 'com.lumiai.designer') {
+      try { assertLegacyDesignerDataMerged(undefined, getDataRoot()); }
+      catch { return res.status(409).json({ error: 'Historical Designer data has not been merged into this backend. Complete the reviewed merge before opening Designer with shared storage.', code: 'DESIGNER_DATA_MERGE_REQUIRED' }); }
     }
 
     const db = readDatabaseTables(["users"]);

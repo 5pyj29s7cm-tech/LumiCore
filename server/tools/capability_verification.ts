@@ -118,7 +118,7 @@ function valuesEqual(actual: unknown, expected: unknown): boolean {
   return false;
 }
 
-function localArtifactExists(candidate: unknown): boolean {
+export function localArtifactExists(candidate: unknown): boolean {
   if (typeof candidate !== 'string' || !candidate.trim() || /^https?:\/\//i.test(candidate)) return false;
   const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(candidate);
   try {

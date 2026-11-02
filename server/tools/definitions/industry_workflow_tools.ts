@@ -1,3 +1,5 @@
+import { registerDesignProjectTools } from './design_project_tools';
+import { registerIndustryGuidanceTools } from './industry_guidance_tools';
 import { ToolRegistry } from '../registry';
 import { readBusinessLegacyArchive } from '../../industry/legacy_archive';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
@@ -34,6 +36,8 @@ function scope(context?: ToolContext) {
 }
 
 export function registerIndustryWorkflowTools(registry: ToolRegistry): void {
+  registerDesignProjectTools(registry);
+  registerIndustryGuidanceTools(registry);
   registry.register({
     name: 'business_archive_get',
     description: 'Search the signed-in user\'s imported Commerce or Finance history. Historical/test records are references, never current store facts or authorization to resume old actions.',
@@ -324,6 +328,7 @@ export function registerIndustryWorkflowTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         entryId: { type: 'string', description: 'Exact entry id from industry_capability_profile_get.' },
+        projectId: {type: 'string'}, mode: {type: 'string', enum: ['project','standalone']},
       },
       required: ['entryId'],
     },
@@ -354,7 +359,7 @@ export function registerIndustryWorkflowTools(registry: ToolRegistry): void {
         entryId,
         sourceInput: String(context?.actionIntent || ''),
         source: context?.source || 'industry_natural_language',
-        context: { source: context?.source || 'industry_natural_language' },
+        context: { source: context?.source || 'industry_natural_language', ...(args.projectId ? { projectId: String(args.projectId) } : {}), ...(args.mode ? {mode: String(args.mode)} : {}) },
         idempotencyKey: idempotencyKey ? `industry-start:${idempotencyKey}:${entryId}` : undefined,
         conversationId: context?.conversationId,
         conversationTaskId: context?.taskId,
@@ -405,6 +410,10 @@ export function registerIndustryWorkflowTools(registry: ToolRegistry): void {
     handler: async (args, context) => {
       const activeScope = scope(context);
       const taskId = String(args.taskId || '').trim();
+      const boundTaskId = String(context?.industryWorkflowTaskId || '').trim();
+      if (boundTaskId && taskId !== boundTaskId) {
+        throw new Error('Requested task does not match the bound industry workflow.');
+      }
       const task = getIndustryWorkflowTask(activeScope, taskId);
       if (!task) throw new Error('Industry workflow task was not found in the active user scope.');
       const previousVerification = task.metadata?.workTakeoverVerification;

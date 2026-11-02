@@ -20,6 +20,7 @@ export interface KnowledgeExtractionResult {
 }
 
 export interface KnowledgeEntry {
+  interiorProjectAsset?: import('../../design/project_assets').InteriorProjectAsset;
   archiveId?: string;
   archiveKind?: string;
   sourceConversationId?: string;

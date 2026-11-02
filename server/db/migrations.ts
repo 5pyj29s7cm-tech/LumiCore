@@ -2,6 +2,8 @@ import type sqlite3 from 'sqlite3';
 
 // Schema migrations own these indexes; ordinary persistence preserves them.
 export const PERFORMANCE_INDEX_SQL = [
+  `CREATE INDEX IF NOT EXISTS idx_interior_projects_org_status ON interior_projects(orgId, status, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_interior_project_assets_project ON interior_project_assets(orgId, projectId, status, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_interactions_user_conv ON interactions(userId, conversationId)`,
   `CREATE INDEX IF NOT EXISTS idx_interactions_agent ON interactions(agentId)`,
   `CREATE INDEX IF NOT EXISTS idx_memories_user_type_tier ON memories(userId, type, tier)`,

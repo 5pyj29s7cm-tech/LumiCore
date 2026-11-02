@@ -1,3 +1,7 @@
+import { designerRequest, verifiedDesignerReceipt } from './designer_contract';
+import { formatVerifiedDesignerCadFiles } from './designer_cad_result';
+import { formatVerifiedDesignProjectStatus } from '../design/status_response';
+import { DESIGNER_RESULT_MESSAGES } from '../regions/messages/designer_result_messages';
 import { isReportedStatusExcerpt } from '../work_product/response_execution_claims';
 import { affirmativeActionInstructionClauses } from './action_instruction_clauses';
 import { hasTerminalExecutionClaim } from './execution_claims';
@@ -501,6 +505,9 @@ export function tryFinalizeVerifiedBoundedAction(
 }
 
 export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResultFinalizerResult {
+  // A later failed Designer completion must remain visible even if generic
+  // receipt coalescing retains an earlier successful identical tool call.
+  const designerCadRecords = input.toolRecords || [];
   input = {
     ...input,
     // Keep this projection local to finalization. Legacy/MCP adapters may put
@@ -565,6 +572,30 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
         return !labels.some(label => label && explanation.replace(/\s+/gu, '').includes((label + '\n' + source.body).replace(/\s+/gu, '')));
       });
     return { ...missingInput, text: [...sources.map(source => source.name + '\n' + source.body), explanation].join('\n\n') };
+  }
+  const design = designerRequest(actionText);
+  if (design) {
+    const copy = DESIGNER_RESULT_MESSAGES[isChineseText(actionText) ? 'zh' : 'en'];
+    if (design.additionalObligations?.length) return { text: copy.partial, blocked: true,
+      reason: 'The selected design stage does not verify additional explicit obligations.' };
+    // Preserve latest current-turn failure/uncertainty instead of coalescing it into an older success.
+    const payload = verifiedDesignerReceipt(designerCadRecords, design, input);
+    if (payload) {
+      if (design.kind === 'status') {
+        const text = formatVerifiedDesignProjectStatus({ name: 'interior_design_project_status', arguments: {}, result: JSON.stringify(payload),
+          terminalVerification: { status: 'verified', strategy: 'measured', reason: 'Exact current receipt checked by verifiedDesignerReceipt' } }, actionText);
+        if (text) return { text, blocked: false, reason: 'Current verified design project ledger; no new design execution.' };
+      } else if (!design.requiresStage) {
+        return { text: `${copy.created}：${String(payload.project.name || payload.project.id)}\n${copy.projectId}：${String(payload.project.id)}\n${copy.containerLimit}`,
+          blocked: false, reason: 'Current verified project container receipt only.' };
+      } else {
+        const paths = Array.isArray(payload.archivedFilePaths) ? payload.archivedFilePaths.filter((path: unknown) => typeof path === 'string') : [];
+        return { text: [`${copy.stage}：${design.entryId}`, `${copy.taskId}：${String(payload.task.id)}`,
+          ...paths.map((path: string) => `${copy.file}：${path}`), copy.stageLimit].join('\n'),
+          blocked: false, reason: 'Current verified exact design workflow receipt.' };
+      }
+    }
+    return { text: copy.blocked, blocked: true, reason: 'Missing current verified exact design receipt.' };
   }
   const business = groundedBusinessAnalysis(input);
   if (business) return business;
@@ -750,6 +781,8 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     && !hasMediaPlaybackEvidence(input.toolRecords || [], actionText, { requestId: input.requestId, taskId: input.taskId })) {
     return { text: desktopCompletionReviewText(actionText, desktopReview), blocked: true, reason: DESKTOP_COMPLETION_REVIEW_REASON };
   }
+  const verifiedDesignerCad = formatVerifiedDesignerCadFiles({ ...input, toolRecords: designerCadRecords });
+  if (verifiedDesignerCad) return verifiedDesignerCad;
   const protocolCadResult = protocolLeak && formatGroundedCadRunResult(input);
   if (protocolCadResult) return protocolCadResult;
   if (protocolLeak) return protocolLeak;

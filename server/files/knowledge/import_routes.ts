@@ -2,7 +2,8 @@ import type { Router, Request, Response } from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
-import { flushDBOrThrow } from "../../../db_layer";
+import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from "../../../db_layer";
+import { runSerializedMutation } from '../../persistence/durable_scope_mutation';
 import { readKnowledgeFileState, commitKnowledgeFileState } from "../knowledge_state";
 import { ingestDocument } from "../../agents/rag";
 import { createRequestAbortController } from "../../http/request_abort";
@@ -16,6 +17,9 @@ import { resolveLocalImportPath } from './paths';
 import { captureKnowledgeSource, extractGeneratedTextKnowledge } from './extraction';
 import { applyExtractionMeta, applyIngestionManifest, sameKnowledgeFileOwnership, buildEntry } from './metadata';
 import { ensureOrgArticleFromFile } from './file_ingestion';
+import { getInteriorProject, personalInteriorProjectScope } from '../../design/projects';
+import { createInteriorProjectAsset, normalizeInteriorAssetCategory } from '../../design/project_assets';
+import { logAudit } from '../../org/db';
 
 export function registerKnowledgeImportRoutes(router: Router): void {
 
@@ -33,6 +37,12 @@ router.post('/files/upload', requireAuth, upload.array('files', MAX_UPLOAD_FILES
     const scope = getFileScope(req);
     assertKnowledgeWriteAccess(scope);
     const mediaSource = req.body?.purpose === 'media_source';
+    const interiorProjectId = String(req.body?.interiorProjectId || '').trim();
+    const interiorAssetCategory = interiorProjectId ? normalizeInteriorAssetCategory(req.body?.interiorAssetCategory) : undefined;
+    const interiorProjectScopeId = scope.domain === 'work' ? String(scope.orgId || '') : personalInteriorProjectScope(userId);
+    if (interiorProjectId && !getInteriorProject(interiorProjectScopeId, interiorProjectId)) {
+      return res.status(404).json({ error: 'Interior project not found' });
+    }
     if (mediaSource) {
       if (uploadedFiles.length !== 1) throw new Error('Choose one source image at a time.');
       await validateMediaSourceUpload(uploadedFiles[0], request.signal);
@@ -66,6 +76,65 @@ router.post('/files/upload', requireAuth, upload.array('files', MAX_UPLOAD_FILES
     authorization.assertCurrent();
     commitKnowledgeFileState(db);
     await flushDBOrThrow();
+    if (interiorProjectId && saved.length) {
+      // Knowledge bytes have their own durable owner. Only project associations
+      // share the project CRUD lock and rollback boundary.
+      await runSerializedMutation(`interior-project:${interiorProjectScopeId}`, async () => {
+        authorization.assertCurrent();
+        request.signal.throwIfAborted();
+        if (!getInteriorProject(interiorProjectScopeId, interiorProjectId)) {
+          throw Object.assign(new Error('Interior project not found; uploaded knowledge files were retained.'), {status:404});
+        }
+        const writes: Array<{table:'interiorProjectAssets'|'auditLog'; before?:any; after:any}> = [];
+        let persisted = false;
+        const associations: any[] = [];
+        try {
+          for (const entry of saved) {
+            const existing = readDatabaseTables(['interiorProjectAssets']).interiorProjectAssets.find((row:any) =>
+              row.orgId === interiorProjectScopeId && row.projectId === interiorProjectId && row.fileId === entry.id && row.status === 'active');
+            const before = existing ? structuredClone(existing) : undefined;
+            const uploadedFile = uploadedFiles[entry.uploadIndex];
+            const asset = createInteriorProjectAsset({
+              orgId:interiorProjectScopeId, projectId:interiorProjectId, fileId:entry.id,
+              displayName:entry.displayName || entry.name || entry.id, mimeType:uploadedFile?.mimetype || '', rawSize:entry.rawSize ?? uploadedFile?.size,
+              category:interiorAssetCategory, uploadedBy:userId, extractionStatus:entry.extractionStatus, orgArticleId:entry.orgArticleId,
+            });
+            writes.push({table:'interiorProjectAssets',before,after:asset});
+            associations.push(asset);
+          }
+          if (scope.domain === 'work' && scope.orgId) {
+            const beforeIds = new Set(readDatabaseTables(['auditLog']).auditLog.map((row:any)=>row.id));
+            logAudit({orgId:scope.orgId,userId,action:'interior_project.assets_uploaded',resourceType:'interior_project',resourceId:interiorProjectId,
+              details:{category:interiorAssetCategory,fileCount:saved.length,fileIds:saved.map(file=>file.id)},ipAddress:req.ip,userAgent:req.get('user-agent')});
+            for (const row of readDatabaseTables(['auditLog']).auditLog) {
+              if (!beforeIds.has(row.id)) writes.push({table:'auditLog',after:structuredClone(row)});
+            }
+          }
+          await flushDBOrThrow();
+          persisted = true;
+          authorization.assertCurrent();request.signal.throwIfAborted();
+          saved.forEach((entry,index)=>{entry.interiorProjectAsset=associations[index];});
+        } catch (error) {
+          if (persisted || writes.length === 0) throw error;
+          const state=readDatabaseTables(['interiorProjectAssets','auditLog']);
+          for (const write of [...writes].reverse()) {
+            const index=state[write.table].findIndex((row:any)=>row.id===write.after.id);
+            if (index < 0 || JSON.stringify(state[write.table][index]) !== JSON.stringify(write.after)) continue;
+            if (write.before) state[write.table][index]=write.before;
+            else state[write.table].splice(index,1);
+          }
+          commitDatabaseTables(state);
+          let rollbackPersisted=false;
+          try { await flushDBOrThrow();rollbackPersisted=true; } catch { /* Disk outcome remains unknown; memory no longer retains the failed association. */ }
+          authorization.assertCurrent();request.signal.throwIfAborted();
+          throw Object.assign(new Error(rollbackPersisted
+            ? 'Knowledge files were saved, but their project association could not be saved and was rolled back.'
+            : 'Knowledge files were saved; the project association disk state is unknown. Reload project assets before retrying.'),
+          {status:503,code:'PROJECT_ASSET_PERSISTENCE_UNAVAILABLE',knowledgeFilesRetained:true,
+            associationState:rollbackPersisted ? 'rolled_back' : 'unknown',files:saved});
+        }
+      });
+    }
     authorization.assertCurrent();
     request.signal.throwIfAborted();
     res.status(saved.length > 0 ? 200 : 400).json({
@@ -73,7 +142,12 @@ router.post('/files/upload', requireAuth, upload.array('files', MAX_UPLOAD_FILES
       files: saved, failed, ...(saved.length === 0 ? { error: failed[0]?.error || 'No files uploaded' } : {}),
     });
   } catch (err: any) {
-    if (!request.signal.aborted) sendRouteError(res, err);
+    if (!request.signal.aborted) {
+      if (err?.code === 'PROJECT_ASSET_PERSISTENCE_UNAVAILABLE') return res.status(503).json({
+        error:err.message,code:err.code,knowledgeFilesRetained:true,associationState:err.associationState,files:err.files,
+      });
+      sendRouteError(res, err);
+    }
   } finally {
     request.dispose();
     // Multer owns these temporary paths; a replay/failure must not leave its staged copy behind.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design Studio Pack"
+  short_description: "Design briefs, review and interior planning"
+  default_prompt: "Use $design-studio-pack to prepare a design brief or review the supplied interior-project evidence. State assumptions and next steps."

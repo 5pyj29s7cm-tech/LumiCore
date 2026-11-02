@@ -577,6 +577,26 @@ export const INITIAL_SCHEMA_SQL = `
         createdAt TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS interior_projects (
+        id TEXT PRIMARY KEY,
+        orgId TEXT NOT NULL,
+        ownerUserId TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'brief',
+        payload TEXT NOT NULL DEFAULT '{}',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS interior_project_assets (
+        id TEXT PRIMARY KEY,
+        orgId TEXT NOT NULL,
+        projectId TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        payload TEXT NOT NULL DEFAULT '{}',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS notifications (
         id TEXT PRIMARY KEY,
         userId TEXT NOT NULL,

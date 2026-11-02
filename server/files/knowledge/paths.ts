@@ -5,7 +5,7 @@ import os from "os";
 import { spawn } from "child_process";
 import { isPathInsideRoot } from '../../../shared/file_identity';
 import { readKnowledgeFileState } from "../knowledge_state";
-import { getDataPath, getGeneratedOutputDir } from "../../config/data_path";
+import { getDataPath, getGeneratedOutputDir, resolveMigratedDataFile } from "../../config/data_path";
 import { collectChatArtifacts, artifactContentSnapshot, publicArtifactSnapshotDelivery } from "../../conversation/chat_artifacts";
 import { sameArtifactPath } from "../../tools/artifact_evidence";
 import { GENERATED_FILE_EXTS } from './formats';
@@ -30,7 +30,8 @@ export function resolveGeneratedDownloadPath(value: unknown, req?: Request): str
     throw err;
   }
   const expanded = raw.replace(/^~(?=$|[\\/])/, os.homedir());
-  const resolved = path.resolve(expanded);
+  const requestedPath = path.resolve(expanded);
+  const resolved = resolveMigratedDataFile(requestedPath);
   if (!GENERATED_FILE_EXTS.test(resolved)) {
     const err: any = new Error('Unsupported generated file type');
     err.status = 400;
@@ -44,10 +45,18 @@ export function resolveGeneratedDownloadPath(value: unknown, req?: Request): str
   }
   const generatedRoot = fs.realpathSync.native(getGeneratedOutputDir());
   const realPath = fs.realpathSync.native(resolved);
-  const disclosure = publicArtifactSnapshotDelivery(artifactContentSnapshot(realPath), realPath,
-    { ...(req?.user?.orgId ? { domain: 'work', orgId: req.user.orgId } : { userId: req?.user?.uid, domain: 'personal' }),
-      conversationId: String(req?.query.conversationId || '') || undefined });
-  if (disclosure.deliveryBlocked) throw Object.assign(new Error('This generated file is not available for public delivery.'), { status: 403 });
+  // File bytes move; their accepted request/receipt identities do not. Check
+  // disclosure against every exact historical identity as well as the target.
+  const evidencePaths = new Set([requestedPath, realPath]);
+  const assertPublic = () => {
+    const snapshot = artifactContentSnapshot(realPath);
+    for (const sourcePath of evidencePaths) {
+      const disclosure = publicArtifactSnapshotDelivery(snapshot, sourcePath,
+        { ...(req?.user?.orgId ? { domain: 'work' as const, orgId: req.user.orgId } : { userId: req?.user?.uid, domain: 'personal' as const }),
+          conversationId: String(req?.query.conversationId || '') || undefined });
+      if (disclosure.deliveryBlocked) throw Object.assign(new Error('This generated file is not available for public delivery.'), { status: 403 });
+    }
+  };
   // Scope conversation links to actual server-owned output receipts, including
   // files saved outside the shared output directory. Prose grants no access.
   const conversationId = String(req?.query.conversationId || '').trim();
@@ -63,17 +72,26 @@ export function resolveGeneratedDownloadPath(value: unknown, req?: Request): str
     const ownedOutput = membershipMatches && (db.interactions || []).some((item: any) =>
       item.conversationId === conversationId && item.userId === req?.user?.uid
       && (item.role === 'assistant' || Boolean(item.response))
-      && collectChatArtifacts(item.toolCalls, conversationId).some(artifact => sameArtifactPath(artifact.path, resolved)));
+      && collectChatArtifacts(item.toolCalls, conversationId).some(artifact => {
+        if (path.basename(artifact.path).toLowerCase() !== path.basename(resolved).toLowerCase()) return false;
+        if (!sameArtifactPath(resolveMigratedDataFile(artifact.path), resolved)) return false;
+        evidencePaths.add(artifact.path);
+        return true;
+      }));
     if (!ownedOutput || redirected) {
       throw Object.assign(new Error('File is not a verified output of this conversation'), { status: 403 });
     }
+    assertPublic();
     return realPath;
   }
-  if (!isInsideRoot(realPath, generatedRoot)) {
+  // A historical external-root link did not have unscoped generated access.
+  // Moving its bytes must not create a new authorization shortcut.
+  if (!sameArtifactPath(requestedPath, resolved) || !isInsideRoot(realPath, generatedRoot)) {
     const err: any = new Error('Generated file path is outside the generated-output directory');
     err.status = 403;
     throw err;
   }
+  assertPublic();
   return realPath;
 }
 

@@ -6,6 +6,7 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { mountInteriorProjectRoutes } from '../design/project_routes';
 import jwt from 'jsonwebtoken';
 import { requireAuth, requireOrgRole, requireOrgMember, optionalAuth } from '../middleware/auth';
 import * as Org from './org';
@@ -47,6 +48,7 @@ function canReadOrganizationResource(input: {
 
 export function mountOrgRoutes(baseRouter: Router, io?: SocketIOServer) {
   const router = durableOrganizationRouter(baseRouter);
+  mountInteriorProjectRoutes(baseRouter);
   mountOrganizationIdentityRoutes(router);
   mountOrganizationWorkRoutingRoutes(router);
   mountOrganizationResourceRoutes(router);

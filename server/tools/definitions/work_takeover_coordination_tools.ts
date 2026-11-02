@@ -1,3 +1,4 @@
+import { recordIndustryWorkflowExecution } from '../../industry/workflow_service';
 import { cnWorkTakeoverMessages, formatCnWorkTakeoverVerification } from "../../regions/messages/work_takeover_messages";
 import { resolveWorkTakeoverIntakeTask } from '../../work_takeover/intake';
 import { boundedWorkTakeoverSteps, runWorkTakeoverPreparation } from '../../work_takeover/preparation_loop';
@@ -52,6 +53,13 @@ export function registerWorkTakeoverCoordinationTools(registry: ToolRegistry): v
     },
     handler: async (args, context) => {
       const { userId, task } = requireTask(args, context);
+      if (task.metadata?.industryWorkflow?.productLine === 'design' && args.record !== false) {
+        const recorded = recordIndustryWorkflowExecution({ userId, domain: task.domain === 'work' ? 'work' : 'personal', orgId: task.orgId,
+          taskId: task.id, resultText: task.result || 'No current verified design result supplied.',
+          filePaths: asStringArray(args.filePaths) || [], toolRecords: context?.getCurrentToolRecords?.() || [], source: 'work_takeover_task_verify_result' });
+        return JSON.stringify({ task: recorded.task, verification: recorded.verification,
+          note: 'Design verification recorded through the canonical current-receipt and project prerequisite owner.' }, null, 2);
+      }
 
       let activeWindowRaw = '';
       let runningProcessesRaw = '';

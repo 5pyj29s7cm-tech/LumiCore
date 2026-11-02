@@ -5,14 +5,15 @@ import crypto from 'node:crypto';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { DatabaseSync, backup, type SQLOutputValue, type SQLInputValue } from 'node:sqlite';
 import { claimDataRootForMigration, releaseDataRootLease } from '../server/runtime/data_root_lease';
-import { legacyLegalDataFingerprint, legalDataMergeReceiptPath } from '../server/config/data_path';
+import { reviewedDesignerSchemaProjection } from './designer_merge_schema';
+import { legacyLegalDataFingerprint, legalDataMergeReceiptPath, designerDataMergeReceiptPath } from '../server/config/data_path';
 import { ensurePrivateRuntimeDirectory, restrictOwnerAccess } from '../server/config/runtime_file_security';
 
 type Row = Record<string, SQLOutputValue>;
 interface Table { name: string; sql: string; schema: string; columns: string[]; pk: string[]; rows: Row[]; digest: string }
-interface FileEntry { path: string; sha256: string; bytes: number; link?: boolean; action: 'copy' | 'identical' | 'conflict' | 'archive' | 'merge-keys' | 'merge-owner'; additions?: number }
+interface FileEntry { path: string; sha256: string; bytes: number; link?: boolean; action: 'copy' | 'identical' | 'conflict' | 'archive' | 'merge-keys' | 'merge-owner'; additions?: number; retainedCurrentKeys?: string[] }
 export interface LegalDataMergePlan {
-  version: 1; resolutionPolicy?: 'shared_history_v1'; resolutions: Array<{ table?: string; path?: string; pkDigest?: string; strategy: string }>; sourceRoot: string; targetRoot: string; sourceFingerprint: string; inputDigest: string;
+  version: 1; sourceVariant?: 'designer'; schemaProjections?: Array<{ table: string; sourceSchema: string; targetSchema: string; defaults: Record<string, string | null>; reordered: boolean }>; resolutionPolicy?: 'shared_history_v1'; resolutions: Array<{ table?: string; path?: string; pkDigest?: string; strategy: string }>; sourceRoot: string; targetRoot: string; sourceFingerprint: string; inputDigest: string;
   tables: Array<{ name: string; sourceRows: number; insertRows: number; identicalRows: number; archivedRows: number; conflicts: number; pk: string[] }>;
   conflicts: Array<{ kind: string; table?: string; path?: string; pkDigest?: string }>;
   files: FileEntry[]; deferred: Array<{ table: string; pkDigest: string; originalStatus: string }>;
@@ -110,12 +111,12 @@ function checkedDataFile(root: string, relative: string): string | null {
   }
   return filename;
 }
-function mergedKeys(source: string, target: string): { value: Record<string, unknown>; additions: number; conflict: boolean } {
+function mergedKeys(source: string, target: string, retainMainRelay = false): { value: Record<string, unknown>; additions: number; conflict: boolean; retainedCurrentKeys: string[] } {
   const a: unknown = JSON.parse(fs.readFileSync(source, 'utf8')); const b: unknown = JSON.parse(fs.readFileSync(target, 'utf8'));
   if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) || Array.isArray(b)) throw new Error('keys.json must contain an object.');
-  const value = { ...b } as Record<string, unknown>; let additions = 0; let conflict = false;
-  for (const [name, item] of Object.entries(a)) { if (Object.hasOwn(value, name)) { if (stable(value[name]) !== stable(item)) conflict = true; } else { value[name] = item; additions++; } }
-  return { value, additions, conflict };
+  const value = { ...b } as Record<string, unknown>; let additions = 0; let conflict = false; const retainedCurrentKeys: string[] = [];
+  for (const [name, item] of Object.entries(a)) { if (Object.hasOwn(value, name)) { if (stable(value[name]) !== stable(item)) { if (retainMainRelay && ['RELAY_API_KEY', 'RELAY_BASE_URL'].includes(name)) retainedCurrentKeys.push(name); else conflict = true; } } else { value[name] = item; additions++; } }
+  return { value, additions, conflict, retainedCurrentKeys };
 }
 
 type JsonObject = Record<string, unknown>;
@@ -185,10 +186,22 @@ function mergeSetting(name: string, incoming: unknown, current: unknown): unknow
   if (/^(?:emotion_|him_|(?:vision|world|retrieval_model|llm|generation)_prefs_|voice_preference$|(?:ollama|lmstudio)_config$|provider_probe_|scheduler_task_runtime_state_v1$|autonomous_.*_last_run:|lumi_sleep_cycle_state_|memory_test_provenance_repair_v1$|learning_evidence_repair_v2$|__lumi_system_flags$|__lumi_collection:skillDownloads$)/.test(name)) return current;
   throw new Error('Unreviewed setting owner');
 }
-function resolvedRow(table: Table, incoming: Row, current: Row, policy: boolean): Row | undefined {
+function resolvedRow(table: Table, incoming: Row, current: Row, policy: boolean, designer = false): Row | undefined {
   if (!policy) return undefined;
   if (table.name === 'users' || table.name === 'founder_vision' || table.name === 'generated_archive_scopes') return current;
   if (table.name === 'settings') return { ...current, value: JSON.stringify(mergeSetting(String(incoming.key), json(incoming.value), json(current.value))) };
+  if (designer && table.name === 'conversation_action_receipts') {
+    const comparable = (row: Row): unknown => {
+      const envelope = json(row.envelope), timestamp = row.createdAt;
+      if (!object(envelope) || typeof timestamp !== 'string' || !Number.isFinite(Date.parse(timestamp))
+        || new Date(timestamp).toISOString() !== timestamp || envelope.completedAt !== timestamp) return undefined;
+      const { completedAt: _time, ...evidence } = envelope;
+      const { createdAt: _created, envelope: _raw, ...columns } = row;
+      return { columns, evidence };
+    };
+    const a = comparable(incoming), b = comparable(current);
+    return a !== undefined && b !== undefined && stable(a) === stable(b) ? current : undefined;
+  }
   if (table.name === 'conversation_action_tasks') {
     if (!['conversationId', 'userId', 'domain', 'orgId', 'rootUserMessageId', 'parentTaskId', 'goal', 'intentKind', 'operation', 'target'].every(field => incoming[field] === current[field])) return undefined;
     return Number(incoming.revision) > Number(current.revision) ? incoming : current;
@@ -231,8 +244,9 @@ function resolvedJsonFile(relative: string, source: string, target: string): unk
   throw new Error('No reviewed file merge owner');
 }
 
-export function planLegalDataMerge(source: string, target: string, options: { resolveKnownConflicts?: boolean } = {}): LegalDataMergePlan {
-  const policy = options.resolveKnownConflicts === true;
+export function planLegalDataMerge(source: string, target: string, options: { resolveKnownConflicts?: boolean; sourceVariant?: 'designer' } = {}): LegalDataMergePlan {
+  if (options.sourceVariant !== undefined && options.sourceVariant !== 'designer') throw new Error('Unsupported source variant.');
+  const designer = options.sourceVariant === 'designer'; const policy = options.resolveKnownConflicts === true;
   const { sourceRoot, targetRoot } = roots(source, target); const sourceDb = open(sourceRoot); const targetDb = open(targetRoot);
   try {
     sourceDb.exec('BEGIN'); targetDb.exec('BEGIN');
@@ -242,20 +256,22 @@ export function planLegalDataMerge(source: string, target: string, options: { re
     const targetByName = new Map(targetTables.map(table => [table.name, table]));
     const expectedTables = targetTables.map(table => ({ ...table, rows: [...table.rows] }));
     const expectedByName = new Map(expectedTables.map(table => [table.name, table]));
-    const plan: LegalDataMergePlan = { version: 1, ...(policy ? { resolutionPolicy: 'shared_history_v1' as const } : {}), resolutions: [], sourceRoot, targetRoot, sourceFingerprint: legacyLegalDataFingerprint(sourceRoot), inputDigest: '', tables: [], files: [], conflicts: [], deferred: [], continuationPointers: [], databaseDigests: { source: digest(sourceTables.map(table => [table.name, table.digest])), target: digest(targetTables.map(table => [table.name, table.digest])) }, expectedDatabaseDigest: '' };
+    const plan: LegalDataMergePlan = { version: 1, ...(designer ? { sourceVariant: 'designer' as const, schemaProjections: [] } : {}), ...(policy ? { resolutionPolicy: 'shared_history_v1' as const } : {}), resolutions: [], sourceRoot, targetRoot, sourceFingerprint: legacyLegalDataFingerprint(sourceRoot), inputDigest: '', tables: [], files: [], conflicts: [], deferred: [], continuationPointers: [], databaseDigests: { source: digest(sourceTables.map(table => [table.name, table.digest])), target: digest(targetTables.map(table => [table.name, table.digest])) }, expectedDatabaseDigest: '' };
     for (const table of sourceTables) {
       const other = targetByName.get(table.name); const stat = { name: table.name, sourceRows: table.rows.length, insertRows: 0, identicalRows: 0, archivedRows: 0, conflicts: 0, pk: table.pk };
       plan.tables.push(stat);
-      if (!other || table.schema !== other.schema || table.pk.length === 0) { plan.conflicts.push({ kind: 'schema_or_primary_key_mismatch', table: table.name }); stat.conflicts++; continue; }
+      const projection = other && designer && policy && table.schema !== other.schema && stable(table.pk) === stable(other.pk) ? reviewedDesignerSchemaProjection(table.name, table.sql, other.sql, table.columns, other.columns) : null;
+      if (!other || table.schema !== other.schema && !projection || table.pk.length === 0) { plan.conflicts.push({ kind: 'schema_or_primary_key_mismatch', table: table.name }); stat.conflicts++; continue; }
+      if (projection) plan.schemaProjections!.push({ table: table.name, sourceSchema: table.schema, targetSchema: other.schema, ...projection });
       const existing = new Map(other.rows.map(row => [key(row, table), row]));
       for (const original of table.rows) {
         const pkDigest = digest(key(original, table));
         if (defer(table, original, policy)) { stat.archivedRows++; plan.deferred.push({ table: table.name, pkDigest, originalStatus: String(original.status || '') }); continue; }
-        let row: Row; try { row = normalizedRow(original, table, sourceRoot, targetRoot, policy); } catch { stat.conflicts++; plan.conflicts.push({ kind: 'invalid_known_owner_record', table: table.name, pkDigest }); continue; }
+        let row: Row; try { row = normalizedRow(original, table, sourceRoot, targetRoot, policy); if (projection) row = Object.fromEntries(other.columns.map(column => [column, Object.hasOwn(row, column) ? row[column] : projection.defaults[column]])); } catch { stat.conflicts++; plan.conflicts.push({ kind: 'invalid_known_owner_record', table: table.name, pkDigest }); continue; }
         const current = existing.get(key(row, table));
         if (current) { if (stable(current) === stable(row)) stat.identicalRows++; else {
-          let resolved: Row | undefined; try { resolved = resolvedRow(table, row, current, policy); } catch { /* Invalid business identities remain conflicts. */ }
-          if (resolved) { const expected = expectedByName.get(table.name)!; expected.rows[expected.rows.findIndex(item => key(item, table) === key(row, table))] = resolved; stat.identicalRows++; plan.resolutions.push({ table: table.name, pkDigest, strategy: table.name === 'settings' ? 'merge_existing_setting_owner' : 'retain_current_identity_or_newer_compatible_task' }); }
+          let resolved: Row | undefined; try { resolved = resolvedRow(table, row, current, policy, designer); } catch { /* Invalid business identities remain conflicts. */ }
+          if (resolved) { const expected = expectedByName.get(table.name)!; expected.rows[expected.rows.findIndex(item => key(item, table) === key(row, table))] = resolved; stat.identicalRows++; plan.resolutions.push({ table: table.name, pkDigest, strategy: table.name === 'settings' ? 'merge_existing_setting_owner' : table.name === 'conversation_action_receipts' ? 'retain_current_timestamp_only_receipt_duplicate' : 'retain_current_identity_or_newer_compatible_task' }); }
           else { stat.conflicts++; plan.conflicts.push({ kind: 'same_primary_key_different_value', table: table.name, pkDigest }); }
         } }
         else { expectedByName.get(table.name)!.rows.push(row); stat.insertRows++; if (table.name === 'conversations' && String(original.actionContinuationState || '{}') !== '{}') plan.continuationPointers.push({ table: table.name, pkDigest }); }
@@ -264,8 +280,8 @@ export function planLegalDataMerge(source: string, target: string, options: { re
     for (const file of fileEntries(sourceRoot)) {
       const reviewedArchive = policy && /^(?:web_login|skills|private|runtime|quarantine|generated-library)\//.test(file.path) || policy && /^generated\/\.video-assembly-[^/]+\/progress\.json$/.test(file.path);
       const targetFile = file.link || archiveFile(file.path) || reviewedArchive ? null : checkedDataFile(targetRoot, file.path);
-      const other = !file.link && targetFile ? { sha256: fileDigest(targetFile) } : undefined; let action: FileEntry['action'] = file.link || archiveFile(file.path) || reviewedArchive ? 'archive' : !other ? 'copy' : file.sha256 === other.sha256 ? 'identical' : 'conflict'; let additions: number | undefined;
-      if (action === 'conflict' && file.path === 'keys.json') { const merged = mergedKeys(path.join(sourceRoot, 'data', file.path), path.join(targetRoot, 'data', file.path)); if (!merged.conflict) { action = 'merge-keys'; additions = merged.additions; } }
+      const other = !file.link && targetFile ? { sha256: fileDigest(targetFile) } : undefined; let action: FileEntry['action'] = file.link || archiveFile(file.path) || reviewedArchive ? 'archive' : !other ? 'copy' : file.sha256 === other.sha256 ? 'identical' : 'conflict'; let additions: number | undefined; let retainedCurrentKeys: string[] | undefined;
+      if (action === 'conflict' && file.path === 'keys.json') { const merged = mergedKeys(path.join(sourceRoot, 'data', file.path), path.join(targetRoot, 'data', file.path), designer && policy); if (!merged.conflict) { action = 'merge-keys'; additions = merged.additions; if (merged.retainedCurrentKeys.length) { retainedCurrentKeys = merged.retainedCurrentKeys; plan.resolutions.push({ path: file.path, strategy: 'retain_current_relay_configuration' }); } } }
       if (policy && ['conflict', 'copy'].includes(action) && /^(?:org\/legal_cases|mcp_config|messaging|messaging\/(?:delivery_receipts|message_journal))\.json$/.test(file.path)) {
         try { resolvedJsonFile(file.path, path.join(sourceRoot, 'data', file.path), path.join(targetRoot, 'data', file.path)); action = 'merge-owner'; plan.resolutions.push({ path: file.path, strategy: 'merge_existing_file_owner' }); } catch { /* Unsettled or incompatible records stay blocked. */ }
       }
@@ -273,7 +289,7 @@ export function planLegalDataMerge(source: string, target: string, options: { re
         const raw = file.bytes <= 64 * 1024 * 1024 ? fs.readFileSync(path.join(sourceRoot, 'data', file.path), 'utf8') : null;
         if (raw === null || reroot(raw, sourceRoot, targetRoot) !== raw) { action = 'conflict'; plan.conflicts.push({ kind: 'legacy_json_path_reference_requires_review', path: file.path }); }
       }
-      plan.files.push({ ...file, action, ...(additions === undefined ? {} : { additions }) });
+      plan.files.push({ ...file, action, ...(additions === undefined ? {} : { additions }), ...(retainedCurrentKeys ? { retainedCurrentKeys } : {}) });
       if (action === 'conflict' && !plan.conflicts.some(conflict => conflict.path === file.path)) plan.conflicts.push({ kind: 'same_file_path_different_value', path: file.path });
     }
     plan.expectedDatabaseDigest = businessDatabaseDigest(expectedTables);
@@ -286,13 +302,16 @@ function privateJson(filename: string, value: unknown): void {
   try { fs.linkSync(temporary, filename); } finally { fs.rmSync(temporary, { force: true }); }
 }
 export async function applyLegalDataMerge(plan: LegalDataMergePlan, backupDirectory: string): Promise<{ phase: string; receiptPath: string }> {
+  if (plan.sourceVariant !== undefined && plan.sourceVariant !== 'designer') throw new Error('Unsupported source variant.');
+  const designer = plan.sourceVariant === 'designer'; const variantFields = designer ? { sourceVariant: 'designer' as const } : {};
+  const sourceBackupName = designer ? 'designer-source.sqlite' : 'legal-source.sqlite';
   if (plan.version !== 1 || plan.inputDigest !== digest({ ...plan, inputDigest: '' })) throw new Error('Plan digest is invalid.');
   if (!path.isAbsolute(backupDirectory)) throw new Error('Backup directory must be absolute.');
   const backupRoot = path.resolve(backupDirectory); safeRoot(path.dirname(backupRoot));
-  const { sourceRoot, targetRoot } = roots(plan.sourceRoot, plan.targetRoot); const receiptPath = legalDataMergeReceiptPath(sourceRoot, targetRoot);
+  const { sourceRoot, targetRoot } = roots(plan.sourceRoot, plan.targetRoot); const receiptPath = designer ? designerDataMergeReceiptPath(sourceRoot, targetRoot) : legalDataMergeReceiptPath(sourceRoot, targetRoot);
   if (fs.existsSync(receiptPath)) {
     const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8')) as Record<string, unknown>;
-    if (receipt.phase === 'completed' && receipt.inputDigest === plan.inputDigest && receipt.sourceFingerprint === legacyLegalDataFingerprint(sourceRoot)) return { phase: 'already_applied', receiptPath };
+    if ((!designer || receipt.sourceVariant === 'designer') && receipt.phase === 'completed' && receipt.inputDigest === plan.inputDigest && receipt.sourceFingerprint === legacyLegalDataFingerprint(sourceRoot)) return { phase: 'already_applied', receiptPath };
     throw new Error('A different or stale merge receipt exists; inspect it before continuing.');
   }
   const leases: Array<{ root: string; lease: ReturnType<typeof claimDataRootForMigration> }> = [];
@@ -300,7 +319,7 @@ export async function applyLegalDataMerge(plan: LegalDataMergePlan, backupDirect
   try {
     for (const root of [sourceRoot, targetRoot].sort()) leases.push({ root, lease: claimDataRootForMigration(root, root === sourceRoot ? targetRoot : sourceRoot) });
     const policy = plan.resolutionPolicy === 'shared_history_v1';
-    const current = planLegalDataMerge(sourceRoot, targetRoot, { resolveKnownConflicts: policy });
+    const current = planLegalDataMerge(sourceRoot, targetRoot, { resolveKnownConflicts: policy, ...variantFields });
     if (current.inputDigest !== plan.inputDigest) {
       // A crash after COMMIT but before publishing the immutable receipt must not repeat imports.
       const preparedPath = path.join(backupDirectory, 'maintenance-manifest.json');
@@ -308,10 +327,10 @@ export async function applyLegalDataMerge(plan: LegalDataMergePlan, backupDirect
       const complete = current.conflicts.length === 0 && current.databaseDigests.source === plan.databaseDigests.source
         && current.sourceFingerprint === plan.sourceFingerprint && current.tables.every(table => table.insertRows === 0)
         && current.files.every(file => file.action === 'identical' || file.action === 'archive' || file.action === 'merge-keys' && file.additions === 0 || file.action === 'merge-owner' && stable(resolvedJsonFile(file.path, path.join(sourceRoot, 'data', file.path), path.join(targetRoot, 'data', file.path))) === stable(JSON.parse(fs.readFileSync(path.join(targetRoot, 'data', file.path), 'utf8'))));
-      if (!complete || !prepared || prepared.phase !== 'prepared' || prepared.inputDigest !== plan.inputDigest
+      if (!complete || !prepared || designer && prepared.sourceVariant !== 'designer' || prepared.phase !== 'prepared' || prepared.inputDigest !== plan.inputDigest
         || prepared.sourceRoot !== sourceRoot || prepared.targetRoot !== targetRoot
-        || prepared.sourceBackup !== path.join(backupDirectory, 'legal-source.sqlite')
-        || prepared.sourceBackupSha256 !== fileDigest(path.join(backupDirectory, 'legal-source.sqlite'))
+        || prepared.sourceBackup !== path.join(backupDirectory, sourceBackupName)
+        || prepared.sourceBackupSha256 !== fileDigest(path.join(backupDirectory, sourceBackupName))
         || prepared.targetBackup !== path.join(backupDirectory, 'shared-before.sqlite')
         || prepared.targetBackupSha256 !== fileDigest(path.join(backupDirectory, 'shared-before.sqlite'))) {
         throw new Error('Source or target changed since preflight; generate a new plan.');
@@ -319,7 +338,7 @@ export async function applyLegalDataMerge(plan: LegalDataMergePlan, backupDirect
       const verified = open(targetRoot);
       try { if (verified.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok' || verified.prepare('PRAGMA foreign_key_check').all().length || businessDatabaseDigest(tables(verified)) !== plan.expectedDatabaseDigest) throw new Error('Committed merge recovery failed SQLite verification.'); }
       finally { verified.close(); }
-      privateJson(receiptPath, { version: 1, phase: 'completed', sourceRoot, targetRoot, sourceFingerprint: current.sourceFingerprint, inputDigest: plan.inputDigest,
+      privateJson(receiptPath, { version: 1, ...variantFields, phase: 'completed', sourceRoot, targetRoot, sourceFingerprint: current.sourceFingerprint, inputDigest: plan.inputDigest,
         sourceBackup: prepared.sourceBackup, sourceBackupSha256: prepared.sourceBackupSha256, targetBackup: prepared.targetBackup, targetBackupSha256: prepared.targetBackupSha256,
         maintenanceManifest: preparedPath, maintenanceManifestSha256: fileDigest(preparedPath), deferredWorkCount: plan.deferred.length, recoveredAfterCommit: true, completedAt: new Date().toISOString() });
       return { phase: 'completed', receiptPath };
@@ -331,33 +350,38 @@ export async function applyLegalDataMerge(plan: LegalDataMergePlan, backupDirect
     if (fs.existsSync(backupRoot)) throw new Error('Use a fresh backup directory; previous backups are never overwritten.');
     ensurePrivateRuntimeDirectory(backupRoot);
     sourceDb = open(sourceRoot); sourceDb.exec('BEGIN'); targetDb = open(targetRoot, false);
-    await backup(sourceDb, path.join(backupRoot, 'legal-source.sqlite')); await backup(targetDb, path.join(backupRoot, 'shared-before.sqlite'));
-    for (const name of ['legal-source.sqlite', 'shared-before.sqlite']) restrictOwnerAccess(path.join(backupRoot, name));
-    const archive = { sourceBackup: path.join(backupRoot, 'legal-source.sqlite'), sourceBackupSha256: fileDigest(path.join(backupRoot, 'legal-source.sqlite')), targetBackup: path.join(backupRoot, 'shared-before.sqlite'), targetBackupSha256: fileDigest(path.join(backupRoot, 'shared-before.sqlite')) };
-    for (const file of plan.files.filter(file => file.action === 'archive' && !file.link)) {
+    await backup(sourceDb, path.join(backupRoot, sourceBackupName)); await backup(targetDb, path.join(backupRoot, 'shared-before.sqlite'));
+    for (const name of [sourceBackupName, 'shared-before.sqlite']) restrictOwnerAccess(path.join(backupRoot, name));
+    const archive = { sourceBackup: path.join(backupRoot, sourceBackupName), sourceBackupSha256: fileDigest(path.join(backupRoot, sourceBackupName)), targetBackup: path.join(backupRoot, 'shared-before.sqlite'), targetBackupSha256: fileDigest(path.join(backupRoot, 'shared-before.sqlite')) };
+    for (const file of plan.files.filter(file => (file.action === 'archive' || designer) && !file.link)) {
       const original = path.join(sourceRoot, 'data', file.path), saved = path.join(backupRoot, 'source-files', file.path);
       copyPrivateFile(original, saved);
       if (fileDigest(saved) !== file.sha256) throw new Error('An archived source file changed during backup.');
     }
     const migratedFiles = plan.files.filter(file => file.action !== 'archive' && file.action !== 'conflict').map(file => ({ path: file.path, sha256: file.action === 'merge-owner' ? crypto.createHash('sha256').update(JSON.stringify(resolvedJsonFile(file.path, path.join(sourceRoot, 'data', file.path), path.join(targetRoot, 'data', file.path)), null, 2) + '\n').digest('hex') : file.action === 'merge-keys' ? '' : file.sha256 }));
-    privateJson(path.join(backupRoot, 'maintenance-manifest.json'), { version: 1, phase: 'prepared', sourceRoot, targetRoot, inputDigest: plan.inputDigest, sourceFingerprint: plan.sourceFingerprint, ...archive, resolutionPolicy: plan.resolutionPolicy, resolutions: plan.resolutions, migratedFiles, deferred: plan.deferred, continuationPointers: plan.continuationPointers, archivedFiles: plan.files.filter(file => file.action === 'archive'), notice: 'Deferred work exists only in the original root and SQLite archive. It was not resumed or changed into a terminal outcome.' });
+    privateJson(path.join(backupRoot, 'maintenance-manifest.json'), { version: 1, ...variantFields, phase: 'prepared', sourceRoot, targetRoot, inputDigest: plan.inputDigest, sourceFingerprint: plan.sourceFingerprint, ...archive, resolutionPolicy: plan.resolutionPolicy, resolutions: plan.resolutions, migratedFiles, deferred: plan.deferred, continuationPointers: plan.continuationPointers, ...(designer ? { sourceFilesBackup: plan.files.filter(file => !file.link).map(({ path, sha256, bytes }) => ({ path, sha256, bytes })), sourceLinksNotFollowed: plan.files.filter(file => file.link).map(({ path, sha256 }) => ({ path, sha256 })) } : {}), archivedFiles: plan.files.filter(file => file.action === 'archive'), notice: 'Deferred work exists only in the original root and SQLite archive. It was not resumed or changed into a terminal outcome.' });
     targetDb.exec('PRAGMA foreign_keys=ON; BEGIN IMMEDIATE');
     const targetByName = new Map(tables(targetDb).map(table => [table.name, table]));
     for (const table of tables(sourceDb)) {
-      const existing = new Map(targetByName.get(table.name)!.rows.map(row => [key(row, table), row]));
-      const insert = targetDb.prepare('INSERT INTO ' + quote(table.name) + ' (' + table.columns.map(quote).join(',') + ') VALUES (' + table.columns.map(() => '?').join(',') + ')');
+      const targetTable = targetByName.get(table.name)!;
+      const projection = plan.schemaProjections?.find(entry => entry.table === table.name);
+      const columns = projection ? targetTable.columns : table.columns;
+      const existing = new Map(targetTable.rows.map(row => [key(row, table), row]));
+      const insert = targetDb.prepare('INSERT INTO ' + quote(table.name) + ' (' + columns.map(quote).join(',') + ') VALUES (' + columns.map(() => '?').join(',') + ')');
       for (const original of table.rows) {
-        if (defer(table, original, policy)) continue; const row = normalizedRow(original, table, sourceRoot, targetRoot, policy), before = existing.get(key(row, table));
+        if (defer(table, original, policy)) continue; let row = normalizedRow(original, table, sourceRoot, targetRoot, policy);
+        if (projection) row = Object.fromEntries(columns.map(column => [column, Object.hasOwn(row, column) ? row[column] : projection.defaults[column]]));
+        const before = existing.get(key(row, table));
         if (before) {
-          if (stable(before) === stable(row)) continue; const resolved = resolvedRow(table, row, before, policy);
+          if (stable(before) === stable(row)) continue; const resolved = resolvedRow(table, row, before, policy, designer);
           if (!resolved) throw new Error('A row conflict changed during merge.');
           if (stable(before) !== stable(resolved)) {
-            const columns = table.columns.filter(column => !table.pk.includes(column));
-            targetDb.prepare('UPDATE ' + quote(table.name) + ' SET ' + columns.map(column => quote(column) + '=?').join(',') + ' WHERE ' + table.pk.map(column => quote(column) + '=?').join(' AND ')).run(...[...columns.map(column => resolved[column]), ...table.pk.map(column => before[column])] as SQLInputValue[]);
+            const updateColumns = columns.filter(column => !table.pk.includes(column));
+            targetDb.prepare('UPDATE ' + quote(table.name) + ' SET ' + updateColumns.map(column => quote(column) + '=?').join(',') + ' WHERE ' + table.pk.map(column => quote(column) + '=?').join(' AND ')).run(...[...updateColumns.map(column => resolved[column]), ...table.pk.map(column => before[column])] as SQLInputValue[]);
           }
           continue;
         }
-        insert.run(...table.columns.map(column => row[column] as SQLInputValue));
+        insert.run(...columns.map(column => row[column] as SQLInputValue));
       }
     }
     for (const file of plan.files) {
@@ -372,12 +396,12 @@ export async function applyLegalDataMerge(plan: LegalDataMergePlan, backupDirect
         } else { fs.mkdirSync(path.dirname(destination), { recursive: true }); createdFiles.push({ path: destination, sha256: crypto.createHash('sha256').update(bytes).digest('hex') }); }
         fs.writeFileSync(destination, bytes, { mode: 0o600 }); restrictOwnerAccess(destination);
       }
-      else if (file.action === 'merge-keys') { keyBackup = fs.readFileSync(destination); copyPrivateFile(destination, path.join(backupRoot, 'shared-keys-before.json')); const result = mergedKeys(path.join(sourceRoot, 'data', file.path), destination); if (result.conflict) throw new Error('Key conflict changed during merge.'); fs.writeFileSync(destination, JSON.stringify(result.value, null, 2) + '\n', { mode: 0o600 }); restrictOwnerAccess(destination); }
+      else if (file.action === 'merge-keys') { keyBackup = fs.readFileSync(destination); copyPrivateFile(destination, path.join(backupRoot, 'shared-keys-before.json')); const result = mergedKeys(path.join(sourceRoot, 'data', file.path), destination, designer && policy); if (result.conflict) throw new Error('Key conflict changed during merge.'); fs.writeFileSync(destination, JSON.stringify(result.value, null, 2) + '\n', { mode: 0o600 }); restrictOwnerAccess(destination); }
     }
     const quick = targetDb.prepare('PRAGMA quick_check').all(); const fk = targetDb.prepare('PRAGMA foreign_key_check').all();
     if (quick.length !== 1 || Object.values(quick[0])[0] !== 'ok' || fk.length || businessDatabaseDigest(tables(targetDb)) !== plan.expectedDatabaseDigest) throw new Error('Merged SQLite integrity verification failed.');
     targetDb.exec('COMMIT'); committed = true;
-    privateJson(receiptPath, { version: 1, phase: 'completed', sourceRoot, targetRoot, sourceFingerprint: legacyLegalDataFingerprint(sourceRoot), inputDigest: plan.inputDigest, ...archive, maintenanceManifest: path.join(backupRoot, 'maintenance-manifest.json'), maintenanceManifestSha256: fileDigest(path.join(backupRoot, 'maintenance-manifest.json')), deferredWorkCount: plan.deferred.length, completedAt: new Date().toISOString() });
+    privateJson(receiptPath, { version: 1, ...variantFields, phase: 'completed', sourceRoot, targetRoot, sourceFingerprint: legacyLegalDataFingerprint(sourceRoot), inputDigest: plan.inputDigest, ...archive, maintenanceManifest: path.join(backupRoot, 'maintenance-manifest.json'), maintenanceManifestSha256: fileDigest(path.join(backupRoot, 'maintenance-manifest.json')), deferredWorkCount: plan.deferred.length, completedAt: new Date().toISOString() });
     return { phase: 'completed', receiptPath };
   } catch (error) {
     if (!committed) { try { targetDb?.exec('ROLLBACK'); } catch {} for (const file of createdFiles.reverse()) if (fs.existsSync(file.path) && fileDigest(file.path) === file.sha256) fs.unlinkSync(file.path); for (const [filename, contents] of changedFiles) fs.writeFileSync(filename, contents); if (keyBackup) fs.writeFileSync(path.join(targetRoot, 'data', 'keys.json'), keyBackup); }
@@ -413,15 +437,15 @@ async function initializeEmptyTarget(source: string, target: string): Promise<vo
   console.log(JSON.stringify({ phase: 'empty_target_initialized', targetRoot, sourceUnchanged: true, next: 'Run a separate read-only plan before applying any merge.' }));
 }
 
-async function main(): Promise<void> {
-  const args = process.argv.slice(2); const value = (name: string) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] || '' : ''; };
+export async function runDataMergeCli(sourceVariant: 'legal' | 'designer' = 'legal', args = process.argv.slice(2)): Promise<void> {
+  const value = (name: string) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] || '' : ''; };
   const source = value('--source-root'); const target = value('--target-root'); const planPath = value('--plan');
   if (args.includes('--initialize-target')) {
     if (planPath || args.includes('--apply') || args.includes('--resolve-known-conflicts') || value('--backup-dir')) throw new Error('Initialize an empty target separately from plan/apply; existing data is never overwritten.');
     await initializeEmptyTarget(source, target); return;
   }
   if (!source || !target || !planPath || !path.isAbsolute(planPath)) throw new Error('Usage: node <maintenance-entry> --source-root <absolute> --target-root <absolute> (--initialize-target | --plan <absolute-plan.json> [--resolve-known-conflicts | --apply --backup-dir <new-absolute-directory>])');
-  if (args.includes('--apply')) { const plan = JSON.parse(fs.readFileSync(planPath, 'utf8')) as LegalDataMergePlan; if (path.resolve(source) !== plan.sourceRoot || path.resolve(target) !== plan.targetRoot) throw new Error('CLI roots do not match the bound plan.'); console.log(JSON.stringify(await applyLegalDataMerge(plan, value('--backup-dir')))); }
-  else { const plan = planLegalDataMerge(source, target, { resolveKnownConflicts: args.includes('--resolve-known-conflicts') }); privateJson(planPath, plan); console.log(JSON.stringify({ phase: 'preflight_only', inputDigest: plan.inputDigest, conflicts: plan.conflicts.length, deferredWork: plan.deferred.length, planPath })); }
+  if (args.includes('--apply')) { const plan = JSON.parse(fs.readFileSync(planPath, 'utf8')) as LegalDataMergePlan; if ((plan.sourceVariant || 'legal') !== sourceVariant) throw new Error('CLI variant does not match the bound plan.'); if (path.resolve(source) !== plan.sourceRoot || path.resolve(target) !== plan.targetRoot) throw new Error('CLI roots do not match the bound plan.'); console.log(JSON.stringify(await applyLegalDataMerge(plan, value('--backup-dir')))); }
+  else { const plan = planLegalDataMerge(source, target, { resolveKnownConflicts: args.includes('--resolve-known-conflicts'), ...(sourceVariant === 'designer' ? { sourceVariant } : {}) }); privateJson(planPath, plan); console.log(JSON.stringify({ phase: 'preflight_only', inputDigest: plan.inputDigest, conflicts: plan.conflicts.length, deferredWork: plan.deferred.length, planPath })); }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main().catch(error => { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; });
+if (process.argv[1] && /^merge-legal-data-root\.(?:ts|mjs)$/.test(path.basename(process.argv[1])) && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) runDataMergeCli().catch(error => { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; });

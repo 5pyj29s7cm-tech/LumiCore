@@ -1,3 +1,7 @@
+import { getInteriorProjectWorkflow, isInteriorDesignStageId, linkInteriorProjectWorkflowStage, type InteriorProjectWorkflowState } from '../../../../design/project_workflow';
+import { type InteriorProject } from '../../../../design/projects';
+import { designWorkflowMode, designProjectForInput, designHandoffContext, ensureDesignProjectRootActionTask, linkDesignWorkflowStage, enforceDesignProjectPrerequisites, settleBoundDesignProjectStage } from '../../../../industry/design_workflow';
+export { getIndustryWorkflowPrerequisiteStatus, reconcileVerifiedDesignProjectBrief } from '../../../../industry/design_workflow';
 import { parseStoredObject as parseObject } from '../../../../tools/receipt_payload';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -17,7 +21,7 @@ import {
   type WorkTakeoverTask,
   type WorkTakeoverStatus,
 } from '../../../../work_takeover/tasks';
-import { BUSINESS_LINES, businessContract } from '../../../../industry/business_catalog';
+import { WORKFLOW_LINES, businessContract } from '../../../../industry/business_catalog';
 import {
   getIndustryWorkflowContracts,
   type IndustryWorkflowContract,
@@ -49,6 +53,8 @@ export interface IndustryWorkflowStartResult {
   contract: IndustryWorkflowContract;
   handoffPrompt: string;
   reused?: boolean;
+  project?: InteriorProject;
+  projectWorkflow?: InteriorProjectWorkflowState;
 }
 
 export interface RecordIndustryWorkflowInput extends IndustryWorkflowScope {
@@ -198,6 +204,7 @@ function buildHandoffPrompt(task: WorkTakeoverTask, contract: IndustryWorkflowCo
     contract.requiredToolEvidence?.length
       ? `Required domain-tool receipts before generic file creation: ${contract.requiredToolEvidence.join(', ')}.`
       : '',
+    designHandoffContext(task),
     `Confirmation boundaries: ${contract.confirmationBoundaries.join(' ')}`,
     contract.requiresFileArtifact
       ? `A real non-empty file is mandatory. Accepted extensions: ${contract.acceptedFileExtensions.join(', ')}. Model text alone is not completion.`
@@ -227,7 +234,7 @@ function enforceRequiredToolEvidence(
     label: '必需行业能力已实际执行',
     passed: missing.length === 0,
     detail: missing.length
-      ? `缺少已验证回执：${missing.join('、')}`
+      ? contract.productLine === 'design' ? `Missing verified required capability receipts: ${missing.join(', ')}.` : `缺少已验证回执：${missing.join('、')}`
       : `已验证：${required.join('、')}`,
   };
   if (!missing.length) return { ...verification, checks: [...verification.checks, check] };
@@ -237,7 +244,7 @@ function enforceRequiredToolEvidence(
     ...verification,
     passed: false,
     status: verification.status === 'blocked' ? 'blocked' : 'needs_review',
-    summary: `任务结果需要复核：${blockers.join('；')}`,
+    summary: verification.status === 'blocked' ? verification.summary : `任务结果需要复核：${blockers.join('；')}`,
     checks: [...verification.checks, check],
     blockers,
   };
@@ -592,7 +599,7 @@ function payloadTaskBindings(record: ToolExecutionRecord): Array<{
   });
 }
 
-function recordMatchesWorkflowBinding(task: WorkTakeoverTask, record: ToolExecutionRecord): boolean {
+export function recordMatchesWorkflowBinding(task: WorkTakeoverTask, record: ToolExecutionRecord): boolean {
   const correlation = correlationFor(task);
   if (
     !correlation.conversationTaskId
@@ -617,7 +624,7 @@ function recordMatchesWorkflowBinding(task: WorkTakeoverTask, record: ToolExecut
 function recordFilePaths(records: ToolExecutionRecord[], contract: IndustryWorkflowContract): string[] {
   const candidates: string[] = [];
   records
-    .filter(record => /^(?:create_|write_file|generate_|export_|save_|document_|cad_)/i.test(record.name))
+    .filter(record => /^(?:create_|write_file|generate_|export_|save_|document_|cad_|design_delivery_package_create)/i.test(record.name))
     .forEach(record => collectPathCandidates(parseRecordPayload(record), candidates));
   return safeFilePaths(candidates, contract);
 }
@@ -692,6 +699,61 @@ function toolRunHistory(task: WorkTakeoverTask, records: ToolExecutionRecord[]):
   return merged.slice(-30);
 }
 
+function missingFileArtifactBlocker(
+  contract: IndustryWorkflowContract,
+  records: ToolExecutionRecord[],
+): string {
+  const failedRequiredCreation = [...records].reverse().find(record => (
+    Boolean(record.error)
+    && (contract.requiredToolReceipts || []).includes(record.name)
+    && record.name !== 'mcp_design-studio-pack_drawing_ingest_qa'
+  ));
+  if (
+    contract.entryId === 'cad'
+    && failedRequiredCreation?.error
+    && /requires user confirmation|local write actions require confirmation/i.test(failedRequiredCreation.error)
+  ) {
+    return 'CAD file generation did not run because this continuation did not inherit the bound local-file authorization; no file was created.';
+  }
+  if (failedRequiredCreation) {
+    const labels: Record<string, string> = {
+      visualization: 'Image generation',
+      presentation: 'Presentation generation',
+      handoff: 'Delivery package creation',
+      cad: 'CAD file generation',
+    };
+    const detail = compact(failedRequiredCreation.error, 500)
+      .replace(/Tool\s+["'][^"']+["']\s*/gi, '')
+      .replace(/\b(?:generate_image|create_ppt|design_delivery_package_create|cad_generate_dxf)\b/gi, 'the required creation service');
+    return `${labels[contract.entryId] || 'Required file generation'} failed before a reviewable file was produced: ${detail}`;
+  }
+  if (contract.entryId !== 'cad') {
+    return `A real non-empty file is required (${contract.acceptedFileExtensions.join(', ')}); model text alone cannot complete this workflow.`;
+  }
+
+  const assessment = records.find(record => (
+    record.name === 'mcp_design-studio-pack_drawing_ingest_qa'
+    && !record.error
+    && record.terminalVerification?.status === 'verified'
+  ));
+  const generation = records.find(record => record.name === 'cad_generate_dxf');
+  if (generation?.error) {
+    if (/requires user confirmation|local write actions require confirmation/i.test(generation.error)) {
+      return 'CAD file generation did not run because this continuation did not inherit the bound local-file authorization; no file was created.';
+    }
+    return `CAD file generation failed before a reviewable drawing was produced: ${compact(generation.error, 400)}`;
+  }
+
+  const assessmentStatus = String(parseObject(assessment ? parseRecordPayload(assessment) : null).status || '').toLowerCase();
+  if (assessment && assessmentStatus === 'ready_for_geometry_extraction') {
+    return 'CAD source QA passed, but no verified CAD file-generation receipt or non-empty drawing file was produced.';
+  }
+  if (assessment) {
+    return 'CAD generation is blocked because the supplied source does not contain enough verified geometry to produce a reviewable drawing; no placeholder drawing was created.';
+  }
+  return `A real non-empty CAD file is required (${contract.acceptedFileExtensions.join(', ')}); model text alone cannot complete this workflow.`;
+}
+
 function verificationRecord(
   task: WorkTakeoverTask,
   verification: WorkTakeoverResultVerification,
@@ -744,24 +806,29 @@ function verificationRecord(
 }
 
 export function listCurrentIndustryWorkflowContracts(): IndustryWorkflowContract[] {
-  return BUSINESS_LINES.flatMap(line => getIndustryWorkflowContracts(line));
+  return WORKFLOW_LINES.flatMap(line => getIndustryWorkflowContracts(line));
 }
 
 export function startIndustryWorkflow(input: StartIndustryWorkflowInput): IndustryWorkflowStartResult {
   const contract = contractForCurrentProduct(input.entryId);
   const sourceInput = compact(input.sourceInput, 12_000);
+  const designMode = designWorkflowMode(input, contract);
+  const designProject = designProjectForInput(input, contract);
   const activeWorkspace = workflowWorkspaceContext({ ...input, productLine: contract.productLine });
   const suppliedWorkspace = parseObject(input.context?.industryWorkspace);
   const explicitWorkspace = contract.productLine === 'finance'
     ? explicitFinanceWorkspaceContext(sourceInput)
     : null;
   const workflowWorkspace = mergeIndustryWorkspaceContext(activeWorkspace, suppliedWorkspace, explicitWorkspace);
-  const boundContext = { ...(input.context || {}), ...(workflowWorkspace ? { industryWorkspace: workflowWorkspace } : {}) };
+  const boundContext = { ...(input.context || {}), ...(designProject ? {mode: 'project', projectId: designProject.id, projectName: designProject.name} : designMode === 'standalone' ? {mode: 'standalone'} : {}), ...(workflowWorkspace ? { industryWorkspace: workflowWorkspace } : {}) };
   const idempotencyKey = compact(input.idempotencyKey, 300);
   if (idempotencyKey) {
     const existing = listIndustryWorkflowTasks(input, 200).find(task => (
       workflowMetadata(task).idempotencyKey === idempotencyKey
       && workflowMetadata(task).entryId === contract.entryId
+      && String(workflowMetadata(task).context?.projectId || '') === String(designProject?.id || '')
+      && (workflowMetadata(task).context?.mode === 'standalone') === (designMode === 'standalone')
+      && workflowMetadata(task).inputDigest === sha256(sourceInput)
       && String(parseObject(parseObject(workflowMetadata(task).context).industryWorkspace).id || '') === String(workflowWorkspace?.id || '')
     ));
     if (existing) {
@@ -774,6 +841,7 @@ export function startIndustryWorkflow(input: StartIndustryWorkflowInput): Indust
         contract,
         handoffPrompt: buildHandoffPrompt(existing, contract),
         reused: true,
+        ...(designProject ? { project: designProject, projectWorkflow: getInteriorProjectWorkflow(designProject.orgId, designProject.id) || undefined } : {}),
       };
     }
   }
@@ -790,6 +858,98 @@ export function startIndustryWorkflow(input: StartIndustryWorkflowInput): Indust
     && candidate.domain === input.domain
     && String(candidate.orgId || '') === String(input.orgId || '')
   )) ? requestedConversationTaskId : '';
+  let projectRootTaskId = '';
+  if (designProject) {
+    const rootDb = readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
+    projectRootTaskId = ensureDesignProjectRootActionTask({
+      db: rootDb,
+      project: designProject,
+      conversationId: conversation.id,
+      userId: input.userId,
+      domain: input.domain,
+      orgId: input.orgId,
+      requestId,
+    });
+    commitDatabaseTables(rootDb);
+  }
+  if (designProject) {
+    const existingStageTask = listIndustryWorkflowTasks(input, 200).find(candidate => {
+      const metadata = workflowMetadata(candidate);
+      return metadata.entryId === contract.entryId
+        && compact(metadata.context?.projectId, 200) === designProject.id
+        && metadata.inputDigest === sha256(sourceInput)
+        && ['queued', 'in_progress', 'waiting_confirmation', 'blocked'].includes(candidate.status);
+    });
+    if (existingStageTask) {
+      const previousCorrelation = correlationFor(existingStageTask);
+      const conversationTaskId = existingConversationTaskId || previousCorrelation.conversationTaskId;
+      const reboundStageTask = conversationTaskId && (
+        conversationTaskId !== previousCorrelation.conversationTaskId
+        || conversation.id !== previousCorrelation.conversationId
+        || requestId !== previousCorrelation.requestId
+      )
+        ? updateWorkTakeoverTask(input.userId, existingStageTask.id, {
+            metadata: {
+              industryWorkflow: {
+                ...workflowMetadata(existingStageTask),
+                conversationId: conversation.id,
+                conversationTaskId,
+                requestId,
+              },
+            },
+            note: `Rebound active industry workflow to conversation action task ${conversationTaskId}.`,
+          }) || existingStageTask
+        : existingStageTask;
+      const correlation = correlationFor(reboundStageTask);
+      const actionDb = readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
+      const actionTask = (actionDb.conversationActionTasks || []).find((candidate: any) => (
+        candidate.id === correlation.conversationTaskId && candidate.userId === input.userId
+      ));
+      if (actionTask) {
+        const existingContext = parseObject(actionTask.context);
+        actionTask.context = JSON.stringify({
+          ...existingContext,
+          industryWorkflow: {
+            workTakeoverTaskId: reboundStageTask.id,
+            productLine: contract.productLine,
+            entryId: contract.entryId,
+            inputDigest: sha256(sourceInput),
+            ...(designProject ? { projectId: designProject.id, projectName: designProject.name } : {}),
+          },
+        });
+        actionTask.parentTaskId = projectRootTaskId;
+        actionTask.status = 'executing';
+        actionTask.blocker = '';
+        actionTask.completedAt = '';
+        actionTask.completionSource = '';
+        actionTask.activeRequestId = correlation.requestId || requestId;
+        actionTask.updatedAt = new Date().toISOString();
+      }
+      commitDatabaseTables(actionDb);
+      const projectWorkflow = isInteriorDesignStageId(contract.entryId)
+        ? linkInteriorProjectWorkflowStage({
+            orgId: designProject.orgId,
+            projectId: designProject.id,
+            entryId: contract.entryId,
+            taskId: reboundStageTask.id,
+            conversationTaskId: correlation.conversationTaskId,
+            rootConversationId: conversation.id,
+            rootTaskId: projectRootTaskId,
+          })
+        : undefined;
+      return {
+        task: reboundStageTask,
+        conversationId: correlation.conversationId,
+        conversationTaskId: correlation.conversationTaskId,
+        requestId: correlation.requestId,
+        contract,
+        handoffPrompt: buildHandoffPrompt(reboundStageTask, contract),
+        reused: true,
+        project: designProject,
+        projectWorkflow,
+      };
+    }
+  }
   const task = createWorkTakeoverTask({
     userId: input.userId,
     domain: input.domain,
@@ -823,6 +983,8 @@ export function startIndustryWorkflow(input: StartIndustryWorkflowInput): Indust
           confirmationBoundaries: contract.confirmationBoundaries,
           requiresFileArtifact: contract.requiresFileArtifact,
           acceptedFileExtensions: contract.acceptedFileExtensions,
+          executionTools: contract.executionTools || [],
+          requiredToolReceipts: contract.requiredToolReceipts || [],
         },
         createdAt: new Date().toISOString(),
       },
@@ -846,6 +1008,8 @@ export function startIndustryWorkflow(input: StartIndustryWorkflowInput): Indust
     entryId: contract.entryId,
     inputDigest: sha256(sourceInput),
     workspace: workflowWorkspace,
+    ...(designMode === 'standalone' ? {mode: 'standalone'} : {}),
+    ...(designProject ? {projectId: designProject.id, projectName: designProject.name} : {}),
   };
   if (existingConversationTaskId) {
     const actionTask = (db.conversationActionTasks || []).find((candidate: any) => candidate.id === existingConversationTaskId);
@@ -866,9 +1030,15 @@ export function startIndustryWorkflow(input: StartIndustryWorkflowInput): Indust
       context: { industryWorkflow: industryContext },
     });
   }
+  if (projectRootTaskId) {
+    const actionTask = db.conversationActionTasks.find((row: any) => row.id === conversationTaskId && row.userId === input.userId);
+    if (actionTask) actionTask.parentTaskId = projectRootTaskId;
+  }
   commitDatabaseTables(db);
+  const projectWorkflow = designProject ? linkDesignWorkflowStage(designProject, linkedTask, projectRootTaskId) : undefined;
 
   return {
+    ...(designProject ? {project: designProject, projectWorkflow} : {}),
     task: linkedTask,
     conversationId: conversation.id,
     conversationTaskId,
@@ -886,7 +1056,7 @@ export function listIndustryWorkflowTasks(scope: IndustryWorkflowScope, limit = 
     limit: Math.max(1, Math.min(Number(limit) || 50, 200)),
   }).filter(task => {
     const metadata = workflowMetadata(task);
-    return BUSINESS_LINES.includes(metadata.productLine) && Boolean(metadata.entryId);
+    return WORKFLOW_LINES.includes(metadata.productLine) && Boolean(metadata.entryId);
   });
 }
 
@@ -894,7 +1064,7 @@ export function getIndustryWorkflowTask(scope: IndustryWorkflowScope, taskId: st
   const task = getScopedWorkTakeoverTask({ ...scope, orgId: scope.orgId || '' }, taskId);
   if (!task) return null;
   const metadata = workflowMetadata(task);
-  return BUSINESS_LINES.includes(metadata.productLine) && metadata.entryId ? task : null;
+  return WORKFLOW_LINES.includes(metadata.productLine) && metadata.entryId ? task : null;
 }
 
 export function listIndustryWorkflowTaskPage(scope: IndustryWorkflowScope, entryId: string, workspaceId?: string, before = '') {
@@ -907,6 +1077,51 @@ export function listIndustryWorkflowTaskPage(scope: IndustryWorkflowScope, entry
   const rows = listWorkTakeoverTasks({ ...scope, limit: 51, industryEntryId: entryId, industryWorkspaceId: workspaceId, beforeId: before, newestCreated: true });
   const tasks = rows.slice(0,50);
   return { tasks, nextCursor: rows.length > 50 ? tasks.at(-1)!.id : null };
+}
+
+export function reconcileInterruptedIndustryWorkflowTasks(): number {
+  const db = readDatabaseTables(["conversationActionTasks"]);
+  let reconciled = 0;
+  for (const actionTask of db.conversationActionTasks || []) {
+    if (!['blocked', 'cancelled', 'completed'].includes(String(actionTask.status || ''))) continue;
+    const context = parseObject(actionTask.context);
+    const industry = parseObject(context.industryWorkflow);
+    if (industry.productLine !== 'design') continue;
+    const workTakeoverTaskId = compact(industry.workTakeoverTaskId, 200);
+    if (!workTakeoverTaskId) continue;
+    const task = getScopedWorkTakeoverTask({userId: String(actionTask.userId || ''), domain: actionTask.domain === 'work' ? 'work' : 'personal', orgId: String(actionTask.orgId || '')}, workTakeoverTaskId);
+    if (!task || !['queued', 'in_progress'].includes(task.status)) continue;
+    const metadata = workflowMetadata(task);
+    if (metadata.productLine !== industry.productLine) continue;
+    if (metadata.conversationTaskId !== actionTask.id || metadata.conversationId !== actionTask.conversationId) continue;
+    const verificationPassed = task.metadata?.workTakeoverVerification?.passed === true;
+    const nextStatus: WorkTakeoverStatus = actionTask.status === 'cancelled'
+      ? 'cancelled'
+      : actionTask.status === 'completed' && verificationPassed
+        ? 'delivered'
+        : 'blocked';
+    const blocker = nextStatus === 'blocked'
+      ? compact(actionTask.blocker, 1000) || 'The previous runtime ended before this industry workflow reached a verified terminal receipt.'
+      : '';
+    updateWorkTakeoverTask(task.userId, task.id, {
+      status: nextStatus,
+      blockedBy: blocker ? Array.from(new Set([...task.blockedBy, blocker])) : [],
+      metadata: {
+        industryWorkflowLastAttempt: {
+          ...(task.metadata?.industryWorkflowLastAttempt || {}),
+          status: nextStatus === 'delivered' ? 'passed' : nextStatus,
+          reason: blocker,
+          reconciledFromConversationTaskId: String(actionTask.id || ''),
+          at: new Date().toISOString(),
+        },
+      },
+      note: nextStatus === 'delivered'
+        ? 'Industry workflow reconciled from a verified completed conversation task.'
+        : 'Interrupted industry workflow reconciled from its persistent conversation task; no work was replayed.',
+    });
+    reconciled += 1;
+  }
+  return reconciled;
 }
 
 export function settleIndustryWorkflowConversationTask(
@@ -938,7 +1153,7 @@ export function recordIndustryWorkflowExecution(input: RecordIndustryWorkflowInp
     5000,
   );
   const explicitPaths = safeFilePaths(input.filePaths || [], contract);
-  const discoveredPaths = recordFilePaths(toolRecords, contract);
+  const discoveredPaths = recordFilePaths(contract.productLine === 'design' ? toolRecords.filter(record => !record.error && record.terminalVerification?.status === 'verified' && recordMatchesWorkflowBinding(existing, record)) : toolRecords, contract);
   const filePaths = Array.from(new Set([...explicitPaths, ...discoveredPaths]));
   const submissionDigest = sha256(canonicalJson({
     resultText,
@@ -985,8 +1200,9 @@ export function recordIndustryWorkflowExecution(input: RecordIndustryWorkflowInp
       archivedFilePaths: safeFilePaths(existing.artifacts.map(artifact => artifact.path || ''), contract),
     };
   }
+  if (contract.productLine === 'design' && existing.status === 'delivered' && previousVerification?.passed) throw new Error('The delivered workflow is immutable; new or foreign receipts cannot replace its verified result.');
   if (contract.requiresFileArtifact && filePaths.length === 0) {
-    const blocker = `A real non-empty file is required (${contract.acceptedFileExtensions.join(', ')}); model text alone cannot complete this workflow.`;
+    const blocker = contract.productLine === 'design' ? missingFileArtifactBlocker(contract, toolRecords.filter(record => recordMatchesWorkflowBinding(existing, record))) : `A real non-empty file is required (${contract.acceptedFileExtensions.join(', ')}); model text alone cannot complete this workflow.`;
     const blocked = updateWorkTakeoverTask(input.userId, existing.id, {
       status: 'blocked',
       blockedBy: Array.from(new Set([...existing.blockedBy, blocker])),
@@ -1003,7 +1219,7 @@ export function recordIndustryWorkflowExecution(input: RecordIndustryWorkflowInp
       },
       note: blocker,
     }) || existing;
-    const verification = verifyWorkTakeoverResult(blocked, {
+    const baseVerification = verifyWorkTakeoverResult(blocked, {
       requiredArtifactLabels: contract.requiredArtifactLabels,
       expectedContentTerms: contract.expectedContentTerms,
       minMatchedContentTerms: contract.minMatchedContentTerms,
@@ -1012,6 +1228,7 @@ export function recordIndustryWorkflowExecution(input: RecordIndustryWorkflowInp
       outcomeEvidence: toolRecords,
       requireOutputEvidence: true,
     });
+    const verification = contract.productLine === 'design' ? enforceDesignProjectPrerequisites(blocked, enforceRequiredToolEvidence({ ...baseVerification, passed: false, status: 'blocked', summary: blocker, blockers: Array.from(new Set([...baseVerification.blockers, blocker])) }, blocked, contract, toolRecords)) : baseVerification;
     const blockedWithReceipt = updateWorkTakeoverTask(input.userId, blocked.id, {
       result: resultWithWorkflowReceipt(blocked.result || resultText || blocker, blocked.id, verification),
       metadata: {
@@ -1023,6 +1240,7 @@ export function recordIndustryWorkflowExecution(input: RecordIndustryWorkflowInp
         },
       },
     }) || blocked;
+    settleBoundDesignProjectStage(blockedWithReceipt, verification, toolRecords.filter(record => recordMatchesWorkflowBinding(existing, record)), verificationRecord(blockedWithReceipt, verification, correlationFor(blockedWithReceipt)));
     settleIndustryWorkflowConversationTask(blockedWithReceipt, verification);
     return { task: blockedWithReceipt, verification, conversationTaskId: conversationTaskIdFor(blockedWithReceipt), archivedFilePaths: [] };
   }
@@ -1069,7 +1287,7 @@ export function recordIndustryWorkflowExecution(input: RecordIndustryWorkflowInp
     artifacts: updated.artifacts.slice(previousArtifactCount),
     drafts: updated.drafts.slice(previousDraftCount),
   };
-  const verification = enforceReviewableCurrentResult(enforceRequiredToolEvidence(verifyWorkTakeoverResult(currentAttemptTask, {
+  const verification = enforceDesignProjectPrerequisites(updated, enforceReviewableCurrentResult(enforceRequiredToolEvidence(verifyWorkTakeoverResult(currentAttemptTask, {
     filePaths,
     draftRequired: contract.draftRequired === true,
     requiredArtifactLabels: contract.requiredArtifactLabels,
@@ -1079,7 +1297,7 @@ export function recordIndustryWorkflowExecution(input: RecordIndustryWorkflowInp
     requireExternalOutcome: false,
     outcomeEvidence: toolRecords,
     requireOutputEvidence: true,
-  }), currentAttemptTask, contract, toolRecords), resultText);
+  }), currentAttemptTask, contract, toolRecords), resultText));
   const status: WorkTakeoverStatus = verification.passed
     ? 'delivered'
     : verification.status === 'blocked'
@@ -1112,6 +1330,7 @@ export function recordIndustryWorkflowExecution(input: RecordIndustryWorkflowInp
     },
     note: verification.summary,
   }) || updated;
+  settleBoundDesignProjectStage(updated, verification, toolRecords.filter(record => recordMatchesWorkflowBinding(existing, record)), verificationRecord(updated, verification, correlationFor(updated)));
   settleIndustryWorkflowConversationTask(updated, verification);
   return {
     task: updated,
@@ -1174,6 +1393,12 @@ export function startOrReuseIndustryWorkflow(
   const contract = taskContract(existing);
   if (contract.entryId !== String(input.entryId || '').trim()) {
     throw new Error('The bound industry workflow task does not match the requested entry.');
+  }
+  if (input.context?.projectId && input.context.projectId !== workflowMetadata(existing).context?.projectId) {
+    throw new Error('The bound industry workflow task does not match the requested design project.');
+  }
+  if (input.context?.mode === 'standalone' && workflowMetadata(existing).context?.mode !== 'standalone') {
+    throw new Error('A bound project task cannot be resumed as an independent standalone task.');
   }
   const sourceInput = compact(input.sourceInput, 12_000);
   if (sourceInput) validateIndustryWorkflowSourceInput(existing, sourceInput);

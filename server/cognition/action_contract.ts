@@ -1,4 +1,5 @@
 import { requestedArtifactInstructions, artifactInstructionClauses } from './artifact_progress';
+import { designerRequest } from './designer_contract';
 import { affirmativeActionInstructionClauses } from './action_instruction_clauses';
 import { buildMediaGenerationContract } from './contracts/media_contract';
 import { isExplicitArtifactCreationText, normalizeActionIntent } from "./normalized_action_intent";
@@ -84,6 +85,10 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
   if (!text) return NONE_CONTRACT;
   const authoringContract = buildAuthoringActionContract(rawInput, text, analysis);
   if (authoringContract) return authoringContract;
+  const designer = designerRequest(primaryTaskText || rawInput);
+  if (designer) return { ...buildDesignDeliveryContract(), label: `Design ${designer.kind}`,
+    preferredTools: designer.tools, verificationTools: [designer.requiresStage ? 'industry_workflow_complete' : designer.kind === 'status' ? 'interior_design_project_status' : 'interior_design_project_create'],
+    coreAction: designer.prompt, nextStep: designer.prompt };
   const runtimeContract = buildRuntimeControlContract(rawInput, text, primaryTaskText);
   if (runtimeContract) return runtimeContract;
   if (normalizedIntent.kind === 'media_generation') {
