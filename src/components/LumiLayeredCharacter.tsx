@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, type MutableRefObject } from 'react';
-import { useFrame, useLoader } from '@react-three/fiber';
+import { useFrame } from '@react-three/fiber';
+import { useMemoryAvatarTextures } from '../lib/memoryAvatarRenderResources';
 import * as THREE from 'three';
 import { LumiLayeredMotion } from '../lib/lumiLayeredMotion';
 
@@ -29,7 +30,7 @@ const faceFragment = `
 export function LumiLayeredCharacter({ outputLevelRef, reducedMotion }: {
   outputLevelRef: MutableRefObject<number>; reducedMotion: boolean; state?: string;
 }) {
-  const sources = useLoader(THREE.TextureLoader, [
+  const sources = useMemoryAvatarTextures([
     '/avatars/lumi-reclining/idle-v1.png',
     '/avatars/lumi-reclining/blink-v1.png',
     '/avatars/lumi-reclining/speech-v1.png',

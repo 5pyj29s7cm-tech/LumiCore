@@ -1,5 +1,5 @@
 import { normalizeMemoryAvatarAppearance } from '../../shared/memory_avatar';
-import { Component, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { MemoryAvatarAppearance, MemoryAvatarPresentation } from '../../shared/memory_avatar';
@@ -7,6 +7,9 @@ import { MemoryAvatarAnimatedPortrait } from './MemoryAvatarAnimatedPortrait';
 import { memoryTerritoryCopy } from '../i18n/locales/memoryTerritory';
 import { LumiLayeredCharacter } from './LumiLayeredCharacter';
 import { LumiHomeScene, LumiHomeCamera } from './LumiHomeScene';
+import { ResourceLayer } from './memory_avatar_renderer/ResourceLayer';
+import { clearMemoryAvatarRenderResources, pendingMemoryAvatarRenderResources, type MemoryAvatarRenderResource, type MemoryAvatarRenderResources } from '../lib/memoryAvatarRenderResources';
+import { memoryAvatarRendererCopy } from '../i18n/locales/memoryAvatarRenderer';
 
 export interface MemoryAvatarStageProps {
   avatarId?: string;
@@ -231,9 +234,10 @@ function Portrait({ appearance, outputLevelRef, reducedMotion }: {
   </group>;
 }
 
-class PortraitBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+class PortraitBoundary extends Component<{ fallback: ReactNode; onError: () => void; children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch() { this.props.onError(); }
   render() { return this.state.failed ? this.props.fallback : this.props.children; }
 }
 
@@ -248,23 +252,65 @@ function ContextLossGuard({ onLost }: { onLost: () => void }) {
   return null;
 }
 
-export default function MemoryAvatarStage({ appearance, outputLevelRef, state, name, locale, active = true, avatarId, presentation }: MemoryAvatarStageProps) {
-  // Legacy records use the supported 2D character; the retired VRM is not loaded.
+export const MEMORY_AVATAR_RENDER_DEADLINE_MS = 10_000;
+type LayerName = 'character' | 'environment';
+type LayerStatus = { phase: 'loading' | 'ready' | 'error'; issue?: 'resource' | 'timeout'; resources: MemoryAvatarRenderResource[] };
+const initialLayers = (portrait: boolean): Record<LayerName, LayerStatus> => ({
+  character: { phase: 'loading', resources: [] },
+  environment: { phase: portrait ? 'loading' : 'ready', resources: [] },
+});
+
+function RendererStage({ appearance, outputLevelRef, state, name, locale }: MemoryAvatarStageProps) {
   const portrait = normalizeMemoryAvatarAppearance(appearance).style === 'lumi2d';
+  const copy = memoryAvatarRendererCopy(locale);
+  const [attempt, setAttempt] = useState(0);
+  const currentAttempt = useRef(attempt);
+  const mounted = useRef(true);
   const [available, setAvailable] = useState<boolean | null>(null);
   const [lost, setLost] = useState(false);
+  const [rendererFailed, setRendererFailed] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [framing, setFraming] = useState<'conversation' | 'full'>('conversation');
+  const [layers, setLayers] = useState(() => initialLayers(portrait));
+  const currentLayers = useRef(layers);
+  const resources = useMemo<Record<LayerName, MemoryAvatarRenderResources>>(() => ({ character: new Map(), environment: new Map() }), [attempt]);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const reportLayer = useCallback((layer: LayerName, phase: LayerStatus['phase'], issue?: LayerStatus['issue']) => {
+    if (!mounted.current || currentAttempt.current !== attempt || currentLayers.current[layer].phase === 'error') return;
+    const next = { ...currentLayers.current, [layer]: { phase, issue, resources: phase === 'error' ? pendingMemoryAvatarRenderResources(resources[layer]) : [] } };
+    currentLayers.current = next;
+    setLayers(next);
+  }, [attempt, resources]);
+  const characterReady = useCallback(() => reportLayer('character', 'ready'), [reportLayer]);
+  const characterFailed = useCallback(() => reportLayer('character', 'error', 'resource'), [reportLayer]);
+  const environmentReady = useCallback(() => reportLayer('environment', 'ready'), [reportLayer]);
+  const environmentFailed = useCallback(() => reportLayer('environment', 'error', 'resource'), [reportLayer]);
+  const onContextLost = useCallback(() => { if (mounted.current && currentAttempt.current === attempt) setLost(true); }, [attempt]);
+  const onRendererFailed = useCallback(() => { if (mounted.current && currentAttempt.current === attempt) setRendererFailed(true); }, [attempt]);
+  const retry = useCallback(() => {
+    for (const layer of Object.values(currentLayers.current)) if (layer.phase === 'error') clearMemoryAvatarRenderResources(layer.resources);
+    currentAttempt.current++;
+    const next = initialLayers(portrait);
+    currentLayers.current = next;
+    setLayers(next); setAvailable(null); setLost(false); setRendererFailed(false);
+    setAttempt(currentAttempt.current);
+  }, [portrait]);
   useEffect(() => {
-    if (!active) return;
-    setLost(false);
     try {
       const probe = document.createElement('canvas');
       const context = probe.getContext('webgl2', { alpha: true, antialias: false, powerPreference: 'low-power' });
       setAvailable(Boolean(context));
       context?.getExtension('WEBGL_lose_context')?.loseContext();
     } catch { setAvailable(false); }
-  }, [active]);
+  }, [attempt]);
+  const waiting = Object.values(layers).some(layer => layer.phase === 'loading');
+  useEffect(() => {
+    if (!available || lost || rendererFailed || !waiting) return;
+    const timer = window.setTimeout(() => {
+      for (const layer of ['character', 'environment'] as const) if (currentLayers.current[layer].phase === 'loading') reportLayer(layer, 'error', 'timeout');
+    }, MEMORY_AVATAR_RENDER_DEADLINE_MS);
+    return () => window.clearTimeout(timer);
+  }, [available, attempt, lost, rendererFailed, waiting, reportLayer]);
   useEffect(() => {
     const media = window.matchMedia?.('(prefers-reduced-motion: reduce)');
     if (!media) return;
@@ -272,37 +318,62 @@ export default function MemoryAvatarStage({ appearance, outputLevelRef, state, n
     update(); media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
   }, []);
-  const fallback = <div role="status" style={{ minHeight: 260, height: '100%', display: 'grid', placeContent: 'center', padding: 32, textAlign: 'center', color: '#c5bdb3', lineHeight: 1.8 }}>
+  const retryButton = <button type="button" onClick={retry} className="pointer-events-auto mt-3 rounded-lg border border-current/30 px-3 py-2 text-xs hover:bg-white/10 focus-visible:outline focus-visible:outline-2">{copy.retry}</button>;
+  const fallback = <div role="status" data-memory-avatar-renderer-state="unavailable" style={{ minHeight: 260, height: '100%', display: 'grid', placeContent: 'center', padding: 32, textAlign: 'center', color: '#c5bdb3', lineHeight: 1.8 }}>
     <span style={{ color: '#eee4d6', fontSize: 22, marginBottom: 10 }}>{name}</span>
-    <span style={{ maxWidth: 320, fontSize: 13 }}>{memoryTerritoryCopy(locale).renderFallback}</span>
+    <span role="alert" style={{ maxWidth: 320, fontSize: 13 }}>{available === false ? memoryTerritoryCopy(locale).renderFallback : lost ? copy.contextLost : copy.rendererFailed}</span>
+    {retryButton}
   </div>;
-  if (!active) return null;
-  if (avatarId && presentation?.mode === 'localportrait' && presentation.animation) return <MemoryAvatarAnimatedPortrait avatarId={avatarId} animation={presentation.animation} outputLevelRef={outputLevelRef} name={name} locale={locale} />;
-  if (available === false || lost) return fallback;
+  if (available === false || lost || rendererFailed) return fallback;
+  const failed = Object.values(layers).some(layer => layer.phase === 'error');
   return <div role="figure" aria-label={name} data-state={state} style={{ width: '100%', height: '100%', minHeight: 320, position: 'relative' }}>
-    {available && <PortraitBoundary fallback={fallback}>
+    {available && <PortraitBoundary key={attempt} fallback={fallback} onError={onRendererFailed}>
       <Canvas dpr={[1, 1.5]} shadows={portrait ? {type:THREE.PCFShadowMap} : false} camera={{ position: [0, portrait ? 0.35 : 0.21, portrait ? 7.7 : 6.0], fov: 34, near: 0.1, far: portrait ? 260 : 30 }}
         gl={{ alpha: true, antialias: true, powerPreference: 'low-power', toneMapping: THREE.ACESFilmicToneMapping }}
         style={{ background: 'transparent' }} fallback={fallback} onCreated={({ gl }) => { gl.setClearColor(0x000000, 0); gl.toneMappingExposure = 1.04; }}>
-        <ContextLossGuard onLost={() => setLost(true)} />
+        <ContextLossGuard onLost={onContextLost} />
         {portrait ? <>
-          <LumiHomeScene tint={safeColor(appearance.backgroundColor, '#d5d6c5')} reducedMotion={reducedMotion} />
           <LumiHomeCamera fullBody={framing === 'full'} />
-          <LumiLayeredCharacter outputLevelRef={outputLevelRef} reducedMotion={reducedMotion} state={state} />
+          <ResourceLayer resources={resources.environment} disabled={layers.environment.phase === 'error'} onReady={environmentReady} onError={environmentFailed}>
+            <LumiHomeScene tint={safeColor(appearance.backgroundColor, '#d5d6c5')} reducedMotion={reducedMotion} />
+          </ResourceLayer>
+          <ResourceLayer resources={resources.character} disabled={layers.character.phase === 'error'} onReady={characterReady} onError={characterFailed}>
+            <LumiLayeredCharacter outputLevelRef={outputLevelRef} reducedMotion={reducedMotion} state={state} />
+          </ResourceLayer>
         </> : <>
-        <ambientLight intensity={0.65} color="#eee4d8" />
-        <hemisphereLight args={['#fff0dc', '#7b7589', 1.15]} />
-        <directionalLight position={[-3.5, 4, 5]} intensity={2.15} color="#ffe2c5" />
-        <directionalLight position={[3, 1, 3]} intensity={0.85} color="#dbe6fb" />
-        <directionalLight position={[1, 3, -3]} intensity={1.8} color="#efd0a5" />
-        <Portrait appearance={appearance} outputLevelRef={outputLevelRef} reducedMotion={reducedMotion} />
+          <ambientLight intensity={0.65} color="#eee4d8" />
+          <hemisphereLight args={['#fff0dc', '#7b7589', 1.15]} />
+          <directionalLight position={[-3.5, 4, 5]} intensity={2.15} color="#ffe2c5" />
+          <directionalLight position={[3, 1, 3]} intensity={0.85} color="#dbe6fb" />
+          <directionalLight position={[1, 3, -3]} intensity={1.8} color="#efd0a5" />
+          <ResourceLayer resources={resources.character} disabled={layers.character.phase === 'error'} onReady={characterReady} onError={characterFailed}>
+            <Portrait appearance={appearance} outputLevelRef={outputLevelRef} reducedMotion={reducedMotion} />
+          </ResourceLayer>
         </>}
       </Canvas>
     </PortraitBoundary>}
+    {(available === null || waiting || failed) && <div data-memory-avatar-renderer-state={failed ? 'error' : 'loading'} className="pointer-events-auto absolute left-4 top-14 z-10 max-w-[min(80%,22rem)] rounded-xl bg-black/65 px-4 py-3 text-xs leading-6 text-white">
+      {available === null ? <p role="status">{copy.checking}</p> : (['character', 'environment'] as const).map(layer => {
+        const status = layers[layer];
+        if (status.phase === 'ready') return null;
+        const message = layer === 'character'
+          ? status.phase === 'loading' ? copy.characterLoading : status.issue === 'timeout' ? copy.characterTimeout : copy.characterFailed
+          : status.phase === 'loading' ? copy.environmentLoading : status.issue === 'timeout' ? copy.environmentTimeout : copy.environmentFailed;
+        return <p key={layer} data-render-layer={layer} data-render-phase={status.phase} role={status.phase === 'error' ? 'alert' : 'status'}>{message}</p>;
+      })}
+      {failed && retryButton}
+    </div>}
     {portrait && available && !lost && <div className="absolute bottom-4 right-4 flex gap-1 rounded-full border border-white/15 bg-black/45 p-1 text-xs text-white backdrop-blur-md">
       {(['conversation', 'full'] as const).map(mode => <button key={mode} type="button" aria-pressed={framing === mode} onClick={() => setFraming(mode)} className={`rounded-full px-3 py-2 ${framing === mode ? 'bg-white/20' : 'hover:bg-white/10'}`}>{mode === 'conversation' ? memoryTerritoryCopy(locale).framingConversation : memoryTerritoryCopy(locale).framingFullBody}</button>)}
     </div>}
   </div>;
+}
+
+export default function MemoryAvatarStage(props: MemoryAvatarStageProps) {
+  if (props.active === false) return null;
+  if (props.avatarId && props.presentation?.mode === 'localportrait' && props.presentation.animation) return <MemoryAvatarAnimatedPortrait avatarId={props.avatarId} animation={props.presentation.animation} outputLevelRef={props.outputLevelRef} name={props.name} locale={props.locale} />;
+  // Closing, switching avatar or changing renderer type starts a fresh local session.
+  return <RendererStage key={JSON.stringify([props.avatarId || '', normalizeMemoryAvatarAppearance(props.appearance).style])} {...props} />;
 }
 
 export { MemoryAvatarStage };

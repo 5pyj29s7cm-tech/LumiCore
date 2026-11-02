@@ -1,14 +1,14 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-11-02T10:17:49.055072+00:00",
+  "updatedAt": "2026-11-02T10:58:40.097433+00:00",
   "localDate": "2026-11-01",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
   "currentItem": {
     "id": null,
-    "title": "Memory Territory entry loading and recovery maintenance",
-    "status": "implemented-and-scoped-verified-main-entry-user-confirmed",
-    "instruction": "Current maintenance summary: latestMemoryTerritoryEntry. Historical business acceptance stays sealed or held; native coordinate testing remains paused."
+    "title": "Memory Territory loading and renderer recovery maintenance",
+    "status": "implemented-and-scoped-verified",
+    "instruction": "Current maintenance summary: latestMemoryTerritoryPerformance. Historical business acceptance stays sealed or held; native coordinate testing remains paused."
   },
   "acceptedWholeItems": [
     3,
@@ -36,42 +36,44 @@
     "Existing file full body returned through normal Socket and persisted exactly once with terminal task/turn"
   ],
   "knownUnresolved": [
-    "用户现场现象为主程序点击记忆领地无反应；隔离测试证明请求未完成时没有反馈等代码缺陷，不等同已观测或证明用户现场的具体网络原因。",
-    "本轮为记忆领地入口加载、失败与取消处理的前端维护；不代表记忆领地所有业务或整程序验收。真人坐标复测仍暂停。",
-    "隔离桌面编译使用write:false，产物保存到审计目录，不运行原配置写入dist的public资产复制钩子；没有重启、安装、打包或发布程序。",
-    "前轮Main/Designer各1条既有导航断言失败，以及自动记忆轮次保留的6条相邻失败（公开错误历史、化身私密资料）未在本轮修复；未把它们计为通过。",
-    "历史3/15/16封存、2暂停、10保留和其他held状态不变；法律历史业务验收未恢复，默认模型未改，未调用真实模型/付费生成或修改真实人物资料，未推送远端。",
-    "源码版本仍为3.1.1；行号和SHA用于源码定位，不是动态行覆盖。完整套件和自动原生界面测试未执行；用户手动确认仅限主程序入口出现界面。"
+    "本轮验证记忆领地模块加载与本地人物画面恢复，不代表全部业务或整程序验收；真人坐标复测仍暂停。",
+    "真实浏览器使用隔离Chrome软件WebGL与合成人物，阻断业务API、外网与WebSocket；不是用户原生窗口、实际GPU或安装包验收，未复现用户现场的精确原始原因。",
+    "人物及室内资源仍约21.18MiB编码体积，未更换形象或降低美术质量；加载时长还受磁盘、网络与GPU影响。构建字节降低不等同实测现场秒数降低。",
+    "超时/关闭阻止旧结果显示并释放已挂载画面；Three TextureLoader在途资源不具备真正传输取消，不宣称已中止网络请求。模块重试仍受浏览器自身模块缓存限制。",
+    "同后台、同账号和同工作区可继续读取已持久化记忆/聊天/归档创作；须保留数据库及附件。Designer独立启动默认LumiCore-Designer仍与Main/Legal的LumiCore不同，本轮只读审计，未统一或迁移真实数据，也未执行卸载换装。未发送草稿与客户端缓存不承诺跨版恢复。",
+    "Main/Designer此前各1条导航断言失败、自动记忆轮次6条相邻失败与其他既有未完成项保留，未因本轮选定检查通过而销账。",
+    "历史3/15/16封存、2暂停、10保留及其他held状态不变；法律历史业务验收未恢复，默认模型未改，未调用真实模型/付费生成或修改用户记录。",
+    "三版源码版本仍为3.1.1；隔离桌面编译write:false，不执行原配置写dist的public复制钩子；没有重启、安装、打包发布或推送远端。源码行号/SHA用于定位，不是动态行覆盖。"
   ],
   "validation": {
-    "scope": "Memory Territory entry loading, recovery, owner isolation and selected adjacent regressions",
+    "scope": "Memory Territory module/renderer recovery and selected adjacent regressions; source-only persistence audit",
     "selectedRegression": {
-      "countRuleZh": "每版+文件只计指定最后完整结果，参数化同名用例按原顺序保留；重跑不累加，失败/跳过明确计数。",
+      "countRuleZh": "每版/文件只计最终完整结果；参数化同名用例保留，重跑不累加。",
       "perEdition": {
         "main": {
           "files": 9,
-          "executed": 116,
-          "passed": 116,
+          "executed": 49,
+          "passed": 49,
           "failed": 0,
           "skipped": 0
         },
         "legal": {
           "files": 9,
-          "executed": 112,
-          "passed": 112,
+          "executed": 43,
+          "passed": 43,
           "failed": 0,
           "skipped": 0
         },
         "designer": {
           "files": 9,
-          "executed": 116,
-          "passed": 116,
+          "executed": 49,
+          "passed": 49,
           "failed": 0,
           "skipped": 0
         }
       },
-      "totalExecuted": 344,
-      "totalPassed": 344,
+      "totalExecuted": 141,
+      "totalPassed": 141,
       "totalFailed": 0,
       "checks": {
         "main": {
@@ -131,15 +133,15 @@
               "name": "desktop-compilation",
               "command": [
                 "node",
-                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\build-isolated.mjs",
+                "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\build-isolated.mjs",
                 "D:\\lumiOS",
-                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\main\\final-v2\\build-output"
+                "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\main\\final\\build-output"
               ],
               "exitCode": 0
             }
           ],
-          "record": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\main\\final-v2\\result.json",
-          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\main\\final-v2\\build-result.json"
+          "record": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\main\\final\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\main\\final\\build-result.json"
         },
         "legal": {
           "sourceStable": true,
@@ -198,15 +200,15 @@
               "name": "desktop-compilation",
               "command": [
                 "node",
-                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\build-isolated.mjs",
+                "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\build-isolated.mjs",
                 "D:\\lumiOS-variants\\lumi-legal-client",
-                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\legal\\final-v2\\build-output"
+                "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\legal\\final\\build-output"
               ],
               "exitCode": 0
             }
           ],
-          "record": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\legal\\final-v2\\result.json",
-          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\legal\\final-v2\\build-result.json"
+          "record": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\legal\\final\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\legal\\final\\build-result.json"
         },
         "designer": {
           "sourceStable": true,
@@ -265,53 +267,200 @@
               "name": "desktop-compilation",
               "command": [
                 "node",
-                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\build-isolated.mjs",
+                "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\build-isolated.mjs",
                 "D:\\lumiOS-variants\\lumi-designer-client",
-                "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\designer\\final-v2\\build-output"
+                "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\designer\\final\\build-output"
               ],
               "exitCode": 0
             }
           ],
-          "record": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\designer\\final-v2\\result.json",
-          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\designer\\final-v2\\build-result.json"
+          "record": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\designer\\final\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\designer\\final\\build-result.json"
         }
       },
       "fullSuite": false,
       "selectedTests": "final-selected-tests.json"
     },
     "manualMainEntry": {
-      "atUTC": "2026-11-02T10:12:35.4134765Z",
-      "reportedSymptom": "Main: clicking Memory Territory has no visible response.",
-      "userConfirmedEdition": "main",
-      "currentStatus": "user-confirmed-main-entry-open",
-      "userReplies": [
-        "出现加载、超时或错误提示",
-        "正在加载",
-        "出现界面"
-      ],
-      "finalUserReply": "出现界面",
-      "scope": "User manually confirmed that the Main Memory Territory interface appeared after clicking. No confirmation of other editions, person creation, conversation, media generation or complete application acceptance.",
-      "serverServingUpdatedModules": "runtime-dev-assets.json",
-      "nativeWindowLoadedExactSourceHashConfirmed": false,
       "automatedNativeCoordinates": "paused",
-      "businessOperationReplayed": false,
-      "originalLiveIncidentCauseConfirmed": false
+      "newNativeUserConfirmation": false,
+      "priorMainEntryConfirmation": "User previously confirmed the Main entry interface appeared; this is historical, not confirmation of the current renderer changes.",
+      "nativeWindowLoadedExactSourceHashConfirmed": false,
+      "businessOperationReplayed": false
+    },
+    "browserVerification": {
+      "atUTC": "2026-11-02T10:52:15.337482+00:00",
+      "scope": "Main development source, isolated Chrome SwiftShader, synthetic props/hooks. No user data, calls, generation, authenticated APIs or native coordinates. Common production files are separately compared across editions.",
+      "completedScenarios": 5,
+      "expectedOutcomesMet": 5,
+      "cases": [
+        {
+          "name": "normal-and-context-loss",
+          "status": "expected-outcomes-observed",
+          "noOuterSuspension": true,
+          "recoveredCanvas": 1,
+          "inactiveCanvas": 0,
+          "faultRequestsBeforeRecovery": 0,
+          "faultRequestsAfterRecovery": 0
+        },
+        {
+          "name": "missing-background-retry",
+          "status": "expected-outcomes-observed",
+          "noOuterSuspension": true,
+          "recoveredCanvas": 1,
+          "inactiveCanvas": 0,
+          "faultRequestsBeforeRecovery": 1,
+          "faultRequestsAfterRecovery": 2
+        },
+        {
+          "name": "missing-blink-retry",
+          "status": "expected-outcomes-observed",
+          "noOuterSuspension": true,
+          "recoveredCanvas": 1,
+          "inactiveCanvas": 0,
+          "faultRequestsBeforeRecovery": 1,
+          "faultRequestsAfterRecovery": 2
+        },
+        {
+          "name": "slow-background",
+          "status": "expected-outcomes-observed",
+          "noOuterSuspension": true,
+          "recoveredCanvas": 1,
+          "inactiveCanvas": 0,
+          "faultRequestsBeforeRecovery": 1,
+          "faultRequestsAfterRecovery": 1
+        },
+        {
+          "name": "sanctuary-held-module-timeout-retry-close",
+          "status": "expected-outcomes-observed",
+          "firstScreenAndTextInputAvailableBeforeStageModule": true,
+          "unselectedHeavyPanelsRequestedBeforeResolve": false,
+          "draftPreservedThroughTimeoutAndRecovery": true,
+          "recoveredCanvas": 1,
+          "closedCanvas": 0
+        }
+      ],
+      "sourceStable": true,
+      "rawReports": {
+        "browser-probe/before-v2/result.json": "935e58180962b7b8e1be5c2bd82097b82f0437a28f1d016e71bba2750936f6a5",
+        "browser-probe/final/result.json": "ef689c68fab5013d5032738e794f8baed2de1c2faedeb6e77f32460b4a09f8c5",
+        "sanctuary-browser/final/result.json": "7dc4300a3770101201a60ab13f05e875976a1b06c9aed5758324bedc1a8ac3d4"
+      },
+      "visuallyInspectedImages": {
+        "browser-probe/before-v2/normal-lumi.png": "b89288a3cc55595caf60a7b9f50362afcda64a5b9bea38f96ec08acd23d48778",
+        "browser-probe/after-v1/missing-background-retry-before-recovery.png": "819659b84356ee69bbe0e1d48ac3a5191329c476739210882d3edcfaec28b01a",
+        "browser-probe/after-v1/missing-background-retry-after-recovery.png": "3f3049efe7bc0e29f044304c2578e12664496af0a4153b80a660245bd5c1330d",
+        "browser-probe/final/missing-background-retry-before-recovery.png": "4963b2644528a58f5d1b1b156e1d95b62b77f5523e4de13b61da8e908d7b48fb",
+        "browser-probe/final/slow-background-early.png": "547d23f23c5100a230f5baf84e3f724ca1a755f707aa6d32626e1e09e27cf2e1",
+        "browser-probe/final/missing-blink-retry-after-recovery.png": "e654e20f4d2c3db98e6f00bb8fa482703b345badbcb4a1eb35ef8bf566d6b718",
+        "browser-probe/final/normal-and-context-loss-after-recovery.png": "926a5dcd6855b677e82f5a830a08116745ec96a639e2effb72a88d487a45b157",
+        "sanctuary-browser/final/first-screen-while-module-held.png": "93b09e4dce742d0140661538a99bf02217232e5a658f6618fc81f40ba5c25a5f",
+        "sanctuary-browser/final/recovered-with-draft.png": "bb6b84aacabda18a722cb658643573684dc5af1770f6e5e7e4cf15ade06bc881"
+      },
+      "visualObservationsZh": [
+        "原正常室内Lumi可见；缺图时原Canvas消失。",
+        "修复后背景等待/失败时Lumi仍可见，缺图或图形连接丢失后的重试重新出现人物和室内背景。",
+        "Sanctuary等待模块期间文字输入与返回可见；恢复后草稿保留。"
+      ],
+      "limits": [
+        "Baseline first probe had an invalid CJS ReactDOM import and is not counted; before-v2 is the valid defect observation.",
+        "After-v1 exploratory run occurred while source edits were in progress and sampled one recovery too early; only final source-stable runs count.",
+        "Initial baseline fixture lacked full application CSS; final probes include source CSS. Pixel positions and timings are not compared as a performance benchmark.",
+        "Screenshots show animated camera/character states, not a pixel-identical appearance claim. Resource readiness is not itself proof of every GPU frame; selected screenshots were visually inspected.",
+        "Software WebGL does not establish user native GPU or installed-client acceptance. No paid/business operations were executed."
+      ],
+      "wholeApplicationAccepted": false
+    },
+    "loadingMeasurement": {
+      "atUTC": "2026-11-02T10:53:19.806965+00:00",
+      "scope": "Main isolated production desktop build; current graph source hashes and artifact hashes verified.",
+      "metrics": {
+        "entryRawBytes": {
+          "before": 198947,
+          "after": 39675,
+          "reductionPercent": 80.06
+        },
+        "coldStaticClosureRawBytes": {
+          "before": 2419319,
+          "after": 984956,
+          "reductionPercent": 59.29
+        },
+        "incrementalStaticRawBytes": {
+          "before": 1587341,
+          "after": 152978,
+          "reductionPercent": 90.36
+        }
+      },
+      "sourceGraph": {
+        "before": {
+          "localFiles": 87,
+          "localSourceBytes": 719449,
+          "staticEdges": 216,
+          "externalSpecifiers": [
+            "react",
+            "lucide-react",
+            "socket.io-client",
+            "sonner",
+            "@react-three/fiber",
+            "three",
+            "@react-three/drei",
+            "@react-three/postprocessing",
+            "three/addons/environments/RoomEnvironment.js",
+            "react-dom"
+          ],
+          "topLevelAwaitFiles": []
+        },
+        "after": {
+          "localFiles": 62,
+          "localSourceBytes": 554218,
+          "staticEdges": 121,
+          "externalSpecifiers": [
+            "react",
+            "lucide-react",
+            "socket.io-client",
+            "sonner"
+          ],
+          "topLevelAwaitFiles": []
+        }
+      },
+      "inputs": {
+        "loading-investigation/prior-build-loading-measurement.json": "05af4b3d548b97f4c98d9256d911a8aa1502fcc910775765ce0488f27e293419",
+        "loading-investigation/sanctuary-import-graph.json": "df86deb50555d2f27c20e89096c7ae0fc6123d6086acc281b5d400302cce5e8a",
+        "loading-after/build-loading-measurement.json": "f778d87cc7afe188553074ae5cd2a3bea3305732c2cc9a0f89d11a03b305d73f",
+        "loading-after/sanctuary-import-graph.json": "5212ffdbb22d53f7f109bda2413ef527eea89b1cdd016c4b1bec940039126db6"
+      },
+      "limits": [
+        "Raw compiled JavaScript bytes, not measured network traffic, bandwidth or native first-frame time.",
+        "Incremental excludes only desktop static closure, not all dynamically loaded modules.",
+        "Scene assets remain about21.18MiB encoded. Scene module starts loading after shell rendering; dependencies are deferred rather than deleted.",
+        "Profile/live panels load only when selected. Source and selected tests are separately checked across all three editions."
+      ]
+    },
+    "persistenceAudit": {
+      "report": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\persistence-audit\\result.json",
+      "sha256": "054a716a91579421155a484035ce5937f2703b2fffbc3893d0320c9291afd48c",
+      "sourceOnly": true,
+      "realDataMigration": false,
+      "installUninstallExecuted": false
     },
     "syncProvenance": {
-      "userSymptom": "Main: clicking Memory Territory has no visible response.",
-      "confirmedDefect": "Opening waited for a list request before any visible state; the request had no deadline and list errors were silently treated as cached or empty results.",
-      "runtimeLimit": "The local health endpoint returned HTTP 200; no authenticated user list request was observed. The exact live incident cause remains unconfirmed.",
-      "scope": "Repair the common entry flow across Main, Legal and Designer; preserve existing business data and private ownership guards.",
+      "userSymptom": "Memory Territory entry is slow and the indoor Lumi character intermittently fails to appear.",
+      "confirmedDefects": [
+        "Sanctuary initial static imports include Stage/Profile/Live modules and their heavy dependencies.",
+        "Scene and character loaders suspend the same Canvas; one missing asset can remove the whole view.",
+        "Failed loader cache and WebGL context loss lack a usable retry flow."
+      ],
+      "scope": "Common renderer and lazy module maintenance across Main/Legal/Designer; persistence and uninstall compatibility are read-only audited.",
       "wholeItemAccepted": false
     },
     "retainedRegressionFailures": [],
     "wholeApplicationAccepted": false
   },
   "evidence": {
-    "directory": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102",
-    "manifest": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\evidence-seal.json",
-    "sha256": "3e75bf385ab38ba58a5d12b92a2e869fdf60c740a382b2bae9d9cf2532f4641a",
-    "files": 1194,
+    "directory": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102",
+    "manifest": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\evidence-seal.json",
+    "sha256": "c8451aa04eb9d5198f54fbf2e40c6cfa7c2876e66b29f799acb86e8f33d06489",
+    "files": 1228,
     "canonicalLedger": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\joint-acceptance-20261023.json",
     "canonicalCheckpoint": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\active-closure-checkpoint.json"
   },
@@ -327,9 +476,9 @@
   "repository": {
     "edition": "main",
     "root": "D:/lumiOS",
-    "baseCommit": "e5cd1952097d00f47b423483772f248e03af7eaa",
+    "baseCommit": "b806e41b2999a7ec1aa77377c46795420110f766",
     "branch": "feature/chat-song-workbench-20260916",
-    "localCommitReceipt": "D:\\Lumi-Audit-Temp\\memory-territory-entry-delivery-20261102.json"
+    "localCommitReceipt": "D:\\Lumi-Audit-Temp\\memory-territory-performance-delivery-20261102.json"
   },
   "checkpointPurpose": "Preserve current reviewed source changes and acceptance state, including held failures; not a release.",
   "latestOrderedReview": {
@@ -678,8 +827,8 @@
     "requestedByUser": true,
     "lawyerDevelopmentArchived": true,
     "lawyerArchiveTag": "archive/legal-development-20261027",
-    "status": "implemented-and-scoped-verified-main-entry-user-confirmed",
-    "priority": "Memory Territory entry maintenance across three editions; historical business acceptance remains held or sealed."
+    "status": "implemented-and-scoped-verified",
+    "priority": "Memory Territory module/renderer maintenance across three editions; historical business acceptance remains held or sealed."
   },
   "archivedLegalDevelopment": {
     "at": "2026-10-27T13:13:39.160Z",
@@ -11234,6 +11383,322 @@
         "historicalBusinessStateNotResumed": true,
         "historicalFields": "Prior maintenance and business acceptance records remain historical evidence. Conversation panel and personal UI changes are scoped maintenance, not a change to historical acceptance outcomes."
       }
+    },
+    {
+      "archivedAtUTC": "2026-11-02T10:58:40.097433+00:00",
+      "baseCommit": "b806e41b2999a7ec1aa77377c46795420110f766",
+      "snapshot": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\checkpoint-before\\main\\ACCEPTANCE.json",
+      "snapshotSha256": "aeeaf53a2bf5f6a7edabdf5f5dd0a164561e9c34d212652f27b47f57b61639df",
+      "reason": "User reported slow Memory Territory loading and intermittent missing indoor Lumi; common renderer maintenance preserves previous results. Shared data and uninstall continuity audited without migration.",
+      "currentItem": {
+        "id": null,
+        "title": "Memory Territory entry loading and recovery maintenance",
+        "status": "implemented-and-scoped-verified-main-entry-user-confirmed",
+        "instruction": "Current maintenance summary: latestMemoryTerritoryEntry. Historical business acceptance stays sealed or held; native coordinate testing remains paused."
+      },
+      "knownUnresolved": [
+        "用户现场现象为主程序点击记忆领地无反应；隔离测试证明请求未完成时没有反馈等代码缺陷，不等同已观测或证明用户现场的具体网络原因。",
+        "本轮为记忆领地入口加载、失败与取消处理的前端维护；不代表记忆领地所有业务或整程序验收。真人坐标复测仍暂停。",
+        "隔离桌面编译使用write:false，产物保存到审计目录，不运行原配置写入dist的public资产复制钩子；没有重启、安装、打包或发布程序。",
+        "前轮Main/Designer各1条既有导航断言失败，以及自动记忆轮次保留的6条相邻失败（公开错误历史、化身私密资料）未在本轮修复；未把它们计为通过。",
+        "历史3/15/16封存、2暂停、10保留和其他held状态不变；法律历史业务验收未恢复，默认模型未改，未调用真实模型/付费生成或修改真实人物资料，未推送远端。",
+        "源码版本仍为3.1.1；行号和SHA用于源码定位，不是动态行覆盖。完整套件和自动原生界面测试未执行；用户手动确认仅限主程序入口出现界面。"
+      ],
+      "evidence": {
+        "directory": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102",
+        "manifest": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\evidence-seal.json",
+        "sha256": "3e75bf385ab38ba58a5d12b92a2e869fdf60c740a382b2bae9d9cf2532f4641a",
+        "files": 1194,
+        "canonicalLedger": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\joint-acceptance-20261023.json",
+        "canonicalCheckpoint": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\active-closure-checkpoint.json"
+      },
+      "workFocus": {
+        "area": "main-program-optimization-and-scoped-variant-maintenance",
+        "sourceRoot": "D:\\lumiOS",
+        "requestedByUser": true,
+        "lawyerDevelopmentArchived": true,
+        "lawyerArchiveTag": "archive/legal-development-20261027",
+        "status": "implemented-and-scoped-verified-main-entry-user-confirmed",
+        "priority": "Memory Territory entry maintenance across three editions; historical business acceptance remains held or sealed."
+      },
+      "repository": {
+        "edition": "main",
+        "root": "D:/lumiOS",
+        "baseCommit": "e5cd1952097d00f47b423483772f248e03af7eaa",
+        "branch": "feature/chat-song-workbench-20260916",
+        "localCommitReceipt": "D:\\Lumi-Audit-Temp\\memory-territory-entry-delivery-20261102.json"
+      },
+      "validation": {
+        "scope": "Memory Territory entry loading, recovery, owner isolation and selected adjacent regressions",
+        "selectedRegression": {
+          "countRuleZh": "每版+文件只计指定最后完整结果，参数化同名用例按原顺序保留；重跑不累加，失败/跳过明确计数。",
+          "perEdition": {
+            "main": {
+              "files": 9,
+              "executed": 116,
+              "passed": 116,
+              "failed": 0,
+              "skipped": 0
+            },
+            "legal": {
+              "files": 9,
+              "executed": 112,
+              "passed": 112,
+              "failed": 0,
+              "skipped": 0
+            },
+            "designer": {
+              "files": 9,
+              "executed": 116,
+              "passed": 116,
+              "failed": 0,
+              "skipped": 0
+            }
+          },
+          "totalExecuted": 344,
+          "totalPassed": 344,
+          "totalFailed": 0,
+          "checks": {
+            "main": {
+              "sourceStable": true,
+              "checks": [
+                {
+                  "name": "typecheck",
+                  "command": [
+                    "node",
+                    "node_modules/typescript/bin/tsc",
+                    "--noEmit"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "architecture",
+                  "command": [
+                    "node",
+                    "scripts/check-architecture-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "i18n",
+                  "command": [
+                    "node",
+                    "scripts/check-i18n-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "command-center-css",
+                  "command": [
+                    "node",
+                    "scripts/check-command-center-css.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "website-boundary",
+                  "command": [
+                    "node",
+                    "scripts/check-website-boundary.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "diff-check",
+                  "command": [
+                    "git",
+                    "diff",
+                    "--check"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "desktop-compilation",
+                  "command": [
+                    "node",
+                    "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\build-isolated.mjs",
+                    "D:\\lumiOS",
+                    "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\main\\final-v2\\build-output"
+                  ],
+                  "exitCode": 0
+                }
+              ],
+              "record": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\main\\final-v2\\result.json",
+              "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\main\\final-v2\\build-result.json"
+            },
+            "legal": {
+              "sourceStable": true,
+              "checks": [
+                {
+                  "name": "typecheck",
+                  "command": [
+                    "node",
+                    "node_modules/typescript/bin/tsc",
+                    "--noEmit"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "architecture",
+                  "command": [
+                    "node",
+                    "scripts/check-architecture-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "i18n",
+                  "command": [
+                    "node",
+                    "scripts/check-i18n-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "command-center-css",
+                  "command": [
+                    "node",
+                    "scripts/check-command-center-css.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "website-boundary",
+                  "command": [
+                    "node",
+                    "scripts/check-website-boundary.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "diff-check",
+                  "command": [
+                    "git",
+                    "diff",
+                    "--check"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "desktop-compilation",
+                  "command": [
+                    "node",
+                    "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\build-isolated.mjs",
+                    "D:\\lumiOS-variants\\lumi-legal-client",
+                    "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\legal\\final-v2\\build-output"
+                  ],
+                  "exitCode": 0
+                }
+              ],
+              "record": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\legal\\final-v2\\result.json",
+              "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\legal\\final-v2\\build-result.json"
+            },
+            "designer": {
+              "sourceStable": true,
+              "checks": [
+                {
+                  "name": "typecheck",
+                  "command": [
+                    "node",
+                    "node_modules/typescript/bin/tsc",
+                    "--noEmit"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "architecture",
+                  "command": [
+                    "node",
+                    "scripts/check-architecture-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "i18n",
+                  "command": [
+                    "node",
+                    "scripts/check-i18n-boundaries.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "command-center-css",
+                  "command": [
+                    "node",
+                    "scripts/check-command-center-css.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "website-boundary",
+                  "command": [
+                    "node",
+                    "scripts/check-website-boundary.mjs"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "diff-check",
+                  "command": [
+                    "git",
+                    "diff",
+                    "--check"
+                  ],
+                  "exitCode": 0
+                },
+                {
+                  "name": "desktop-compilation",
+                  "command": [
+                    "node",
+                    "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\build-isolated.mjs",
+                    "D:\\lumiOS-variants\\lumi-designer-client",
+                    "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\designer\\final-v2\\build-output"
+                  ],
+                  "exitCode": 0
+                }
+              ],
+              "record": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\designer\\final-v2\\result.json",
+              "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-entry-20261102\\final-checks\\designer\\final-v2\\build-result.json"
+            }
+          },
+          "fullSuite": false,
+          "selectedTests": "final-selected-tests.json"
+        },
+        "manualMainEntry": {
+          "atUTC": "2026-11-02T10:12:35.4134765Z",
+          "reportedSymptom": "Main: clicking Memory Territory has no visible response.",
+          "userConfirmedEdition": "main",
+          "currentStatus": "user-confirmed-main-entry-open",
+          "userReplies": [
+            "出现加载、超时或错误提示",
+            "正在加载",
+            "出现界面"
+          ],
+          "finalUserReply": "出现界面",
+          "scope": "User manually confirmed that the Main Memory Territory interface appeared after clicking. No confirmation of other editions, person creation, conversation, media generation or complete application acceptance.",
+          "serverServingUpdatedModules": "runtime-dev-assets.json",
+          "nativeWindowLoadedExactSourceHashConfirmed": false,
+          "automatedNativeCoordinates": "paused",
+          "businessOperationReplayed": false,
+          "originalLiveIncidentCauseConfirmed": false
+        },
+        "syncProvenance": {
+          "userSymptom": "Main: clicking Memory Territory has no visible response.",
+          "confirmedDefect": "Opening waited for a list request before any visible state; the request had no deadline and list errors were silently treated as cached or empty results.",
+          "runtimeLimit": "The local health endpoint returned HTTP 200; no authenticated user list request was observed. The exact live incident cause remains unconfirmed.",
+          "scope": "Repair the common entry flow across Main, Legal and Designer; preserve existing business data and private ownership guards.",
+          "wholeItemAccepted": false
+        },
+        "retainedRegressionFailures": [],
+        "wholeApplicationAccepted": false
+      },
+      "updatedAt": "2026-11-02T10:17:49.055072+00:00",
+      "latestMaintenanceSummary": {
+        "field": "latestMemoryTerritoryEntry",
+        "atUTC": "2026-11-02T10:17:49.055072+00:00",
+        "historicalBusinessStateNotResumed": true,
+        "historicalFields": "Prior maintenance and business acceptance records remain historical evidence. Memory Territory entry changes are scoped maintenance, not a change to historical acceptance outcomes."
+      }
     }
   ],
   "latestApplicabilityRemediation": {
@@ -11477,10 +11942,10 @@
     "lastSyncedCommitMeaning": "Full merge ancestry is unchanged; these scoped patches are recorded separately."
   },
   "latestMaintenanceSummary": {
-    "field": "latestMemoryTerritoryEntry",
-    "atUTC": "2026-11-02T10:17:49.055072+00:00",
+    "field": "latestMemoryTerritoryPerformance",
+    "atUTC": "2026-11-02T10:58:40.097433+00:00",
     "historicalBusinessStateNotResumed": true,
-    "historicalFields": "Prior maintenance and business acceptance records remain historical evidence. Memory Territory entry changes are scoped maintenance, not a change to historical acceptance outcomes."
+    "historicalFields": "Prior maintenance and business acceptance records remain historical evidence. Memory Territory renderer changes are scoped maintenance, not a change to historical acceptance outcomes."
   },
   "latestAutomaticMemoryContext": {
     "atUTC": "2026-11-01T15:09:12.499653+00:00",
@@ -12357,6 +12822,468 @@
       "designer": {
         "path": "D:/lumiOS-variants/lumi-designer-client",
         "head": "9a15c78d90ebda74df432ccd9fbfcdaea2213e26",
+        "branch": "contrib/installer-inputs-20260915-designer"
+      }
+    },
+    "lastSyncedCommitMeaning": "Full merge ancestry is unchanged; these scoped patches are recorded separately."
+  },
+  "latestMemoryTerritoryPerformance": {
+    "atUTC": "2026-11-02T10:58:40.097433+00:00",
+    "status": "implemented-and-scoped-verified",
+    "report": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\report.json",
+    "reportSha256": "24bc8655eb1d22c098523db2ceedb8192efd89ecd761837cc41ed3cd87f9d5c3",
+    "sourceVersions": {
+      "main": "3.1.1",
+      "legal": "3.1.1",
+      "designer": "3.1.1"
+    },
+    "selectedRegression": {
+      "countRuleZh": "每版/文件只计最终完整结果；参数化同名用例保留，重跑不累加。",
+      "perEdition": {
+        "main": {
+          "files": 9,
+          "executed": 49,
+          "passed": 49,
+          "failed": 0,
+          "skipped": 0
+        },
+        "legal": {
+          "files": 9,
+          "executed": 43,
+          "passed": 43,
+          "failed": 0,
+          "skipped": 0
+        },
+        "designer": {
+          "files": 9,
+          "executed": 49,
+          "passed": 49,
+          "failed": 0,
+          "skipped": 0
+        }
+      },
+      "totalExecuted": 141,
+      "totalPassed": 141,
+      "totalFailed": 0,
+      "checks": {
+        "main": {
+          "sourceStable": true,
+          "checks": [
+            {
+              "name": "typecheck",
+              "command": [
+                "node",
+                "node_modules/typescript/bin/tsc",
+                "--noEmit"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "architecture",
+              "command": [
+                "node",
+                "scripts/check-architecture-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "i18n",
+              "command": [
+                "node",
+                "scripts/check-i18n-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "command-center-css",
+              "command": [
+                "node",
+                "scripts/check-command-center-css.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "website-boundary",
+              "command": [
+                "node",
+                "scripts/check-website-boundary.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "diff-check",
+              "command": [
+                "git",
+                "diff",
+                "--check"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "desktop-compilation",
+              "command": [
+                "node",
+                "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\build-isolated.mjs",
+                "D:\\lumiOS",
+                "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\main\\final\\build-output"
+              ],
+              "exitCode": 0
+            }
+          ],
+          "record": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\main\\final\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\main\\final\\build-result.json"
+        },
+        "legal": {
+          "sourceStable": true,
+          "checks": [
+            {
+              "name": "typecheck",
+              "command": [
+                "node",
+                "node_modules/typescript/bin/tsc",
+                "--noEmit"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "architecture",
+              "command": [
+                "node",
+                "scripts/check-architecture-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "i18n",
+              "command": [
+                "node",
+                "scripts/check-i18n-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "command-center-css",
+              "command": [
+                "node",
+                "scripts/check-command-center-css.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "website-boundary",
+              "command": [
+                "node",
+                "scripts/check-website-boundary.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "diff-check",
+              "command": [
+                "git",
+                "diff",
+                "--check"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "desktop-compilation",
+              "command": [
+                "node",
+                "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\build-isolated.mjs",
+                "D:\\lumiOS-variants\\lumi-legal-client",
+                "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\legal\\final\\build-output"
+              ],
+              "exitCode": 0
+            }
+          ],
+          "record": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\legal\\final\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\legal\\final\\build-result.json"
+        },
+        "designer": {
+          "sourceStable": true,
+          "checks": [
+            {
+              "name": "typecheck",
+              "command": [
+                "node",
+                "node_modules/typescript/bin/tsc",
+                "--noEmit"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "architecture",
+              "command": [
+                "node",
+                "scripts/check-architecture-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "i18n",
+              "command": [
+                "node",
+                "scripts/check-i18n-boundaries.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "command-center-css",
+              "command": [
+                "node",
+                "scripts/check-command-center-css.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "website-boundary",
+              "command": [
+                "node",
+                "scripts/check-website-boundary.mjs"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "diff-check",
+              "command": [
+                "git",
+                "diff",
+                "--check"
+              ],
+              "exitCode": 0
+            },
+            {
+              "name": "desktop-compilation",
+              "command": [
+                "node",
+                "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\build-isolated.mjs",
+                "D:\\lumiOS-variants\\lumi-designer-client",
+                "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\designer\\final\\build-output"
+              ],
+              "exitCode": 0
+            }
+          ],
+          "record": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\designer\\final\\result.json",
+          "buildRecord": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\final-checks\\designer\\final\\build-result.json"
+        }
+      },
+      "fullSuite": false,
+      "selectedTests": "final-selected-tests.json"
+    },
+    "manualMainEntry": {
+      "automatedNativeCoordinates": "paused",
+      "newNativeUserConfirmation": false,
+      "priorMainEntryConfirmation": "User previously confirmed the Main entry interface appeared; this is historical, not confirmation of the current renderer changes.",
+      "nativeWindowLoadedExactSourceHashConfirmed": false,
+      "businessOperationReplayed": false
+    },
+    "browserVerification": {
+      "atUTC": "2026-11-02T10:52:15.337482+00:00",
+      "scope": "Main development source, isolated Chrome SwiftShader, synthetic props/hooks. No user data, calls, generation, authenticated APIs or native coordinates. Common production files are separately compared across editions.",
+      "completedScenarios": 5,
+      "expectedOutcomesMet": 5,
+      "cases": [
+        {
+          "name": "normal-and-context-loss",
+          "status": "expected-outcomes-observed",
+          "noOuterSuspension": true,
+          "recoveredCanvas": 1,
+          "inactiveCanvas": 0,
+          "faultRequestsBeforeRecovery": 0,
+          "faultRequestsAfterRecovery": 0
+        },
+        {
+          "name": "missing-background-retry",
+          "status": "expected-outcomes-observed",
+          "noOuterSuspension": true,
+          "recoveredCanvas": 1,
+          "inactiveCanvas": 0,
+          "faultRequestsBeforeRecovery": 1,
+          "faultRequestsAfterRecovery": 2
+        },
+        {
+          "name": "missing-blink-retry",
+          "status": "expected-outcomes-observed",
+          "noOuterSuspension": true,
+          "recoveredCanvas": 1,
+          "inactiveCanvas": 0,
+          "faultRequestsBeforeRecovery": 1,
+          "faultRequestsAfterRecovery": 2
+        },
+        {
+          "name": "slow-background",
+          "status": "expected-outcomes-observed",
+          "noOuterSuspension": true,
+          "recoveredCanvas": 1,
+          "inactiveCanvas": 0,
+          "faultRequestsBeforeRecovery": 1,
+          "faultRequestsAfterRecovery": 1
+        },
+        {
+          "name": "sanctuary-held-module-timeout-retry-close",
+          "status": "expected-outcomes-observed",
+          "firstScreenAndTextInputAvailableBeforeStageModule": true,
+          "unselectedHeavyPanelsRequestedBeforeResolve": false,
+          "draftPreservedThroughTimeoutAndRecovery": true,
+          "recoveredCanvas": 1,
+          "closedCanvas": 0
+        }
+      ],
+      "sourceStable": true,
+      "rawReports": {
+        "browser-probe/before-v2/result.json": "935e58180962b7b8e1be5c2bd82097b82f0437a28f1d016e71bba2750936f6a5",
+        "browser-probe/final/result.json": "ef689c68fab5013d5032738e794f8baed2de1c2faedeb6e77f32460b4a09f8c5",
+        "sanctuary-browser/final/result.json": "7dc4300a3770101201a60ab13f05e875976a1b06c9aed5758324bedc1a8ac3d4"
+      },
+      "visuallyInspectedImages": {
+        "browser-probe/before-v2/normal-lumi.png": "b89288a3cc55595caf60a7b9f50362afcda64a5b9bea38f96ec08acd23d48778",
+        "browser-probe/after-v1/missing-background-retry-before-recovery.png": "819659b84356ee69bbe0e1d48ac3a5191329c476739210882d3edcfaec28b01a",
+        "browser-probe/after-v1/missing-background-retry-after-recovery.png": "3f3049efe7bc0e29f044304c2578e12664496af0a4153b80a660245bd5c1330d",
+        "browser-probe/final/missing-background-retry-before-recovery.png": "4963b2644528a58f5d1b1b156e1d95b62b77f5523e4de13b61da8e908d7b48fb",
+        "browser-probe/final/slow-background-early.png": "547d23f23c5100a230f5baf84e3f724ca1a755f707aa6d32626e1e09e27cf2e1",
+        "browser-probe/final/missing-blink-retry-after-recovery.png": "e654e20f4d2c3db98e6f00bb8fa482703b345badbcb4a1eb35ef8bf566d6b718",
+        "browser-probe/final/normal-and-context-loss-after-recovery.png": "926a5dcd6855b677e82f5a830a08116745ec96a639e2effb72a88d487a45b157",
+        "sanctuary-browser/final/first-screen-while-module-held.png": "93b09e4dce742d0140661538a99bf02217232e5a658f6618fc81f40ba5c25a5f",
+        "sanctuary-browser/final/recovered-with-draft.png": "bb6b84aacabda18a722cb658643573684dc5af1770f6e5e7e4cf15ade06bc881"
+      },
+      "visualObservationsZh": [
+        "原正常室内Lumi可见；缺图时原Canvas消失。",
+        "修复后背景等待/失败时Lumi仍可见，缺图或图形连接丢失后的重试重新出现人物和室内背景。",
+        "Sanctuary等待模块期间文字输入与返回可见；恢复后草稿保留。"
+      ],
+      "limits": [
+        "Baseline first probe had an invalid CJS ReactDOM import and is not counted; before-v2 is the valid defect observation.",
+        "After-v1 exploratory run occurred while source edits were in progress and sampled one recovery too early; only final source-stable runs count.",
+        "Initial baseline fixture lacked full application CSS; final probes include source CSS. Pixel positions and timings are not compared as a performance benchmark.",
+        "Screenshots show animated camera/character states, not a pixel-identical appearance claim. Resource readiness is not itself proof of every GPU frame; selected screenshots were visually inspected.",
+        "Software WebGL does not establish user native GPU or installed-client acceptance. No paid/business operations were executed."
+      ],
+      "wholeApplicationAccepted": false
+    },
+    "loadingMeasurement": {
+      "atUTC": "2026-11-02T10:53:19.806965+00:00",
+      "scope": "Main isolated production desktop build; current graph source hashes and artifact hashes verified.",
+      "metrics": {
+        "entryRawBytes": {
+          "before": 198947,
+          "after": 39675,
+          "reductionPercent": 80.06
+        },
+        "coldStaticClosureRawBytes": {
+          "before": 2419319,
+          "after": 984956,
+          "reductionPercent": 59.29
+        },
+        "incrementalStaticRawBytes": {
+          "before": 1587341,
+          "after": 152978,
+          "reductionPercent": 90.36
+        }
+      },
+      "sourceGraph": {
+        "before": {
+          "localFiles": 87,
+          "localSourceBytes": 719449,
+          "staticEdges": 216,
+          "externalSpecifiers": [
+            "react",
+            "lucide-react",
+            "socket.io-client",
+            "sonner",
+            "@react-three/fiber",
+            "three",
+            "@react-three/drei",
+            "@react-three/postprocessing",
+            "three/addons/environments/RoomEnvironment.js",
+            "react-dom"
+          ],
+          "topLevelAwaitFiles": []
+        },
+        "after": {
+          "localFiles": 62,
+          "localSourceBytes": 554218,
+          "staticEdges": 121,
+          "externalSpecifiers": [
+            "react",
+            "lucide-react",
+            "socket.io-client",
+            "sonner"
+          ],
+          "topLevelAwaitFiles": []
+        }
+      },
+      "inputs": {
+        "loading-investigation/prior-build-loading-measurement.json": "05af4b3d548b97f4c98d9256d911a8aa1502fcc910775765ce0488f27e293419",
+        "loading-investigation/sanctuary-import-graph.json": "df86deb50555d2f27c20e89096c7ae0fc6123d6086acc281b5d400302cce5e8a",
+        "loading-after/build-loading-measurement.json": "f778d87cc7afe188553074ae5cd2a3bea3305732c2cc9a0f89d11a03b305d73f",
+        "loading-after/sanctuary-import-graph.json": "5212ffdbb22d53f7f109bda2413ef527eea89b1cdd016c4b1bec940039126db6"
+      },
+      "limits": [
+        "Raw compiled JavaScript bytes, not measured network traffic, bandwidth or native first-frame time.",
+        "Incremental excludes only desktop static closure, not all dynamically loaded modules.",
+        "Scene assets remain about21.18MiB encoded. Scene module starts loading after shell rendering; dependencies are deferred rather than deleted.",
+        "Profile/live panels load only when selected. Source and selected tests are separately checked across all three editions."
+      ]
+    },
+    "persistenceAudit": {
+      "report": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\persistence-audit\\result.json",
+      "sha256": "054a716a91579421155a484035ce5937f2703b2fffbc3893d0320c9291afd48c",
+      "sourceOnly": true,
+      "realDataMigration": false,
+      "installUninstallExecuted": false
+    },
+    "syncProvenance": {
+      "userSymptom": "Memory Territory entry is slow and the indoor Lumi character intermittently fails to appear.",
+      "confirmedDefects": [
+        "Sanctuary initial static imports include Stage/Profile/Live modules and their heavy dependencies.",
+        "Scene and character loaders suspend the same Canvas; one missing asset can remove the whole view.",
+        "Failed loader cache and WebGL context loss lack a usable retry flow."
+      ],
+      "scope": "Common renderer and lazy module maintenance across Main/Legal/Designer; persistence and uninstall compatibility are read-only audited.",
+      "wholeItemAccepted": false
+    },
+    "retainedRegressionFailures": [],
+    "evidence": {
+      "directory": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102",
+      "manifest": "D:\\Lumi-Audit-Temp\\memory-territory-performance-20261102\\evidence-seal.json",
+      "sha256": "c8451aa04eb9d5198f54fbf2e40c6cfa7c2876e66b29f799acb86e8f33d06489",
+      "files": 1228,
+      "canonicalLedger": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\joint-acceptance-20261023.json",
+      "canonicalCheckpoint": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-03\\new-chat\\work\\customer-installation-closure-20261020\\active-closure-checkpoint.json"
+    },
+    "limitsZh": [
+      "本轮验证记忆领地模块加载与本地人物画面恢复，不代表全部业务或整程序验收；真人坐标复测仍暂停。",
+      "真实浏览器使用隔离Chrome软件WebGL与合成人物，阻断业务API、外网与WebSocket；不是用户原生窗口、实际GPU或安装包验收，未复现用户现场的精确原始原因。",
+      "人物及室内资源仍约21.18MiB编码体积，未更换形象或降低美术质量；加载时长还受磁盘、网络与GPU影响。构建字节降低不等同实测现场秒数降低。",
+      "超时/关闭阻止旧结果显示并释放已挂载画面；Three TextureLoader在途资源不具备真正传输取消，不宣称已中止网络请求。模块重试仍受浏览器自身模块缓存限制。",
+      "同后台、同账号和同工作区可继续读取已持久化记忆/聊天/归档创作；须保留数据库及附件。Designer独立启动默认LumiCore-Designer仍与Main/Legal的LumiCore不同，本轮只读审计，未统一或迁移真实数据，也未执行卸载换装。未发送草稿与客户端缓存不承诺跨版恢复。",
+      "Main/Designer此前各1条导航断言失败、自动记忆轮次6条相邻失败与其他既有未完成项保留，未因本轮选定检查通过而销账。",
+      "历史3/15/16封存、2暂停、10保留及其他held状态不变；法律历史业务验收未恢复，默认模型未改，未调用真实模型/付费生成或修改用户记录。",
+      "三版源码版本仍为3.1.1；隔离桌面编译write:false，不执行原配置写dist的public复制钩子；没有重启、安装、打包发布或推送远端。源码行号/SHA用于定位，不是动态行覆盖。"
+    ],
+    "wholeApplicationAccepted": false,
+    "nativeCoordinateTesting": "paused",
+    "archiveAcceptanceResumed": false,
+    "defaultModelChanged": false,
+    "remotePushPerformed": false,
+    "runtimeRestarted": false,
+    "installedBinariesRebuilt": false,
+    "localCommitReceipt": "D:\\Lumi-Audit-Temp\\memory-territory-performance-delivery-20261102.json",
+    "selectivePatchProvenance": {
+      "main": {
+        "path": "D:/lumiOS",
+        "head": "b806e41b2999a7ec1aa77377c46795420110f766",
+        "branch": "feature/chat-song-workbench-20260916"
+      },
+      "legal": {
+        "path": "D:/lumiOS-variants/lumi-legal-client",
+        "head": "162d0fd483c07ef71f309d8c1c4701a5ddef6505",
+        "branch": "contrib/installer-inputs-20260915-legal"
+      },
+      "designer": {
+        "path": "D:/lumiOS-variants/lumi-designer-client",
+        "head": "3404f041d0b9b07b388c87218812095345aaea1c",
         "branch": "contrib/installer-inputs-20260915-designer"
       }
     },

@@ -8,14 +8,16 @@ import { memoryTerritoryCopy } from '../i18n/locales/memoryTerritory';
 import { DEFAULT_MEMORY_AVATAR_APPEARANCE, type MemoryAvatar, type MemoryAvatarAppearance } from '../../shared/memory_avatar';
 import { useMemoryAvatarConversation } from '../hooks/useMemoryAvatarConversation';
 import { useMemoryAvatarCall } from '../hooks/useMemoryAvatarCall';
-import { MemoryAvatarStage } from './MemoryAvatarStage';
-import { MemoryAvatarProfile } from './MemoryAvatarProfile';
+import { SanctuaryLazyPanel } from './SanctuaryLazyPanel';
 import { useAliyunAvatarConfig } from '../hooks/useAliyunAvatarConfig';
 import { aliyunAvatarCopy } from '../i18n/locales/aliyunAvatar';
-import { MemoryAvatarPortraitStage } from './MemoryAvatarPortraitStage';
 import { memoryPortraitCopy } from '../i18n/locales/memoryPortrait';
-import { AvatarLiveWorkbench } from './AvatarLiveWorkbench';
 import { avatarLiveCopy } from '../i18n/locales/avatarLive';
+
+const loadStage = () => import('./MemoryAvatarStage').then(module => ({ default: module.MemoryAvatarStage }));
+const loadPortrait = () => import('./MemoryAvatarPortraitStage').then(module => ({ default: module.MemoryAvatarPortraitStage }));
+const loadProfile = () => import('./MemoryAvatarProfile').then(module => ({ default: module.MemoryAvatarProfile }));
+const loadLive = () => import('./AvatarLiveWorkbench').then(module => ({ default: module.AvatarLiveWorkbench }));
 
 interface SanctuaryAgent extends Partial<MemoryAvatar> {
   id: string;
@@ -140,7 +142,11 @@ function MemoryTerritory({ agent, ownerId, locale, avatars = [], onClose, onSele
   };
   const controlClass = 'inline-flex h-10 items-center justify-center gap-2 rounded-full px-4 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35';
 
-  if (liveOpen) return <AvatarLiveWorkbench avatar={avatar} ownerId={ownerId} locale={locale} onClose={() => setLiveOpen(false)} />;
+  if (liveOpen) return <div className="fixed inset-0 z-[215] bg-[#131d1f] text-foreground">
+    <SanctuaryLazyPanel load={loadLive} kind="live" locale={locale} onBack={() => setLiveOpen(false)}>
+      {Live => <Live avatar={avatar} ownerId={ownerId} locale={locale} onClose={() => setLiveOpen(false)} />}
+    </SanctuaryLazyPanel>
+  </div>;
   return <div role="dialog" aria-modal="true" aria-label={copy.title} className="fixed inset-0 z-[210] flex min-h-0 flex-col overflow-hidden bg-[#14191b] text-foreground">
     <header className="flex h-16 shrink-0 items-center gap-3 border-b border-white/[.07] px-4 sm:h-[72px] sm:px-6">
       <button type="button" onClick={leave} aria-label={copy.leave} title={copy.leave} className="flex shrink-0 items-center gap-2 rounded-lg py-2 pr-2 text-sm text-muted-foreground hover:text-white"><ArrowLeft size={19} /><span className="hidden sm:inline">{copy.leave}</span></button>
@@ -166,8 +172,12 @@ function MemoryTerritory({ agent, ownerId, locale, avatars = [], onClose, onSele
           <section data-theme-scope="dark" aria-label={avatar.name} className={`relative min-w-0 shrink-0 overflow-hidden ${profileOpen ? 'hidden md:block' : 'block'} h-[min(56vh,500px)] min-h-[380px] bg-[#1c2424] md:h-auto md:min-h-0 md:flex-1`}>
             <div className="pointer-events-none absolute inset-0" style={{ background: `radial-gradient(ellipse at 50% 33%, ${preview?.backgroundColor || avatar.appearance.backgroundColor}88, #1a2222 80%)` }} />
             <div className="absolute inset-0 bottom-10">{showPortrait && !preview
-              ? <MemoryAvatarPortraitStage key={`${portraitProvider}:${portraitMediaId || ''}`} ownerId={ownerId} avatarId={avatar.id} mediaId={portraitMediaId} stream={call.portraitStream || null} surface={call.portraitSurface} speaking={Boolean(call.portraitSpeaking)} name={avatar.name} locale={locale} />
-              : <MemoryAvatarStage avatarId={avatar.id} presentation={preview ? undefined : avatar.presentation} appearance={preview || avatar.appearance} outputLevelRef={call.outputLevelRef} state={call.state} name={avatar.name} locale={locale} active />}</div>
+              ? <SanctuaryLazyPanel key={`portrait:${portraitProvider}:${portraitMediaId || ''}`} load={loadPortrait} kind="portrait" locale={locale} onBack={leave}>
+                {Portrait => <Portrait ownerId={ownerId} avatarId={avatar.id} mediaId={portraitMediaId} stream={call.portraitStream || null} surface={call.portraitSurface} speaking={Boolean(call.portraitSpeaking)} name={avatar.name} locale={locale} />}
+              </SanctuaryLazyPanel>
+              : <SanctuaryLazyPanel key="scene" load={loadStage} kind="scene" locale={locale} onBack={leave}>
+                {Stage => <Stage avatarId={avatar.id} presentation={preview ? undefined : avatar.presentation} appearance={preview || avatar.appearance} outputLevelRef={call.outputLevelRef} state={call.state} name={avatar.name} locale={locale} active />}
+              </SanctuaryLazyPanel>}</div>
             <div className="absolute left-5 right-5 top-5 flex items-start justify-between gap-3 sm:left-7 sm:right-7 sm:top-6">
               <p role="status" className="flex max-w-[75%] items-start gap-2 text-[11px] leading-5 text-[#b9c3b5]"><span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${callActive ? 'bg-[#b8d3a4]' : 'bg-[#7d9484]'}`} />{stateLabel}</p>
               {callActive && call.elapsedSeconds > 0 && <span className="font-mono text-[10px] tabular-nums text-[#91a38f]">{Math.floor(call.elapsedSeconds / 60).toString().padStart(2, '0')}:{Math.floor(call.elapsedSeconds % 60).toString().padStart(2, '0')}</span>}
@@ -198,7 +208,9 @@ function MemoryTerritory({ agent, ownerId, locale, avatars = [], onClose, onSele
           </section>
 
           <aside className={`${profileOpen ? 'h-full min-h-0' : 'min-h-[320px] flex-1'} flex w-full shrink-0 flex-col border-t border-white/[.07] bg-[#1c2224] md:h-full md:min-h-0 md:w-[330px] md:flex-none md:border-l md:border-t-0`}>
-            {profileOpen ? <MemoryAvatarProfile avatar={avatar} ownerId={ownerId} locale={locale} onUpdated={updateAvatar} onArchived={archive} onClose={closeProfile} onBeforeMutation={endCall} onPreviewAppearance={setPreview} /> : <>
+            {profileOpen ? <SanctuaryLazyPanel load={loadProfile} kind="profile" locale={locale} onBack={closeProfile}>
+              {Profile => <Profile avatar={avatar} ownerId={ownerId} locale={locale} onUpdated={updateAvatar} onArchived={archive} onClose={closeProfile} onBeforeMutation={endCall} onPreviewAppearance={setPreview} />}
+            </SanctuaryLazyPanel> : <>
               <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/[.05] px-5"><h3 className="text-xs font-medium text-foreground">{copy.conversation}</h3><button type="button" aria-label={copy.profile} title={copy.profile} onClick={() => setProfileOpen(true)} className="rounded-lg p-2 text-muted-foreground hover:bg-white/5"><Settings2 size={15} /></button></div>
               <div aria-live="polite" aria-relevant="additions text" className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
                 {conversation.loading && <p className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 size={13} className="animate-spin" />{copy.connecting}</p>}

@@ -34,12 +34,12 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-it('has no duplicate header profile button and passes saved public identity into live preview', () => {
+it('has no duplicate header profile button and passes saved public identity into live preview', async () => {
   const view=render(<Sanctuary agent={{...avatar,publicBrief:'Approved identity'}} lang="en" isOpen onClose={vi.fn()} />);
   expect(within(view.container.querySelector('header')!).queryByRole('button',{name:'Person details'})).toBeNull();
   expect(screen.getAllByRole('button',{name:'Person details'})).toHaveLength(1);
   fireEvent.click(screen.getByRole('button',{name:'Avatar live preview'}));
-  expect(screen.getByTestId('live-brief').textContent).toBe('Approved identity');
+  expect((await screen.findByTestId('live-brief')).textContent).toBe('Approved identity');
 });
 
 it('does not mount devices while closed or unauthenticated, and releases each identity on close and owner switch', () => {
@@ -69,7 +69,7 @@ it('previews appearance immediately and ends the call before forwarding an updat
   const updated = vi.fn(); const archived = vi.fn();
   render(<Sanctuary agent={avatar} lang="en" isOpen onClose={vi.fn()} onAvatarUpdated={updated} onAvatarArchived={archived} />);
   fireEvent.click(screen.getAllByRole('button', { name: 'Person details' })[0]);
-  fireEvent.click(screen.getByRole('button', { name: 'Preview fixture' })); expect(screen.getByTestId('stage').getAttribute('data-skin')).toBe('#abcdef');
+  fireEvent.click(await screen.findByRole('button', { name: 'Preview fixture' })); expect(screen.getByTestId('stage').getAttribute('data-skin')).toBe('#abcdef');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save fixture' })));
   expect(fixture.end).toHaveBeenCalled(); expect(updated).toHaveBeenCalledWith(expect.objectContaining({ revision: 2, name: 'Updated person' }));
   expect(fixture.end.mock.invocationCallOrder[0]).toBeLessThan(updated.mock.invocationCallOrder[0]);

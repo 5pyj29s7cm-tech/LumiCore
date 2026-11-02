@@ -3,6 +3,7 @@ import React from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { DEFAULT_MEMORY_AVATAR_APPEARANCE } from '../shared/memory_avatar';
+import { memoryAvatarRendererCopy } from '../src/i18n/locales/memoryAvatarRenderer';
 import { memoryTerritoryCopy } from '../src/i18n/locales/memoryTerritory';
 
 const runtime = vi.hoisted(() => ({ canvas: vi.fn(), unmounted: vi.fn(), renderer: null as any }));
@@ -56,7 +57,7 @@ it('unmounts a lost WebGL context and displays the localized text fallback', asy
   const event = new Event('webglcontextlost', { cancelable: true });
   act(() => runtime.renderer.domElement.dispatchEvent(event));
   expect(event.defaultPrevented).toBe(true);
-  expect(await screen.findByText(memoryTerritoryCopy('zh').renderFallback)).toBeTruthy();
+  expect(await screen.findByText(memoryAvatarRendererCopy('zh').contextLost)).toBeTruthy();
   expect(screen.queryByTestId('portrait-canvas')).toBeNull();
   expect(runtime.unmounted).toHaveBeenCalledTimes(1);
 });

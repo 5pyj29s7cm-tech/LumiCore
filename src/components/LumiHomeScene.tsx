@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { useFrame, useLoader, useThree } from '@react-three/fiber';
-import { ContactShadows, useGLTF } from '@react-three/drei';
+import { useFrame, useThree } from '@react-three/fiber';
+import { useMemoryAvatarTextures, useMemoryAvatarGltf } from '../lib/memoryAvatarRenderResources';
+import { ContactShadows } from '@react-three/drei';
 import { DepthOfField, EffectComposer, N8AO } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -10,7 +11,7 @@ type Surface = 'wood' | 'fabric' | 'floor' | 'plaster';
 type SurfaceMaps={map?:THREE.Texture;normalMap?:THREE.Texture;roughnessMap?:THREE.Texture};
 const Materials = createContext<Partial<Record<Surface,SurfaceMaps>>>({});
 function HomeMaterials({children}:{children:ReactNode}){
-  const sources=useLoader(THREE.TextureLoader,['wood_table_001','rough_linen','wooden_floor_02'].flatMap(id=>['diffuse','nor_gl','rough'].map(kind=>'/avatars/lumi-home/'+id+'-'+kind+'.jpg')));
+  const sources=useMemoryAvatarTextures(['wood_table_001','rough_linen','wooden_floor_02'].flatMap(id=>['diffuse','nor_gl','rough'].map(kind=>'/avatars/lumi-home/'+id+'-'+kind+'.jpg')));
   const maps=useMemo(()=>Object.fromEntries((['wood','fabric','floor'] as const).map((kind,index)=>{
     const textures=sources.slice(index*3,index*3+3).map((source,i)=>{const t=source.clone();t.colorSpace=i===0?THREE.SRGBColorSpace:THREE.NoColorSpace;t.wrapS=t.wrapT=THREE.RepeatWrapping;t.anisotropy=8;t.repeat.set(kind==='floor'?4:kind==='fabric'?3:1,kind==='floor'?4:kind==='fabric'?3:1);t.needsUpdate=true;return t;});
     return[kind,{map:textures[0],normalMap:textures[1],roughnessMap:textures[2]}];
@@ -24,7 +25,7 @@ function Block({ at, size, color, roughness = .8, metalness = 0, name, surface='
   return <mesh name={name} position={at} castShadow receiveShadow><boxGeometry args={size} /><meshStandardMaterial {...(metalness?{}:maps)} normalScale={[.15,.15]} color={tint} roughness={roughness} metalness={metalness} /></mesh>;
 }
 function Furnishing({asset,at,width,rotation=0}:{asset:string;at:XYZ;width:number;rotation?:number}){
-  const {scene}=useGLTF('/avatars/lumi-home/'+asset+'/'+asset+'.gltf');
+  const {scene}=useMemoryAvatarGltf('/avatars/lumi-home/'+asset+'/'+asset+'.gltf');
   const {object,offset,scale}=useMemo(()=>{const object=scene.clone(true),box=new THREE.Box3().setFromObject(object),size=box.getSize(new THREE.Vector3()),center=box.getCenter(new THREE.Vector3());object.traverse(o=>{if(o instanceof THREE.Mesh){o.castShadow=true;o.receiveShadow=true;}});return{object,offset:new THREE.Vector3(-center.x,-box.min.y,-center.z),scale:width/Math.max(.01,size.x)};},[scene,width]);
   return <group name={asset} position={at} rotation={[0,rotation,0]} scale={scale}><primitive object={object} position={offset} dispose={null} /></group>;
 }
@@ -40,7 +41,7 @@ function HomeReflections() {
 }
 /** The night reading corner retains geometry, reflections and depth. */
 function NightReadingLamp(){
-  const source=useLoader(THREE.TextureLoader,'/avatars/lumi-reclining/reading-lamp-v2.png');
+  const source=useMemoryAvatarTextures('/avatars/lumi-reclining/reading-lamp-v2.png');
   const map=useMemo(()=>{const t=source.clone();t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=4;t.needsUpdate=true;return t;},[source]);
   useEffect(()=>()=>map.dispose(),[map]);
   return <mesh name="linen-night-lamp" position={[0,1.06,0]}><planeGeometry args={[1.414,2.12]} /><meshBasicMaterial map={map} transparent alphaTest={.05} depthWrite toneMapped={false} /></mesh>;
@@ -104,8 +105,10 @@ function HomeInterior() {
   </group>;
 }
 function Curtains({reducedMotion}:{reducedMotion:boolean}){
-  const refs=useRef<Array<THREE.Mesh|null>>([]),time=useRef(0);
+  const refs=useRef<Array<THREE.Mesh|null>>([]),time=useRef(0),staticUpdated=useRef(false);
   useFrame((_state,delta)=>{
+    if(reducedMotion && staticUpdated.current)return;
+    staticUpdated.current=reducedMotion;
     if(!reducedMotion)time.current+=Math.min(delta,.06);
     refs.current.forEach(mesh=>{if(!mesh)return;const p=mesh.geometry.attributes.position;
       for(let i=0;i<p.count;i++){const x=p.getX(i),y=p.getY(i);p.setZ(i,.065*Math.cos(x*23)+(reducedMotion?0:.035*Math.sin(time.current*.65+x*2+y)*Math.max(0,(2-y)/4)));}
@@ -115,7 +118,7 @@ function Curtains({reducedMotion}:{reducedMotion:boolean}){
   return <group name="window-curtains">{[.84,7.15].map((x,i)=><mesh key={x} ref={v=>{refs.current[i]=v;}} position={[x,1.58,-5.65]} castShadow receiveShadow><planeGeometry args={[i===0?.64:1.7,5,36,20]} /><meshStandardMaterial color="#b9afa0" roughness={1} side={THREE.DoubleSide} /></mesh>)}</group>;
 }
 function NightWindowView(){
-  const source=useLoader(THREE.TextureLoader,'/avatars/lumi-reclining/night-city-v2.png');
+  const source=useMemoryAvatarTextures('/avatars/lumi-reclining/night-city-v2.png');
   const texture=useMemo(()=>{const t=source.clone();t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=4;t.needsUpdate=true;return t;},[source]);
   useEffect(()=>()=>texture.dispose(),[texture]);
   const uniforms=useMemo(()=>({map:{value:texture}}),[texture]);
