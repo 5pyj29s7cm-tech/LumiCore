@@ -1,6 +1,6 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-11-02T13:20:04.101255+00:00",
+  "updatedAt": "2026-11-02T13:29:35.801531+00:00",
   "localDate": "2026-11-01",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
@@ -14332,5 +14332,35 @@
       }
     },
     "lastSyncedCommitMeaning": "Scoped commits are separate from full merge ancestry."
+  },
+  "latestMainGithubInstallerPreparation": {
+    "atUTC": "2026-11-02T13:29:35.801531+00:00",
+    "baseCommit": "c147d63c9d5745121ab826b1ef8a9fd7c381eb8f",
+    "workflowRepository": "5pyj29s7cm-tech/lumi-CEO",
+    "workflowId": 340404224,
+    "branch": "feature/chat-song-workbench-20260916",
+    "sourceFiles": {
+      ".github/workflows/build-installers.yml": "813d8487ce17493c87176610395ed94e4bd16a91599a530c07c01bf79bf29bed",
+      "docs/generated/capability-stats.md": "e5e7a607d39640914980bcbae7fffec676a85e60fc1b1b58bf6529c696f9d078"
+    },
+    "checks": {
+      "diffCheck": true,
+      "generatedDocumentRepeatStable": true,
+      "workflowIndependentReview": true
+    },
+    "scope": "Enable existing installer workflow for private origin; attach exact build and runtime receipts; refresh generated capability statistics. Build has not run yet.",
+    "signing": {
+      "windows": "unsigned",
+      "macos": "ad-hoc, not notarized"
+    },
+    "wholeApplicationAccepted": false,
+    "status": "prepared-awaiting-github-build",
+    "evidence": "D:\\Lumi-Audit-Temp\\main-win-mac-build-20261102\\preparation\\evidence-seal.json",
+    "evidenceSha256": "3f17f2f1f2868586a8143812e16897a3197254af87f3f97bd94836992982baf7",
+    "authorizedUserInstructions": [
+      "本地提交远程推送，并编译主程序的win和mac安装包",
+      "用github编译"
+    ],
+    "buildResultRecordedSeparately": true
   }
 }

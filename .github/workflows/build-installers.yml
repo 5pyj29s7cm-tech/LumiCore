@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   windows-x64:
-    if: github.repository == '5pyj29s7cm-tech/LumiCore'
+    if: github.repository == '5pyj29s7cm-tech/LumiCore' || github.repository == '5pyj29s7cm-tech/lumi-CEO'
     name: Windows x64 · unsigned NSIS
     runs-on: windows-latest
     timeout-minutes: 120
@@ -103,11 +103,13 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/nsis/*.exe.sha256
             windows-build-report.json
+            src-tauri/target/release/bundle/build-receipt.json
+            desktop-resources/dist-server/runtime-meta.json
           if-no-files-found: error
           retention-days: 14
 
   macos:
-    if: github.repository == '5pyj29s7cm-tech/LumiCore'
+    if: github.repository == '5pyj29s7cm-tech/LumiCore' || github.repository == '5pyj29s7cm-tech/lumi-CEO'
     name: macOS ${{ matrix.label }} · ad-hoc DMG
     timeout-minutes: 120
     strategy:
@@ -230,5 +232,7 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg.sha256
             macos-${{ matrix.artifact_arch }}-build-report.txt
+            src-tauri/target/${{ matrix.target }}/release/bundle/build-receipt.json
+            desktop-resources/dist-server/runtime-meta.json
           if-no-files-found: error
           retention-days: 14
