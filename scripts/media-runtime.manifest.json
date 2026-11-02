@@ -10,6 +10,13 @@
     "ffmpegSourceUrl": "https://github.com/FFmpeg/FFmpeg/commit/239f2c733d",
     "originalDistribution": "Gyan.FFmpeg via Microsoft WinGet"
   },
+  "archive": {
+    "url": "https://github.com/GyanD/codexffmpeg/releases/download/8.1.1/ffmpeg-8.1.1-full_build.zip",
+    "sha256": "49b28c5f16addd40239a66949973458769b7056fb7752c30ac0d53389d09a552",
+    "sizeBytes": 252194496,
+    "rootDirectory": "ffmpeg-8.1.1-full_build",
+    "provenanceUrl": "https://github.com/microsoft/winget-pkgs/blob/master/manifests/g/Gyan/FFmpeg/8.1.1/Gyan.FFmpeg.installer.yaml"
+  },
   "license": {
     "spdx": "GPL-3.0-or-later",
     "notice": "This distribution includes the unmodified separate FFmpeg and FFprobe executables. The accompanying LICENSE and README preserve upstream licensing, build configuration and external-library versions.",

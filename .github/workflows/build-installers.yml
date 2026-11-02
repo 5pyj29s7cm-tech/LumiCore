@@ -43,6 +43,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Prepare pinned Windows media runtime
+        shell: pwsh
+        run: ./scripts/fetch-media-runtime.ps1 -DestinationDirectory (Join-Path $env:RUNNER_TEMP 'lumi-media-runtime') -GitHubEnvFile $env:GITHUB_ENV
+
       - name: Build unsigned Windows NSIS installer
         run: npm run tauri:build -- --bundles nsis
 

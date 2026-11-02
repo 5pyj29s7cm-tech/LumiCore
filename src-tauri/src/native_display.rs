@@ -322,7 +322,7 @@ Write-Output "OK|$x|$y|$w|$h""#,
     }
     #[cfg(target_os = "macos")]
     {
-        let unique = SystemTime::now()
+        let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
             .map(|duration| duration.as_millis())

@@ -1,6 +1,6 @@
 {
   "schema": "lumi.acceptance.checkpoint.v1",
-  "updatedAt": "2026-11-02T13:39:06.729565+00:00",
+  "updatedAt": "2026-11-02T14:05:04.262533+00:00",
   "localDate": "2026-11-01",
   "timezone": "Asia/Shanghai",
   "kind": "main-optimization-checkpoint",
@@ -14391,5 +14391,44 @@
     "releasePublished": false,
     "evidence": "D:\\Lumi-Audit-Temp\\main-win-mac-build-20261102\\public-preparation\\evidence-seal.json",
     "evidenceSha256": "b51bfd4c74815c4fadcb5dc14300af8f2e40ad92b6ce3f9de457a043ee802420"
+  },
+  "latestMainInstallerBuildRemediation": {
+    "atUTC": "2026-11-02T14:05:04.262533+00:00",
+    "status": "fixed-awaiting-real-github-rebuild",
+    "baseCommit": "11899310d6ed74e860a15f7f48d19a9b0bc22b4a",
+    "repository": "5pyj29s7cm-tech/LumiCore",
+    "buildBranch": "main",
+    "sourceFiles": {
+      ".github/workflows/build-installers.yml": "d7b5eebeda7177b0be8e3b9aaa2f218b396ddcd7fc63886a216f825d55b1ea17",
+      "scripts/fetch-media-runtime.ps1": "5d41acc3f6b82b77693bde52d6e92789a9fdf1b1597503063db60ce8617ba517",
+      "scripts/media-runtime.manifest.json": "51db8eda7e5d8fadb373bbddea251a4bbd4f41637caba0d41cd4ea1b84886463",
+      "src-tauri/src/native_display.rs": "9332246c234fba73cd30410359ffd0afd1d8d85ef965262f7b9180ac13e047d4",
+      "test/media_runtime_fetch.test.ts": "85a0b097f392cda13c4c099d103a52d54bb8d197db86bb808040e1cdab6033f2"
+    },
+    "previousRun": 41455186144,
+    "previousRunConclusion": "failure",
+    "actualFailures": {
+      "windows": "Missing pinned FFmpeg input directory before packaging",
+      "macosArm64": "E0433: unresolved SystemTime at native_display.rs:325",
+      "macosIntel": "Same E0433 at native_display.rs:325"
+    },
+    "repairs": [
+      "Fetch fixed upstream Windows ZIP and verify archive plus four existing file pins before exposing LUMI_MEDIA_RUNTIME_SOURCE.",
+      "Fully qualify std::time::SystemTime in the macOS-only screenshot branch."
+    ],
+    "validation": {
+      "mediaTestsPassed": 15,
+      "mediaTestsTotal": 15,
+      "rustfmtCheck": true,
+      "diffCheck": true,
+      "independentReviewsNoBlockers": true,
+      "localRealArchiveDownload": "failed-transport-EOF/TLS; not counted as verified",
+      "realPlatformBuilds": "pending-GitHub"
+    },
+    "defaultModelChanged": false,
+    "wholeApplicationAccepted": false,
+    "releasePublished": false,
+    "evidence": "D:\\Lumi-Audit-Temp\\main-win-mac-build-20261102\\ci-remediation-checkpoint\\evidence-seal.json",
+    "evidenceSha256": "4e03a3f65ff63b46e70f9b9212bb0a4b0dd5b3a1fd5409d6c98a697ed553fd3f"
   }
 }
